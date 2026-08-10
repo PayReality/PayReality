@@ -52,6 +52,13 @@ This is not a README and not a pitch deck. It is an internal architecture handbo
 | 40 | [40_PHASE_4_GAP_ANALYSIS.md](40_PHASE_4_GAP_ANALYSIS.md) | Phase 4: what remains implicit, what should stay implementation detail, what belongs in Phase 5 |
 | 41 | [41_PHASE_4_MIGRATION_REPORT.md](41_PHASE_4_MIGRATION_REPORT.md) | Phase 4: every code/documentation change, with before/after and behavioral-impact verification |
 | 42 | [42_PHASE_4_CONFORMANCE_REPORT.md](42_PHASE_4_CONFORMANCE_REPORT.md) | Phase 4 Architecture Conformance Report — gate passed |
+| 43 | [43_PHASE_5_INTEGRITY_INTELLIGENCE_SPEC.md](43_PHASE_5_INTEGRITY_INTELLIGENCE_SPEC.md) | Phase 5: what Integrity Intelligence actually is in this implementation — a small check set plus a periodic audit practice, not a new subsystem |
+| 44 | [44_PHASE_5_ARCHITECTURAL_DRIFT_REPORT.md](44_PHASE_5_ARCHITECTURAL_DRIFT_REPORT.md) | Phase 5: duplicated concepts, contradictory terminology, dead diagrams, duplicated ownership |
+| 45 | [45_PHASE_5_BROKEN_PROMISE_REPORT.md](45_PHASE_5_BROKEN_PROMISE_REPORT.md) | Phase 5: the eleven named architectural promises, each classified with evidence; silent risks |
+| 46 | [46_PHASE_5_REPOSITORY_INTEGRITY_REPORT.md](46_PHASE_5_REPOSITORY_INTEGRITY_REPORT.md) | Phase 5: every documentation-vs-implementation mismatch found, classified |
+| 47 | [47_PHASE_5_NEED_ANALYSIS.md](47_PHASE_5_NEED_ANALYSIS.md) | Phase 5: does Integrity Intelligence need to exist? (Verdict: not as new infrastructure) |
+| 48 | [48_PHASE_5_IMPLEMENTATION_REPORT.md](48_PHASE_5_IMPLEMENTATION_REPORT.md) | Phase 5: the three minimal changes made, each tied to a demonstrated problem |
+| 49 | [49_PHASE_5_CONFORMANCE_REPORT.md](49_PHASE_5_CONFORMANCE_REPORT.md) | Phase 5 Architecture Conformance Report — gate passed, final phase |
 | — | [GLOSSARY.md](GLOSSARY.md) | Every term of art, defined once |
 
 ## Relationship to existing documents

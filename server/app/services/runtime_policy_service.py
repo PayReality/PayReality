@@ -320,8 +320,22 @@ def reconcile_opa_with_active_policies(db: Session, opa_url: str = "http://local
 
     Returns False (no-op) when there is nothing active to push: that's
     the correct, distinct "no_active_policy" state the legacy Policy
-    table's own active-row check already reports."""
-    active_rows = list(db.scalars(select(RuntimePolicyRecord).where(RuntimePolicyRecord.status == "active")))
+    table's own active-row check already reports.
+
+    Runtime Governance Architecture, Phase 5
+    (45_PHASE_5_BROKEN_PROMISE_REPORT.md): ordered by policy_key, not
+    left to whatever order Postgres happens to return -- without this,
+    the exact same active-policy set can compile to a different
+    bundle_hash purely from physical row order (query-plan/vacuum
+    dependent, never guaranteed by SQL without ORDER BY), which is
+    precisely what Policy Determinism promises never happens."""
+    active_rows = list(
+        db.scalars(
+            select(RuntimePolicyRecord)
+            .where(RuntimePolicyRecord.status == "active")
+            .order_by(RuntimePolicyRecord.policy_key)
+        )
+    )
     if not active_rows:
         return False
 
@@ -340,13 +354,21 @@ def _other_active_policies(db: Session, exclude_policy_key: uuid.UUID) -> list[R
     """Compiling one policy compiles it together with every other
     currently-active policy (POLICY_STUDIO_ARCHITECTURE.md): deploying a
     single-policy edit must not silently drop every other rule already
-    governing real traffic."""
+    governing real traffic.
+
+    Runtime Governance Architecture, Phase 5
+    (45_PHASE_5_BROKEN_PROMISE_REPORT.md): ordered by policy_key for the
+    same reason as reconcile_opa_with_active_policies above -- Policy
+    Determinism means "same active set compiles to the same bundle_hash
+    every time," which an unordered query cannot actually guarantee."""
     active_rows = list(
         db.scalars(
-            select(RuntimePolicyRecord).where(
+            select(RuntimePolicyRecord)
+            .where(
                 RuntimePolicyRecord.status == "active",
                 RuntimePolicyRecord.policy_key != exclude_policy_key,
             )
+            .order_by(RuntimePolicyRecord.policy_key)
         )
     )
     return [_row_to_policy(r) for r in active_rows]

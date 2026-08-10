@@ -28,7 +28,7 @@ Enforced entirely at the endpoint/dependency level, not at the row level; there'
 
 - **SQL**: 100% SQLAlchemy ORM / Core with parameter binding (`db.get`, `select(...)`, `db.scalars(...)`): no raw string-interpolated SQL anywhere in `server/app`, including the one raw-SQL readiness check (`text("SELECT 1")`, a static string with no interpolation).
 - **NoSQL/command injection**: not applicable; no shell-out, no dynamic query construction against OPA (the input document is a structured dict serialized by `httpx`, not string-built).
-- **Rego injection**: policy content itself is only ever written by `HttpOpaClient.upload_policy`, which is only reachable via the operator-key-gated `activate_policy` flow, and the Rego source comes from the compiler (`domain/compiler/compiler.py`), not directly from user input.
+- **Rego injection**: policy content itself is only ever written by `HttpOpaClient.upload_policy`, and the Rego source comes from Compiler V2 (`domain/compiler_v2/compiler_v2.py` -> `bundle_builder.py`), not directly from user input. **Correction (Runtime Governance Architecture, Phase 5, [44_PHASE_5_ARCHITECTURAL_DRIFT_REPORT.md](SPECIFICATION/44_PHASE_5_ARCHITECTURAL_DRIFT_REPORT.md)):** this bullet previously named the legacy compiler (`domain/compiler/compiler.py`) and the "operator-key-gated `activate_policy` flow" as the live path -- both are retired (`routers/policies.py`'s `activate_policy` now returns HTTP 410; see SPECIFICATION/17_LEGACY_COMPONENTS.md). The one live write path today is `runtime_policy_service.deploy_policy`, gated by the `RUNTIME_POLICY_PUBLISH` RBAC permission (RBAC.md), not an operator key.
 
 ## Policy tampering
 
