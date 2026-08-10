@@ -34,6 +34,7 @@ This is not a README and not a pitch deck. It is an internal architecture handbo
 | 22 | [22_BUILD_FROM_SCRATCH.md](22_BUILD_FROM_SCRATCH.md) | If you had to rebuild this platform in 90 days |
 | 23 | [23_RUNTIME_GOVERNANCE_MIGRATION_BASELINE.md](23_RUNTIME_GOVERNANCE_MIGRATION_BASELINE.md) | Frozen baseline (commit `eb54f3e`) for the Runtime Governance Architecture migration; maps every subsystem above to its owning discipline |
 | 24 | [24_PHASE_1_RUNTIME_CORE_PLAN.md](24_PHASE_1_RUNTIME_CORE_PLAN.md) | Phase 1 plan, risk assessment, conformance checklist, and roadmap |
+| 25 | [25_PHASE_1_CONFORMANCE_REPORT.md](25_PHASE_1_CONFORMANCE_REPORT.md) | Phase 1 Architecture Conformance Report — gate passed |
 | — | [GLOSSARY.md](GLOSSARY.md) | Every term of art, defined once |
 
 ## Relationship to existing documents

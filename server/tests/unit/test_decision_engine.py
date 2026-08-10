@@ -1,6 +1,7 @@
 import pytest
 
 from app.domain.decision.engine import (
+    DECISION_ENGINE_VERSION,
     ActivePolicy,
     NoActivePolicyError,
     OPAEvaluationError,
@@ -30,7 +31,7 @@ class FakeOpaClient:
         return self._result
 
 
-ACTIVE = ActivePolicy(id="pol_1", version=3)
+ACTIVE = ActivePolicy(id="pol_1", version=3, bundle_hash="sha256:abc123")
 INTENT = {"action": "vendor_payment", "amount": 42000}
 CONTEXT = {"environment": "production"}
 
@@ -108,3 +109,61 @@ def test_various_non_committal_results_resolve_to_human_review(bad_result):
     client = FakeOpaClient(result=bad_result)
     decision = evaluate(INTENT, CONTEXT, "prin_1", FakePolicyStore(ACTIVE), client)
     assert decision.outcome == "HUMAN_REVIEW"
+
+
+# Runtime Governance Architecture, Phase 1 (24_PHASE_1_RUNTIME_CORE_PLAN.md):
+# every Decision that actually consulted a policy pins policy_version and
+# policy_bundle_hash explicitly, and every Decision carries the evaluating
+# engine's own authority_version, regardless of outcome.
+
+
+def test_no_active_policy_leaves_policy_version_and_hash_unset():
+    """The one branch that never reads a policy at all -- no active_policy
+    exists to pin a version or hash from, so both stay honestly None
+    rather than a fabricated value. authority_version is still set: the
+    engine itself still evaluated (and decided there was nothing to
+    evaluate against), regardless of whether a policy was found."""
+    decision = evaluate(INTENT, CONTEXT, "prin_1", FakePolicyStore(None), FakeOpaClient())
+    assert decision.policy_version is None
+    assert decision.policy_bundle_hash is None
+    assert decision.authority_version == DECISION_ENGINE_VERSION
+
+
+def test_allow_pins_policy_version_hash_and_authority_version():
+    client = FakeOpaClient(result={"allow": True, "deny": False, "evaluated_mandates": []})
+    decision = evaluate(INTENT, CONTEXT, "prin_1", FakePolicyStore(ACTIVE), client)
+    assert decision.outcome == "ALLOW"
+    assert decision.policy_version == 3
+    assert decision.policy_bundle_hash == "sha256:abc123"
+    assert decision.authority_version == DECISION_ENGINE_VERSION
+
+
+def test_deny_pins_policy_version_hash_and_authority_version():
+    client = FakeOpaClient(result={"deny": True, "deny_reason": "over_limit"})
+    decision = evaluate(INTENT, CONTEXT, "prin_1", FakePolicyStore(ACTIVE), client)
+    assert decision.outcome == "DENY"
+    assert decision.policy_version == 3
+    assert decision.policy_bundle_hash == "sha256:abc123"
+    assert decision.authority_version == DECISION_ENGINE_VERSION
+
+
+def test_human_review_pins_policy_version_hash_and_authority_version():
+    client = FakeOpaClient(
+        result={"requires_review": True, "review_reason": "dual_control_band"}
+    )
+    decision = evaluate(INTENT, CONTEXT, "prin_1", FakePolicyStore(ACTIVE), client)
+    assert decision.outcome == "HUMAN_REVIEW"
+    assert decision.policy_version == 3
+    assert decision.policy_bundle_hash == "sha256:abc123"
+    assert decision.authority_version == DECISION_ENGINE_VERSION
+
+
+def test_opa_timeout_still_pins_policy_version_and_hash():
+    """The policy was successfully resolved before OPA timed out -- the
+    version/hash of what *would have been* evaluated is still known and
+    still worth recording, distinct from the no_active_policy case where
+    nothing was ever resolved at all."""
+    client = FakeOpaClient(raises=OPATimeoutError())
+    decision = evaluate(INTENT, CONTEXT, "prin_1", FakePolicyStore(ACTIVE), client)
+    assert decision.policy_version == 3
+    assert decision.policy_bundle_hash == "sha256:abc123"

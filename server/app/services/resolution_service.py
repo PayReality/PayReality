@@ -37,7 +37,18 @@ def resolve_decision(
     `resolved_by_user_id` is additive: populated only when the caller
     actually resolved a real session user (see
     dependencies.get_current_user_if_session), None for the Operator Key
-    or API-key paths, which remain fully supported."""
+    or API-key paths, which remain fully supported.
+
+    Runtime Governance Architecture, Phase 1 (24_PHASE_1_RUNTIME_CORE_PLAN.md
+    section 24.2.2): this function is the one and only place Decision
+    Evidence's "who reviewed" role actually applies -- a human resolving a
+    decision Runtime Authority itself could not reach alone. The
+    Evidence payload's existing `approver`/`approval_outcome` keys (kept
+    unchanged, since real readers already depend on them) are exact
+    aliases of `resolved_by`/`resolution.upper()`; `reviewer`/
+    `review_outcome` are added at this same call site so a reader using
+    canon vocabulary finds the correctly-named field without the
+    existing keys ever needing to change or be removed."""
     decision = db.get(Decision, decision_id)
     if decision is None:
         raise DecisionNotFoundError(str(decision_id))
@@ -62,6 +73,8 @@ def resolve_decision(
         outcome=decision.outcome,
         approval_outcome=resolution.upper(),
         approver=resolved_by,
+        reviewer=resolved_by,
+        review_outcome=resolution.upper(),
         status="VERIFIED" if resolution == "approved" else "REJECTED",
         # Authority-as-a-continuous-object, Stage H: reuses the real
         # Mandate ids already resolved and persisted on the original

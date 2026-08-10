@@ -1,5 +1,7 @@
 # Architecture
 
+> **This document is superseded by [SPECIFICATION/00_INDEX.md](SPECIFICATION/00_INDEX.md).** It is kept in place as a design-time record, not deleted or rewritten, but where its description of the live decision path conflicts with the specification — most notably: it still describes the legacy Authority/Mandate pipeline as live, which was fully retired (see [SPECIFICATION/17_LEGACY_COMPONENTS.md](SPECIFICATION/17_LEGACY_COMPONENTS.md)) — the specification is current and this document is not. See [SPECIFICATION/16_CURRENT_LIMITATIONS.md](SPECIFICATION/16_CURRENT_LIMITATIONS.md) §16.2 for the full reconciliation.
+
 This describes the system as it actually exists in this repository, not the aspirational version. Where something is a known gap rather than a design choice, it's marked as such and cross-referenced to [VERSION_3_ROADMAP.md](VERSION_3_ROADMAP.md).
 
 ## System overview

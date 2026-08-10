@@ -50,7 +50,13 @@ class _DbPolicyStore:
         policy = self.db.scalar(select(Policy).where(Policy.status == "active"))
         if policy is None:
             raise decision_engine.NoActivePolicyError()
-        return decision_engine.ActivePolicy(id=str(policy.id), version=policy.version)
+        # Runtime Governance Architecture, Phase 1: bundle_hash was already
+        # a column on this row (Compiler V2's content-addressed identity
+        # for the compiled bundle) -- simply not read into ActivePolicy
+        # before. Threading it through requires no schema change.
+        return decision_engine.ActivePolicy(
+            id=str(policy.id), version=policy.version, bundle_hash=policy.bundle_hash
+        )
 
 
 class _EngineOpaClient:
@@ -79,6 +85,13 @@ def _build_evidence_payload(
     authority_context: dict | None = None,
     mandate_ids: list[str] | None = None,
     authority_ids: list[str] | None = None,
+    authority_version: str | None = None,
+    policy_version: int | None = None,
+    policy_bundle_hash: str | None = None,
+    resolved_by: str | None = None,
+    responsible_party: str | None = None,
+    reviewer: str | None = None,
+    review_outcome: str | None = None,
 ) -> dict:
     """spec 17.1's Evidence payload shape, adapted to Phase 1's fields.
 
@@ -107,7 +120,21 @@ def _build_evidence_payload(
     real Mandate ids. `mandate_ids`/`authority_ids` are the new,
     additive fields carrying real Mandate/Authority row ids, present
     only once Stage G has actually created them for at least one
-    matched policy."""
+    matched policy.
+
+    Runtime Governance Architecture, Phase 1 (24_PHASE_1_RUNTIME_CORE_PLAN.md):
+    `authority_version`/`policy_version`/`policy_bundle_hash` make Decision
+    Evidence's version-pinning explicit and self-contained on the record
+    itself, rather than reconstructable only via a live join through
+    Decision.policy_id to the `policies` table. `resolved_by`/
+    `responsible_party` are Decision Evidence's "who resolved"/"who is
+    responsible" provenance roles, honestly scoped to the one place an
+    actual resolution step exists in this architecture today (Runtime
+    Authority Context) -- not fabricated for the agent's own self-asserted
+    Intent fields, which `agent_id` ("who asserted") already covers on its
+    own terms. `reviewer`/`review_outcome` are added by
+    resolution_service.py, not here -- see that module for "who
+    reviewed"."""
     payload = {
         "payload_version": 2,
         "decision_id": str(decision_id),
@@ -136,6 +163,20 @@ def _build_evidence_payload(
         payload["evaluated_mandate_ids"] = list(mandate_ids)
     if authority_ids:
         payload["authority_ids"] = list(authority_ids)
+    if authority_version is not None:
+        payload["authority_version"] = authority_version
+    if policy_version is not None:
+        payload["policy_version"] = policy_version
+    if policy_bundle_hash is not None:
+        payload["policy_bundle_hash"] = policy_bundle_hash
+    if resolved_by is not None:
+        payload["resolved_by"] = resolved_by
+    if responsible_party is not None:
+        payload["responsible_party"] = responsible_party
+    if reviewer is not None:
+        payload["reviewer"] = reviewer
+    if review_outcome is not None:
+        payload["review_outcome"] = review_outcome
     return payload
 
 
@@ -205,10 +246,24 @@ def append_evidence(
     principal_id: uuid.UUID | None = None,
     authority_context: dict | None = None,
     mandate_ids: list[str] | None = None,
+    authority_version: str | None = None,
+    policy_version: int | None = None,
+    policy_bundle_hash: str | None = None,
+    reviewer: str | None = None,
+    review_outcome: str | None = None,
 ) -> Evidence:
     organization_id = _resolve_chain_scope(db, agent_id)
     previous_hash = _previous_chain_hash(db, organization_id)
     authority_ids = _resolve_authority_ids_for_mandates(db, mandate_ids) if mandate_ids else []
+    # Runtime Governance Architecture, Phase 1: "who resolved"/"who is
+    # responsible" collapse onto the same value today because no Resolver
+    # Intelligence discipline exists yet to separate them (see
+    # 24_PHASE_1_RUNTIME_CORE_PLAN.md section 24.2.2) -- an honest
+    # reflection of this architecture's current shape, not a shortcut.
+    # None when no authority context was ever resolved (suspended agent,
+    # unrecognized action -- OPA is never queried in either case).
+    resolved_by = "runtime_authority_context" if authority_context is not None else None
+    responsible_party = resolved_by
     payload = _build_evidence_payload(
         decision_id,
         agent_id,
@@ -224,6 +279,13 @@ def append_evidence(
         authority_context=authority_context,
         mandate_ids=mandate_ids,
         authority_ids=authority_ids,
+        authority_version=authority_version,
+        policy_version=policy_version,
+        policy_bundle_hash=policy_bundle_hash,
+        resolved_by=resolved_by,
+        responsible_party=responsible_party,
+        reviewer=reviewer,
+        review_outcome=review_outcome,
     )
     signature = sign_payload(
         payload, settings.evidence_signing_key_b64, settings.evidence_signing_key_id
@@ -410,6 +472,14 @@ def submit_intent(
         principal_id=principal.id if principal else None,
         authority_context=authority_context,
         mandate_ids=mandate_ids,
+        # Runtime Governance Architecture, Phase 1: the exact values
+        # decision_engine.evaluate() already resolved and pinned onto its
+        # own Decision object -- carried into Evidence, never recomputed,
+        # the same discipline this module already applies to
+        # authority_context and principal_id above.
+        authority_version=engine_decision.authority_version,
+        policy_version=engine_decision.policy_version,
+        policy_bundle_hash=engine_decision.policy_bundle_hash,
     )
     db.commit()
     db.refresh(intent)
