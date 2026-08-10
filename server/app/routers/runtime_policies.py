@@ -98,6 +98,9 @@ def _build_runtime_policy(
             mandate_id=(
                 preserve_mandate_id if preserve_mandate_id is not None else req.constraints.mandate_id
             ),
+            # Phase 5, Release 2: client-editable, no preserve-on-edit
+            # needed -- whatever the reviewer's own edit sends is correct.
+            enterprise_system_id=req.constraints.enterprise_system_id,
         ),
         metadata=Metadata(
             owner=req.metadata.owner,
@@ -352,7 +355,8 @@ def deploy_policy(policy_key: uuid.UUID, db: Session = Depends(get_db)):
     except UnexpectedActiveWriterError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return DeployResponse(
-        bundle_id=outcome.bundle_id, bundle_hash=outcome.bundle_hash, deployed_at=outcome.deployed_at
+        bundle_id=outcome.bundle_id, bundle_hash=outcome.bundle_hash, deployed_at=outcome.deployed_at,
+        authority_id=outcome.authority_id, mandate_id=outcome.mandate_id,
     )
 
 

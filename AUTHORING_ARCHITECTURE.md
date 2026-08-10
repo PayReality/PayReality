@@ -17,7 +17,7 @@ This mapping means the migration is smaller than it sounds: **`Authority` become
 
 ### Mode 1: Guided Wizard (unchanged behavior)
 
-This is today's existing document-upload → AI-extraction → human-review flow (`LiveDocuments.tsx`, `document_service.py`, `review_service.py`). A non-technical user uploads a delegation-of-authority PDF, reviews and approves or rejects each AI-extracted candidate, optionally editing the extracted limit/currency/conditions. Nothing about this user-facing flow changes.
+This described the document-upload → AI-extraction → human-review flow this section was originally written against (`LiveDocuments.tsx`, `document_service.py`, `review_service.py`). **Update:** `LiveDocuments.tsx` and the write endpoints it depended on were later fully retired (`SPECIFICATION/17_LEGACY_COMPONENTS.md`); its route now redirects to `/governance/upload`. The AI Authority Builder and AI Policy Builder (Modes 2/3 below) are the live successors to what this mode originally described, not an unchanged parallel path.
 
 What changes underneath, invisibly to this mode's users: an approved `Authority` row is the same thing as a Runtime Policy now, just produced by a different authoring path than modes 2 and 3. Today's `Authority` → `Mandate` compilation step becomes "compile a Runtime Policy," the same operation modes 2 and 3 trigger. This mode doesn't get a new UI, a new review step, or new fields it didn't already have; it gets a renamed underlying model and a shared compiler, both invisible to its users.
 

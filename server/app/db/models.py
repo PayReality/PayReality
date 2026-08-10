@@ -196,6 +196,17 @@ class Authority(Base):
 
 
 class Policy(Base):
+    """The compiled OPA bundle row -- NOT the same object as RuntimePolicy
+    (below, table `runtime_policy_records`, Policy Studio's authoring
+    domain object). This table holds exactly one 'active' row at a time
+    (see the partial unique index below) and is read on every single
+    Intent evaluation via intent_service._DbPolicyStore.get_active(); a
+    RuntimePolicy is compiled into one of these at deploy time
+    (runtime_policy_service.deploy_policy). The two names colliding is a
+    known, deliberately-deferred naming issue (Stage K): this table sits
+    on the hottest path in the system, so renaming it is a bigger-blast-
+    radius change than its cosmetic payoff justifies today."""
+
     __tablename__ = "policies"
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -583,13 +594,18 @@ class Decision(Base):
     evaluated_mandates: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     # Authority-as-a-continuous-object, Stage A: the correctly-named
-    # replacement for evaluated_mandates above, intended to hold real
-    # `mandates.id` values once Stage G/H exist. Additive; not yet
-    # written or read by any code path.
+    # replacement for evaluated_mandates above, holding real `mandates.id`
+    # values. Written by intent_service.submit_intent (Stage H, via
+    # runtime_policy_service.resolve_mandate_ids) and read by
+    # resolution_service/routers/intents.py; empty for any matched policy
+    # that has no Stage G-created Mandate yet.
     evaluated_mandate_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
     # Stage J: which protected system this action, if allowed, ultimately
-    # reaches. Nullable forever until a real Enterprise System is
-    # registered and a Decision is deliberately tied to one.
+    # reaches. Written by intent_service.submit_intent (Phase 5, Release
+    # 2, via runtime_policy_service.resolve_enterprise_system, which reads
+    # a reviewer-configured Constraints.enterprise_system_id back off the
+    # matched RuntimePolicy) -- null whenever the matched policy never
+    # configured one, or configured one that no longer exists.
     enterprise_system_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("enterprise_systems.id")
     )
@@ -851,10 +867,14 @@ class AuthorityCorpusDocument(Base):
 
 class AuthorityPrincipal(Base):
     """A discovered authority holder (AI_AUTHORITY_BUILDER_ARCHITECTURE.md's
-    Authority Graph). Informational: there is no first-class Principal
-    table this promotes into; a reviewer references it by name directly
-    in a promoted RuntimePolicy's scope.principal, which is already a
-    free-form string."""
+    Authority Graph). Authority-as-a-continuous-object, Stage E: this now
+    does promote into a real, first-class Principal -- see
+    `resolved_principal_id` below and
+    ai_authority_builder_service.resolve_principal(), the only code path
+    allowed to set it. A reviewer can still reference this discovery by
+    name directly in a promoted RuntimePolicy's scope.principal (a
+    free-form string) when no resolution exists yet; that path is
+    unchanged, not the only one anymore."""
 
     __tablename__ = "authority_principals"
 

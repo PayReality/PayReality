@@ -6,7 +6,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Agent, Certificate, Decision, Evidence, Intent, Mandate, Policy, Principal
+from app.db.models import (
+    Agent,
+    Certificate,
+    Decision,
+    EnterpriseSystem,
+    Evidence,
+    Intent,
+    Mandate,
+    Policy,
+    Principal,
+)
 from app.domain.time_utils import to_utc_iso
 from app.domain.decision import engine as decision_engine
 from app.domain.decision.scope_vocabulary import is_recognized_scope
@@ -93,6 +103,8 @@ def _build_evidence_payload(
     responsible_party: str | None = None,
     reviewer: str | None = None,
     review_outcome: str | None = None,
+    enterprise_system_id: str | None = None,
+    enterprise_system_name: str | None = None,
 ) -> dict:
     """spec 17.1's Evidence payload shape, adapted to Phase 1's fields.
 
@@ -193,6 +205,12 @@ def _build_evidence_payload(
         payload["reviewer"] = reviewer
     if review_outcome is not None:
         payload["review_outcome"] = review_outcome
+    # Phase 5, Release 2 (Enterprise System binding): both present only
+    # when resolve_enterprise_system actually found a matched policy
+    # configured with, and still referencing, a real EnterpriseSystem row.
+    if enterprise_system_id is not None:
+        payload["enterprise_system_id"] = enterprise_system_id
+        payload["enterprise_system_name"] = enterprise_system_name
     return payload
 
 
@@ -268,6 +286,7 @@ def append_evidence(
     policy_bundle_hash: str | None = None,
     reviewer: str | None = None,
     review_outcome: str | None = None,
+    enterprise_system_id: uuid.UUID | None = None,
 ) -> Evidence:
     organization_id = _resolve_chain_scope(db, agent_id)
     previous_hash = _previous_chain_hash(db, organization_id)
@@ -281,6 +300,7 @@ def append_evidence(
     # unrecognized action -- OPA is never queried in either case).
     resolved_by = "runtime_authority_context" if authority_context is not None else None
     responsible_party = resolved_by
+    enterprise_system = db.get(EnterpriseSystem, enterprise_system_id) if enterprise_system_id else None
     payload = _build_evidence_payload(
         decision_id,
         agent_id,
@@ -304,6 +324,8 @@ def append_evidence(
         responsible_party=responsible_party,
         reviewer=reviewer,
         review_outcome=review_outcome,
+        enterprise_system_id=str(enterprise_system.id) if enterprise_system else None,
+        enterprise_system_name=enterprise_system.name if enterprise_system else None,
     )
     signature = sign_payload(
         payload, settings.evidence_signing_key_b64, settings.evidence_signing_key_id
@@ -458,6 +480,11 @@ def submit_intent(
     # additive column resolving those same keys to real Mandate row ids
     # wherever Stage G has actually created one.
     mandate_ids = runtime_policy_service.resolve_mandate_ids(db, engine_decision.evaluated_mandates)
+    # Phase 5, Release 2 (Enterprise System binding): the same matched-
+    # policy-keys list, read for whichever one a reviewer configured
+    # with a still-real EnterpriseSystem. Null whenever none was
+    # configured or the configured one no longer exists -- never guessed.
+    enterprise_system = runtime_policy_service.resolve_enterprise_system(db, engine_decision.evaluated_mandates)
     decision = Decision(
         intent_id=intent.id,
         policy_id=policy_id,
@@ -465,6 +492,7 @@ def submit_intent(
         reason=engine_decision.reason,
         evaluated_mandates=engine_decision.evaluated_mandates,
         evaluated_mandate_ids=mandate_ids,
+        enterprise_system_id=enterprise_system.id if enterprise_system else None,
     )
     db.add(decision)
     db.flush()
@@ -500,6 +528,7 @@ def submit_intent(
         authority_version=engine_decision.authority_version,
         policy_version=engine_decision.policy_version,
         policy_bundle_hash=engine_decision.policy_bundle_hash,
+        enterprise_system_id=enterprise_system.id if enterprise_system else None,
     )
     db.commit()
     db.refresh(intent)

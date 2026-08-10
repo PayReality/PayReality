@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Agent, User
+from app.db.models import Agent, EnterpriseSystem, User
 from app.db.session import get_db
 from app.dependencies import get_current_user_if_session, require_permission, verify_agent_signature
 from app.domain.auth.signature import check_timestamp_window
@@ -32,6 +32,15 @@ from app.services.resolution_service import (
 )
 
 router = APIRouter(prefix="/v1", tags=["intents"])
+
+
+def _enterprise_system_name(db: Session, enterprise_system_id: UUID | None) -> str | None:
+    """Phase 5, Release 2: resolves the same id intent_service already
+    persisted on the Decision row -- never recomputed, only displayed."""
+    if enterprise_system_id is None:
+        return None
+    system = db.get(EnterpriseSystem, enterprise_system_id)
+    return system.name if system else None
 
 
 @router.post("/intents", response_model=SubmitIntentResponse)
@@ -83,6 +92,8 @@ def submit_intent(
             decision_id=decision.id,
             evaluated_mandates=decision.evaluated_mandates or [],
             evaluated_mandate_ids=decision.evaluated_mandate_ids or [],
+            enterprise_system_id=decision.enterprise_system_id,
+            enterprise_system_name=_enterprise_system_name(db, decision.enterprise_system_id),
             reason=decision.reason,
         ),
         evidence_id=evidence.id,
@@ -125,6 +136,8 @@ def get_decision(decision_id: UUID, db: Session = Depends(get_db)):
         currency=intent.currency,
         evaluated_mandates=decision.evaluated_mandates or [],
         evaluated_mandate_ids=decision.evaluated_mandate_ids or [],
+        enterprise_system_id=decision.enterprise_system_id,
+        enterprise_system_name=_enterprise_system_name(db, decision.enterprise_system_id),
         resolution=resolution,
     )
 

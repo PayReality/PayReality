@@ -41,3 +41,11 @@ class Constraints:
     # id already stored in this JSON-serialized dataclass.
     authority_id: str | None = None
     mandate_id: str | None = None
+    # Phase 5, Release 2 (Enterprise System binding): reviewer-configured
+    # at authoring time, the same trust model as delegated_by/risk_level
+    # above -- a human who knows this policy's action reaches e.g. the
+    # Finance ERP sets it explicitly. Never inferred, never guessed:
+    # runtime_policy_service.resolve_enterprise_system reads this value
+    # back at decision time and only assigns Decision.enterprise_system_id
+    # when it points at a real, still-existing EnterpriseSystem row.
+    enterprise_system_id: str | None = None

@@ -26,9 +26,11 @@ Once the stopgap had been live for a period with zero incidents, and production 
 
 **What was deliberately kept:** `Authority`/`Mandate`/`Constraint`/`Document` class definitions and their now-empty tables in `db/models.py` — the lower-risk, fully-reversible option versus a destructive schema migration, consistent with this engagement's general preference for additive/reversible changes over aggressive cleanup. `routers/policies.py` keeps its three read-only endpoints (`list_documents`, `list_authorities`, `list_policies`) live, since they have real callers and return real (if currently empty, for the first two) data.
 
+**Update (Authority-as-a-continuous-object, Stage G):** `Authority` and `Mandate` are no longer empty or dead. A *new*, different write path, not the retired legacy pipeline above, now creates real rows: `ai_policy_builder_service._create_authority_for_candidate` at Rule promotion, and `runtime_policy_service._ensure_mandate` at Policy deploy. `Constraint` and `Document` remain genuinely dead; no new write path was added to either. See §17.4's table below and §17.5's reconciliation for the corrected status.
+
 ## 17.4 The one nuance that makes "legacy" the wrong word for `policies`
 
-Read this carefully — it is the single most important correction in this part. Of the five legacy tables, **four are genuinely dead** (`documents`, `authorities`, `mandates`, `constraints` — confirmed zero rows in production as of this writing). The fifth, **`policies`, is not dead** — it is live, actively written infrastructure under a new sole writer.
+Read this carefully — it is the single most important correction in this part, and it has changed since this section was first written. Of the five legacy tables: **two are genuinely dead** (`documents`, `constraints` — confirmed zero rows in production as of this writing, no new write path since). **Two were revived** (`authorities`, `mandates`) by Authority-as-a-continuous-object (Stage G), which added a new write path unrelated to the retired legacy pipeline described above — see the update note in §17.3. The fifth, **`policies`, is not dead** either — it is live, actively written infrastructure under a new sole writer.
 
 `domain/decision/engine.py::evaluate()` was never modified when Compiler V2 was built; it still resolves "the active policy" by querying the legacy `policies` table for `status = 'active'`. Rather than change the Decision Engine, `runtime_policy_service.deploy_policy` was built to **write into this same table on every deploy** — a new row, `bundle_uri="runtime_policy_studio:{policy_key}:{version}"`, retiring whatever was previously active there. `UnexpectedActiveWriterError` (§17.2) is the guard that survived retirement specifically because this table is still genuinely shared, load-bearing infrastructure, not a vestige: it fails loudly if the currently-active row wasn't written by `deploy_policy` itself, rather than silently overwriting a row from some writer this module doesn't recognize.
 
@@ -43,7 +45,8 @@ Confirmed directly against production for this specification: `policies` holds 5
 | `services/policy_service.py`, `document_service.py`, `review_service.py` (surviving functions) | **Active** (read-only) |
 | `routers/policies.py`'s 4 write endpoints | **Retired** — always `410` |
 | `routers/policies.py`'s 3 read endpoints | **Active** |
-| `Authority`, `Mandate`, `Constraint`, `Document` tables | **Dead**, kept empty, deliberately not dropped |
+| `Authority`, `Mandate` tables | **Revived** (Stage G) — real rows created at Rule promotion and Policy deploy, via a new write path, not the retired legacy pipeline |
+| `Constraint`, `Document` tables | **Dead**, kept empty, deliberately not dropped |
 | `policies` table | **Active** — repurposed as the Decision Engine's active-bundle pointer, sole writer `deploy_policy` |
 | `LiveDocuments.tsx` | **Deleted** |
 | `governance/legacy-review` route and its 4 old aliases | **Kept as redirects only**, pointing at `/governance/upload` |

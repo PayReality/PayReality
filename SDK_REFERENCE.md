@@ -58,7 +58,7 @@ Thin wrapper over `GET /version`. Returns the raw response body (`{"version": ..
 | `reason` | `str \| None` | |
 | `explanation` | `str \| None` | Currently an alias for `reason` (see `SDK_ARCHITECTURE.md`'s honesty note: today's API has one human-readable field, not two). |
 | `status` | `str` | `"RESOLVED"` or `"PENDING"` |
-| `evaluated_mandates` | `tuple[str, ...]` | |
+| `evaluated_mandates` | `tuple[str, ...]` | Despite the name, holds matched RuntimePolicy policy_key strings, not real Mandate ids -- kept for backward compatibility. `evaluated_mandate_ids` (server-side `Decision`/`GetDecisionResponse`, not yet in this SDK's `Decision` model) is the correctly-named field holding real `mandates.id` values, additive alongside this one. |
 | `resolution` | `Resolution \| None` | Set only once a `HUMAN_REVIEW` decision has been resolved and re-fetched via `get_decision()`. |
 
 Properties: `.allowed`, `.denied`, `.requires_human_review` (all `bool`), `.pending` (`bool`, `status == "PENDING"`).

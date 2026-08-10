@@ -28,6 +28,7 @@ from app.db.models import (
     Principal,
     PolicyExtractionCandidate,
     PolicyExtractionUpload,
+    RuntimePolicyRecord,
 )
 from app.domain.ai_policy_builder.provider import CandidateRuntimePolicy, RuntimePolicyExtractionProvider
 from app.domain.ai_policy_builder.text_extraction import extract_text
@@ -322,7 +323,9 @@ def _create_authority_for_candidate(
     return authority
 
 
-def promote_candidate(db: Session, candidate_id: uuid.UUID, promoted_by: str | None = None):
+def promote_candidate(
+    db: Session, candidate_id: uuid.UUID, promoted_by: str | None = None
+) -> tuple[RuntimePolicyRecord, str | None]:
     """AI_EXTRACTION_PIPELINE.md Stage 6. Builds the RuntimePolicy,
     validates it (domain/runtime_policy/validators.py, imported not
     modified), and on success calls the unmodified
@@ -339,7 +342,11 @@ def promote_candidate(db: Session, candidate_id: uuid.UUID, promoted_by: str | N
     authority_id. If it doesn't resolve -- a single-document Policy
     Builder candidate, or a name that doesn't match any resolved
     Principal -- nothing here changes: the policy is created exactly as
-    it always has been, with only the free-text delegated_by."""
+    it always has been, with only the free-text delegated_by.
+
+    Stage I.4: returns the resulting `authority_id` alongside the created
+    record -- the value was already computed above, this only threads it
+    out to the caller instead of discarding it."""
     row = get_candidate(db, candidate_id)
     if row.status != "pending_review":
         raise CandidateNotPendingReviewError(f"cannot promote a candidate in status '{row.status}'")
@@ -361,4 +368,4 @@ def promote_candidate(db: Session, candidate_id: uuid.UUID, promoted_by: str | N
     row.promoted_policy_key = created.policy_key
     db.commit()
     db.refresh(row)
-    return created
+    return created, authority_id
