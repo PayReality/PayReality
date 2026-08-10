@@ -2,6 +2,8 @@
 
 **Supersedes/synthesizes:** `ARCHITECTURE.md` (decision section), `PHASE_2_RUNTIME_CONTEXT.md`. Grounded directly in `domain/decision/engine.py` and `services/intent_service.py::submit_intent`, both read in full this session.
 
+> **Sequence note (Runtime Governance Architecture, Phase 4):** §12.4's flowchart below predates the Phase 3 Runtime Truth extraction and still shows Principal-name resolution and Runtime Authority Context assembly as two separate boxes. They are now one call, `runtime_truth_service.resolve()`. The rest of this section's prose and its fail-closed table (§12.5) remain accurate. For the current, staged pipeline sequence, see [37_PHASE_4_ENTERPRISE_DECISION_PIPELINE_SPEC.md](37_PHASE_4_ENTERPRISE_DECISION_PIPELINE_SPEC.md) and [38_PHASE_4_PIPELINE_SEQUENCE_DIAGRAM.md](38_PHASE_4_PIPELINE_SEQUENCE_DIAGRAM.md).
+
 ## 12.1 The engine itself: pure, fail-closed by construction
 
 `domain/decision/engine.py::evaluate()` has **no DB access** — it is pure orchestration over two injected protocols (`PolicyStore.get_active()`, `OpaClient.query()`), which is what makes it unit-testable against fakes independent of any real OPA/DB integration. This is a direct port of the platform's original spec algorithm, unchanged since.

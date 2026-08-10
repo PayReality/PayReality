@@ -44,6 +44,14 @@ This is not a README and not a pitch deck. It is an internal architecture handbo
 | 32 | [32_PHASE_3_GAP_ANALYSIS.md](32_PHASE_3_GAP_ANALYSIS.md) | Phase 3: what doesn't exist, what should stay absent, what should become an extension point |
 | 33 | [33_PHASE_3_MIGRATION_REPORT.md](33_PHASE_3_MIGRATION_REPORT.md) | Phase 3: every code change, with before/after and behavioral-impact verification |
 | 34 | [34_PHASE_3_CONFORMANCE_REPORT.md](34_PHASE_3_CONFORMANCE_REPORT.md) | Phase 3 Architecture Conformance Report — gate passed |
+| 35 | [35_PHASE_4_INTENT_INTELLIGENCE_SPEC.md](35_PHASE_4_INTENT_INTELLIGENCE_SPEC.md) | Phase 4: Intent's runtime-required vs. implementation-only fields; Blueprint named |
+| 36 | [36_PHASE_4_CONTEXT_INTELLIGENCE_SPEC.md](36_PHASE_4_CONTEXT_INTELLIGENCE_SPEC.md) | Phase 4: context classified by lifecycle/persistence/replayability/what it affects |
+| 37 | [37_PHASE_4_ENTERPRISE_DECISION_PIPELINE_SPEC.md](37_PHASE_4_ENTERPRISE_DECISION_PIPELINE_SPEC.md) | Phase 4: the ten-stage pipeline, inputs/outputs/owner/disciplines/artefacts/replay/failure mode per stage |
+| 38 | [38_PHASE_4_PIPELINE_SEQUENCE_DIAGRAM.md](38_PHASE_4_PIPELINE_SEQUENCE_DIAGRAM.md) | Phase 4: the pipeline as actually implemented, as sequence diagrams |
+| 39 | [39_PHASE_4_ARCHITECTURE_EXTRACTION_REPORT.md](39_PHASE_4_ARCHITECTURE_EXTRACTION_REPORT.md) | Phase 4: already-existed vs. formalized vs. renamed vs. invented, per concept |
+| 40 | [40_PHASE_4_GAP_ANALYSIS.md](40_PHASE_4_GAP_ANALYSIS.md) | Phase 4: what remains implicit, what should stay implementation detail, what belongs in Phase 5 |
+| 41 | [41_PHASE_4_MIGRATION_REPORT.md](41_PHASE_4_MIGRATION_REPORT.md) | Phase 4: every code/documentation change, with before/after and behavioral-impact verification |
+| 42 | [42_PHASE_4_CONFORMANCE_REPORT.md](42_PHASE_4_CONFORMANCE_REPORT.md) | Phase 4 Architecture Conformance Report — gate passed |
 | — | [GLOSSARY.md](GLOSSARY.md) | Every term of art, defined once |
 
 ## Relationship to existing documents

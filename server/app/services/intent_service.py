@@ -82,6 +82,7 @@ def _build_evidence_payload(
     approver: str | None,
     previous_hash: str | None,
     principal_id: uuid.UUID | None = None,
+    principal_name: str | None = None,
     authority_context: dict | None = None,
     mandate_ids: list[str] | None = None,
     authority_ids: list[str] | None = None,
@@ -134,7 +135,20 @@ def _build_evidence_payload(
     Intent fields, which `agent_id` ("who asserted") already covers on its
     own terms. `reviewer`/`review_outcome` are added by
     resolution_service.py, not here -- see that module for "who
-    reviewed"."""
+    reviewed".
+
+    Runtime Governance Architecture, Phase 4 (36_PHASE_4_CONTEXT_INTELLIGENCE_SPEC.md):
+    `principal_name` is the exact string Runtime Truth resolved and
+    handed to decision_engine.evaluate() as `acting_for_principal_id`
+    -- the value actually matched against a compiled RuntimePolicy's
+    `scope.principal` inside OPA. `principal_id` alone does not make a
+    past Decision replayable on its own terms: it is a foreign key, and
+    re-deriving the name it pointed to at evaluation time would require
+    trusting the Principal row's *current* name, which nothing in this
+    schema guarantees hasn't changed since. Persisting the resolved
+    string itself closes that gap the same way Phase 1 already closed
+    it for policy_version/policy_bundle_hash -- pin what was actually
+    evaluated, don't reconstruct it later from a live, mutable row."""
     payload = {
         "payload_version": 2,
         "decision_id": str(decision_id),
@@ -151,6 +165,8 @@ def _build_evidence_payload(
     }
     if principal_id is not None:
         payload["principal_id"] = str(principal_id)
+    if principal_name is not None:
+        payload["principal_name"] = principal_name
     if authority_context is not None:
         payload["authority_context"] = authority_context
         # Surfaced as its own top-level key, not buried inside
@@ -244,6 +260,7 @@ def append_evidence(
     approver: str | None = None,
     status: str = "PENDING",
     principal_id: uuid.UUID | None = None,
+    principal_name: str | None = None,
     authority_context: dict | None = None,
     mandate_ids: list[str] | None = None,
     authority_version: str | None = None,
@@ -276,6 +293,7 @@ def append_evidence(
         approver,
         previous_hash,
         principal_id=principal_id,
+        principal_name=principal_name,
         authority_context=authority_context,
         mandate_ids=mandate_ids,
         authority_ids=authority_ids,
@@ -466,6 +484,12 @@ def submit_intent(
         # carried into Evidence instead of being discarded once the
         # decision is made. Nothing here is recomputed.
         principal_id=resolved.principal.id if resolved.principal else None,
+        # Runtime Governance Architecture, Phase 4
+        # (36_PHASE_4_CONTEXT_INTELLIGENCE_SPEC.md): the exact string
+        # matched against a compiled RuntimePolicy's scope.principal
+        # inside OPA -- pinned here so replay never depends on
+        # Principal.name still meaning what it meant at evaluation time.
+        principal_name=resolved.principal_name,
         authority_context=resolved.authority_context,
         mandate_ids=mandate_ids,
         # Runtime Governance Architecture, Phase 1: the exact values
