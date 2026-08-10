@@ -120,9 +120,10 @@ module "container_apps" {
   environment                     = var.environment
   tags                            = local.common_tags
 
-  container_apps_subnet_id   = module.networking.container_apps_subnet_id
-  log_analytics_workspace_id = module.monitoring.log_analytics_workspace_id
-  container_app_identity_id  = module.managed_identity.id
+  container_apps_subnet_id        = module.networking.container_apps_subnet_id
+  log_analytics_workspace_id      = module.monitoring.log_analytics_workspace_id
+  container_app_identity_id       = module.managed_identity.id
+  container_registry_login_server = module.container_registry.login_server
 
   database_url_secret_id = module.postgres.connection_string_secret_id
   application_secret_ids = module.key_vault.application_secret_ids
@@ -141,8 +142,15 @@ module "diagnostics" {
   targets = {
     postgres           = module.postgres.server_id
     key-vault          = module.key_vault.id
-    storage            = module.storage.storage_account_id
+    storage            = module.storage.blob_service_id
     container-apps-env = module.container_apps.environment_id
     container-registry = module.container_registry.id
+  }
+
+  # See modules/diagnostics/variables.tf's metric_categories comment:
+  # Blob Storage doesn't accept "AllMetrics" the way every other target
+  # here does -- it always reads back as these two concrete categories.
+  metric_categories = {
+    storage = ["Capacity", "Transaction"]
   }
 }

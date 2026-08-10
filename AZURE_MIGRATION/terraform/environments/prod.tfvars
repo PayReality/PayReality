@@ -8,7 +8,7 @@
 # expected to apply; Milestone 2 authors it, does not run it.
 
 environment = "prod"
-owner       = "REPLACE_WITH_ACCOUNTABLE_OWNER"
+owner       = "payreality.ceo@gmail.com"
 cost_center = "engineering"
 
 github_repository = "PayReality/PayReality"

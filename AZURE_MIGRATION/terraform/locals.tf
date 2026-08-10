@@ -26,7 +26,22 @@ locals {
   # only, no hyphens, <=24 chars) -- a short random suffix is the only
   # thing making these unique across every Azure customer, not a
   # convention choice, so it's isolated to exactly these three.
-  key_vault_name          = "kv-${local.app_name_short}-${var.environment}-${random_string.suffix.result}"
+  #
+  # Key Vault deliberately draws from its OWN random_string
+  # (key_vault_suffix), not the one shared by Storage/Container Registry.
+  # Milestone 3 finding: a Key Vault name is not freely reusable the way
+  # a Storage Account or ACR name is -- soft delete plus purge protection
+  # (both on by design here, to protect the eventual Evidence signing
+  # key) can leave a name permanently reserved for up to 90 days after
+  # the vault itself is gone, as happened to kv-pr-staging-adzg (see
+  # MILESTONE_3_DEPLOYMENT_REPORT.md). A dedicated, higher-entropy (6
+  # rather than 4 characters) suffix, generated independently per
+  # environment, is this project's standing collision-resistance
+  # strategy for Key Vault specifically -- not a one-off rename -- so a
+  # future rebuild of staging, prod, or any new environment draws a
+  # fresh name rather than risking a repeat collision with a still-
+  # reserved one.
+  key_vault_name          = "kv-${local.app_name_short}-${var.environment}-${random_string.key_vault_suffix.result}"
   storage_account_name    = "st${local.app_name_short}${var.environment}${random_string.suffix.result}"
   container_registry_name = "acr${local.app_name_short}${var.environment}${random_string.suffix.result}"
 
@@ -43,6 +58,22 @@ locals {
 
 resource "random_string" "suffix" {
   length  = 4
+  special = false
+  upper   = false
+  numeric = true
+}
+
+# Deliberately separate from random_string.suffix above -- see the
+# key_vault_name comment for why Key Vault needs its own, higher-entropy,
+# independently-drawn suffix rather than sharing one with Storage/ACR.
+# 6 lowercase alphanumeric characters: still well within Key Vault's
+# 24-character name limit alongside "kv-pr-<environment>-", and a wider
+# character set (letters + digits, not digits-only) than the shared
+# 4-digit suffix, for meaningfully lower collision odds on the one
+# resource where a collision costs a 90-day naming lockout instead of a
+# harmless retry.
+resource "random_string" "key_vault_suffix" {
+  length  = 6
   special = false
   upper   = false
   numeric = true

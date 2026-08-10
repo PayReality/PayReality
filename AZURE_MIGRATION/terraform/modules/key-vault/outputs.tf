@@ -1,5 +1,14 @@
 output "id" {
+  # Deliberately depends on the RBAC propagation wait, not just the vault
+  # resource itself: every other module (postgres, container-apps) reaches
+  # this vault only through this output, and every one of them needs the
+  # Terraform-operator role to have actually propagated before it can
+  # write or reference a secret here. Tying the wait to this output means
+  # that dependency exists once, correctly, everywhere this ID is
+  # consumed, instead of relying on every caller to remember it.
   value = azurerm_key_vault.this.id
+
+  depends_on = [time_sleep.wait_for_secrets_officer_rbac]
 }
 
 output "name" {

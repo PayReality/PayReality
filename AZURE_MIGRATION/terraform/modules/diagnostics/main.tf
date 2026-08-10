@@ -24,7 +24,10 @@ resource "azurerm_monitor_diagnostic_setting" "this" {
     category_group = "allLogs"
   }
 
-  metric {
-    category = "AllMetrics"
+  dynamic "metric" {
+    for_each = lookup(var.metric_categories, each.key, ["AllMetrics"])
+    content {
+      category = metric.value
+    }
   }
 }

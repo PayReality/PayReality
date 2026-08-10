@@ -1,3 +1,5 @@
+data "azurerm_client_config" "current" {}
+
 resource "azurerm_storage_account" "this" {
   name                     = var.storage_account_name
   resource_group_name      = var.resource_group_name
@@ -6,7 +8,18 @@ resource "azurerm_storage_account" "this" {
   account_replication_type = var.replication_type
   min_tls_version          = "TLS1_2"
 
-  public_network_access_enabled   = false
+  # Milestone 3, same identity-first decision as modules/key-vault: Azure
+  # RBAC + Microsoft Entra ID is the primary security boundary for
+  # management operations on this account, not network isolation. A hard
+  # `public_network_access_enabled = false` blocks the data plane from
+  # every caller outside the VNet -- including Terraform, which has no
+  # VPN/bastion/self-hosted runner to run from (deliberately rejected, see
+  # docs/KNOWN_RISKS.md and MILESTONE_3_SECURITY_REVIEW.md). Only two
+  # identities ever hold a role on this account (below); the running
+  # application still reaches Blob Storage exclusively through the
+  # private endpoint whenever it runs inside the VNet -- the public path
+  # serves authenticated management operations only.
+  public_network_access_enabled   = true
   allow_nested_items_to_be_public = false # no container or blob may be individually made public, full stop -- Evidence-related bytes never get a public URL by accident
 
   blob_properties {
@@ -43,6 +56,29 @@ resource "azurerm_private_endpoint" "blob" {
   }
 }
 
+# Milestone 3 finding: the same RBAC-vs-control-plane gap found on Key
+# Vault applies here -- a subscription Owner does not automatically get
+# blob data-plane access, and this provider version's container/blob
+# resources authenticate via the data plane. "Storage Blob Data
+# Contributor" is the narrowest built-in role that can create/manage
+# containers and their contents; granted here to the Terraform-operator
+# identity, separately from the identical role already granted to the
+# Container App's runtime identity below, so each identity's access is
+# an explicit, auditable grant rather than an inherited assumption.
+resource "azurerm_role_assignment" "terraform_operator_blob_data_contributor" {
+  scope                = azurerm_storage_account.this.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
+# Same RBAC propagation reality as modules/key-vault's identical
+# resource -- see that module's comment for why this wait exists instead
+# of relying on incidental ordering.
+resource "time_sleep" "wait_for_blob_contributor_rbac" {
+  depends_on      = [azurerm_role_assignment.terraform_operator_blob_data_contributor]
+  create_duration = "30s"
+}
+
 # Three containers, matching Sprint 1's storage design and this
 # milestone's explicit instruction to design for uploads, evidence
 # exports, and future Authorization Receipts -- "future" here means
@@ -55,18 +91,24 @@ resource "azurerm_storage_container" "uploads" {
   name                  = "uploads"
   storage_account_name  = azurerm_storage_account.this.name
   container_access_type = "private"
+
+  depends_on = [time_sleep.wait_for_blob_contributor_rbac]
 }
 
 resource "azurerm_storage_container" "evidence_exports" {
   name                  = "evidence-exports"
   storage_account_name  = azurerm_storage_account.this.name
   container_access_type = "private"
+
+  depends_on = [time_sleep.wait_for_blob_contributor_rbac]
 }
 
 resource "azurerm_storage_container" "authorization_receipts" {
   name                  = "authorization-receipts"
   storage_account_name  = azurerm_storage_account.this.name
   container_access_type = "private"
+
+  depends_on = [time_sleep.wait_for_blob_contributor_rbac]
 }
 
 # Lifecycle: cost-optimize by moving cold data to a cheaper access tier;

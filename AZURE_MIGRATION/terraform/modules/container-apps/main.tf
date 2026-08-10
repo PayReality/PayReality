@@ -13,6 +13,25 @@ resource "azurerm_container_app_environment" "this" {
   log_analytics_workspace_id = var.log_analytics_workspace_id
 
   tags = merge(var.tags, { Purpose = "Hosts the PayReality API Container App for ${var.environment}" })
+
+  # Milestone 3 finding: `infrastructure_resource_group_name` is Optional
+  # but NOT Computed in provider ~3.117 -- leaving it unset means Azure
+  # auto-generates one on create (e.g. "ME_<name>_<resource-group>_
+  # <location>"), but every later `terraform plan` then reads that real
+  # value back, compares it to this resource's unset config, and treats
+  # the difference as "-> null", which is ForceNew: left alone, this
+  # would destroy and recreate an already-successfully-running
+  # environment on every apply for no operational reason. Explicitly
+  # setting the value instead requires also configuring `workload_profile`
+  # blocks (a provider-enforced pairing this Consumption-only environment
+  # has no other reason to adopt), so
+  # `ignore_changes` is the correct fix here: it lets Azure's
+  # auto-generated value stand, permanently, without Terraform proposing
+  # to tear it down to "fix" a value it was never asked to manage. See
+  # MILESTONE_3_DEPLOYMENT_REPORT.md.
+  lifecycle {
+    ignore_changes = [infrastructure_resource_group_name]
+  }
 }
 
 resource "azurerm_container_app" "api" {
@@ -24,6 +43,11 @@ resource "azurerm_container_app" "api" {
   identity {
     type         = "UserAssigned"
     identity_ids = [var.container_app_identity_id]
+  }
+
+  registry {
+    server   = var.container_registry_login_server
+    identity = var.container_app_identity_id
   }
 
   # Key-Vault-backed secrets: the platform resolves these using the
@@ -146,4 +170,13 @@ resource "azurerm_container_app" "api" {
   }
 
   tags = merge(var.tags, { Purpose = "The PayReality API -- Azure replacement for Render's payreality-api service" })
+
+  # Same class of finding as azurerm_container_app_environment.this above:
+  # `workload_profile_name` is Optional but NOT Computed in provider
+  # ~3.117. Azure auto-assigns "Consumption" on create; this config never
+  # asked for a specific profile, so every later plan proposes nulling it
+  # back out. `ignore_changes` again, for the same reason.
+  lifecycle {
+    ignore_changes = [workload_profile_name]
+  }
 }

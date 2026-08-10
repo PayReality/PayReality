@@ -4,7 +4,9 @@
 
 ## Pattern
 
-`<resource-type-abbreviation>-<app>-<qualifier>-<environment>-<region>` for every resource type with generous Azure naming limits (63–90 characters). Globally-unique, character-restricted resource types (Storage Account, Key Vault, Container Registry — lowercase alphanumeric only, no hyphens, ≤24 characters) use a shortened app code (`pr`) plus a 4-character random suffix instead, since a fixed convention alone cannot satisfy global uniqueness across every Azure customer.
+`<resource-type-abbreviation>-<app>-<qualifier>-<environment>-<region>` for every resource type with generous Azure naming limits (63–90 characters). Globally-unique, character-restricted resource types (Storage Account, Key Vault, Container Registry — lowercase alphanumeric only, no hyphens, ≤24 characters) use a shortened app code (`pr`) plus a random suffix instead, since a fixed convention alone cannot satisfy global uniqueness across every Azure customer.
+
+**Key Vault uses its own, separate, higher-entropy suffix (6 characters) from Storage Account and Container Registry (which share a 4-character suffix).** This is a deliberate, standing part of the convention, not a one-off fix — see [`MILESTONE_3_DEPLOYMENT_REPORT.md`](../MILESTONE_3_DEPLOYMENT_REPORT.md) for the incident that established it: unlike Storage Accounts and Container Registries, a Key Vault name is not freely reusable after deletion. With `purge_protection_enabled = true` (on by design, to protect the eventual Evidence signing key from early deletion), a deleted vault's name is reserved and unpurgeable for the full soft-delete retention period (90 days here) even after its resource group is gone. Every environment — staging, prod, and any future one — must keep drawing Key Vault's name from its own independent `random_string` resource for exactly this reason: a shared suffix would mean a Key Vault naming collision could also force an unwanted, unrelated rename of the Storage Account or Container Registry that happens to share it.
 
 ## Abbreviations used
 

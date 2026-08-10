@@ -56,6 +56,14 @@ resource "azurerm_postgresql_flexible_server" "this" {
   backup_retention_days        = var.backup_retention_days
   geo_redundant_backup_enabled = var.geo_redundant_backup_enabled
 
+  # Milestone 3 finding: the provider defaults this to true even when
+  # delegated_subnet_id (below) already puts the server in private-access
+  # (VNet Integration) mode, which has no public endpoint regardless --
+  # explicit here so the plan output and the actual API request agree
+  # with what modules/postgres/README.md and docs/NETWORKING_MODEL.md
+  # already claim, rather than relying on an implicit default.
+  public_network_access_enabled = false
+
   dynamic "high_availability" {
     for_each = var.high_availability_enabled ? [1] : []
     content {
@@ -69,6 +77,21 @@ resource "azurerm_postgresql_flexible_server" "this" {
   tags = merge(var.tags, { Purpose = "Primary application database for PayReality ${var.environment}" })
 
   depends_on = [azurerm_private_dns_zone_virtual_network_link.postgres]
+
+  # Milestone 3 finding: `zone` is Optional but NOT Computed in provider
+  # ~3.117 -- Azure auto-assigns an availability zone on create (this
+  # server got "1"), but this config never asked for a specific zone, so
+  # every later `terraform plan` reads that real value back and proposes
+  # clearing it to null. The provider then refuses that specific change
+  # outright ("`zone` can only be changed when exchanged with the zone
+  # specified in `high_availability.0.standby_availability_zone`"),
+  # failing the apply. Same class of issue, same fix, as
+  # modules/container-apps' identical `infrastructure_resource_group_name`
+  # finding: ignore it rather than let an unmanaged, provider-assigned
+  # value fail every subsequent apply. See MILESTONE_3_DEPLOYMENT_REPORT.md.
+  lifecycle {
+    ignore_changes = [zone]
+  }
 }
 
 resource "azurerm_postgresql_flexible_server_database" "app" {

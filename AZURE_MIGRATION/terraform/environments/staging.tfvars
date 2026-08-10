@@ -9,10 +9,17 @@
 # docs/TAGGING_STRATEGY.md.
 
 environment = "staging"
-owner       = "REPLACE_WITH_ACCOUNTABLE_OWNER"
+owner       = "payreality.ceo@gmail.com"
 cost_center = "engineering"
 
 github_repository = "PayReality/PayReality"
+
+# Milestone 3: the real application image, built and pushed via
+# `az acr build` from server/Dockerfile (embedded OPA included) and
+# tagged with the exact source commit it was built from -- see
+# MILESTONE_3_DEPLOYMENT_REPORT.md for the full build record (registry,
+# tag, digest, auth method).
+container_image = "acrprstagingadzg.azurecr.io/payreality-api:staging-3f34349"
 
 # Staging is disposable and re-seedable (Sprint 1's own Infrastructure
 # Blueprint) -- cheaper, non-geo-redundant choices throughout.

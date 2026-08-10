@@ -17,15 +17,15 @@ variable "environment" {
 }
 
 variable "location" {
-  description = "Azure region for every resource in this project."
+  description = "Azure region for every resource in this project. Milestone 3 finding: this specific subscription is restricted from provisioning PostgreSQL Flexible Server in eastus2, eastus, westus2, and westeurope (\"Subscriptions are restricted from provisioning in this region\" -- a new-subscription capacity restriction, confirmed directly via `az postgres flexible-server list-skus`, not a Terraform or code defect). centralus has no such restriction for this subscription and is the default for that reason -- see AZURE_MIGRATION/MILESTONE_3_DEPLOYMENT_REPORT.md."
   type        = string
-  default     = "eastus2"
+  default     = "centralus"
 }
 
 variable "location_short" {
   description = "Short region code used in resource names (see docs/NAMING_CONVENTION.md). Must be kept in sync with `location` by whoever changes it -- not derived automatically, since Azure's region-name-to-abbreviation mapping is a naming convention choice, not a fact Terraform can look up."
   type        = string
-  default     = "eus2"
+  default     = "cus"
 }
 
 variable "owner" {
