@@ -67,6 +67,9 @@ def resolve_decision(
         # Mandate ids already resolved and persisted on the original
         # Decision row at submit_intent time -- nothing recomputed here.
         mandate_ids=decision.evaluated_mandate_ids or [],
+        # Phase 5, Release 2: same reuse pattern -- the Enterprise System
+        # was already resolved and persisted on the original Decision row.
+        enterprise_system_id=decision.enterprise_system_id,
     )
 
     resolution_row = DecisionResolution(

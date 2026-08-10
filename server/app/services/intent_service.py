@@ -6,7 +6,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Agent, Certificate, Decision, Evidence, Intent, Mandate, Policy, Principal
+from app.db.models import (
+    Agent,
+    Certificate,
+    Decision,
+    EnterpriseSystem,
+    Evidence,
+    Intent,
+    Mandate,
+    Policy,
+    Principal,
+)
 from app.domain.time_utils import to_utc_iso
 from app.domain.decision import engine as decision_engine
 from app.domain.decision.scope_vocabulary import is_recognized_scope
@@ -79,6 +89,8 @@ def _build_evidence_payload(
     authority_context: dict | None = None,
     mandate_ids: list[str] | None = None,
     authority_ids: list[str] | None = None,
+    enterprise_system_id: str | None = None,
+    enterprise_system_name: str | None = None,
 ) -> dict:
     """spec 17.1's Evidence payload shape, adapted to Phase 1's fields.
 
@@ -136,6 +148,12 @@ def _build_evidence_payload(
         payload["evaluated_mandate_ids"] = list(mandate_ids)
     if authority_ids:
         payload["authority_ids"] = list(authority_ids)
+    # Phase 5, Release 2 (Enterprise System binding): both present only
+    # when resolve_enterprise_system actually found a matched policy
+    # configured with, and still referencing, a real EnterpriseSystem row.
+    if enterprise_system_id is not None:
+        payload["enterprise_system_id"] = enterprise_system_id
+        payload["enterprise_system_name"] = enterprise_system_name
     return payload
 
 
@@ -205,10 +223,12 @@ def append_evidence(
     principal_id: uuid.UUID | None = None,
     authority_context: dict | None = None,
     mandate_ids: list[str] | None = None,
+    enterprise_system_id: uuid.UUID | None = None,
 ) -> Evidence:
     organization_id = _resolve_chain_scope(db, agent_id)
     previous_hash = _previous_chain_hash(db, organization_id)
     authority_ids = _resolve_authority_ids_for_mandates(db, mandate_ids) if mandate_ids else []
+    enterprise_system = db.get(EnterpriseSystem, enterprise_system_id) if enterprise_system_id else None
     payload = _build_evidence_payload(
         decision_id,
         agent_id,
@@ -224,6 +244,8 @@ def append_evidence(
         authority_context=authority_context,
         mandate_ids=mandate_ids,
         authority_ids=authority_ids,
+        enterprise_system_id=str(enterprise_system.id) if enterprise_system else None,
+        enterprise_system_name=enterprise_system.name if enterprise_system else None,
     )
     signature = sign_payload(
         payload, settings.evidence_signing_key_b64, settings.evidence_signing_key_id
@@ -383,6 +405,11 @@ def submit_intent(
     # additive column resolving those same keys to real Mandate row ids
     # wherever Stage G has actually created one.
     mandate_ids = runtime_policy_service.resolve_mandate_ids(db, engine_decision.evaluated_mandates)
+    # Phase 5, Release 2 (Enterprise System binding): the same matched-
+    # policy-keys list, read for whichever one a reviewer configured
+    # with a still-real EnterpriseSystem. Null whenever none was
+    # configured or the configured one no longer exists -- never guessed.
+    enterprise_system = runtime_policy_service.resolve_enterprise_system(db, engine_decision.evaluated_mandates)
     decision = Decision(
         intent_id=intent.id,
         policy_id=policy_id,
@@ -390,6 +417,7 @@ def submit_intent(
         reason=engine_decision.reason,
         evaluated_mandates=engine_decision.evaluated_mandates,
         evaluated_mandate_ids=mandate_ids,
+        enterprise_system_id=enterprise_system.id if enterprise_system else None,
     )
     db.add(decision)
     db.flush()
@@ -410,6 +438,7 @@ def submit_intent(
         principal_id=principal.id if principal else None,
         authority_context=authority_context,
         mandate_ids=mandate_ids,
+        enterprise_system_id=enterprise_system.id if enterprise_system else None,
     )
     db.commit()
     db.refresh(intent)

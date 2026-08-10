@@ -38,6 +38,31 @@ class PrincipalResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DelegationEdgeResponse(BaseModel):
+    """One active, direct inbound delegation
+    (authority_context_service._active_inbound_delegations)."""
+
+    id: str
+    from_principal_id: str | None
+    resource_id: str | None
+    operation: str | None
+
+
+class PrincipalAuthorityContextResponse(BaseModel):
+    """Authority-as-a-continuous-object, Stage I.9: the same Runtime
+    Authority Context dict resolve_runtime_authority_context already
+    assembles for every Intent, exposed standalone (identity-only, no
+    `amount`) so Agent Detail can show a Principal's real organisational
+    placement and active delegations instead of a bare name."""
+
+    organization: str | None
+    business_unit: str | None
+    department: str | None
+    team: str | None
+    role: str | None
+    delegations: list[DelegationEdgeResponse]
+
+
 class CreateAgentRequest(BaseModel):
     """spec 19.4."""
 

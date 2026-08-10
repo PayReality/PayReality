@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Agent, Authority, Mandate, Policy, RuntimePolicyRecord
+from app.db.models import Agent, Authority, EnterpriseSystem, Mandate, Policy, RuntimePolicyRecord
 from app.domain.compiler_v2.compiler_errors import CompilerDiagnostics
 from app.domain.compiler_v2.compiler_v2 import compile_bundle
 from app.domain.compiler_v2.dry_run import DryRunResult, dry_run as run_dry_run
@@ -150,6 +150,46 @@ def resolve_mandate_ids(db: Session, policy_keys: list[str]) -> list[str]:
         if mandate_id and mandate_id not in mandate_ids:
             mandate_ids.append(mandate_id)
     return mandate_ids
+
+
+def resolve_enterprise_system(db: Session, policy_keys: list[str]) -> EnterpriseSystem | None:
+    """Phase 5, Release 2: the Enterprise System binding mechanism. Same
+    shape as resolve_mandate_ids above -- reads back a value a reviewer
+    already configured on the matched policy's own constraints
+    (Constraints.enterprise_system_id), reusing the exact ACTIVE-record
+    lookup pattern. Never inferred: a policy with no configured
+    enterprise_system_id, or one pointing at a since-deleted
+    EnterpriseSystem row, contributes nothing.
+
+    Deterministic tie-break: `policy_keys` is decision_engine.evaluate()'s
+    own `evaluated_mandates` output, in its own order; the first matched
+    policy that both configures a value AND still references a real row
+    wins. A Decision has exactly one enterprise_system_id (unlike
+    evaluated_mandate_ids, which is a list), so this returns at most one
+    row rather than collecting every match."""
+    for key in policy_keys:
+        try:
+            policy_key = uuid.UUID(key)
+        except ValueError:
+            continue
+        row = db.scalar(
+            select(RuntimePolicyRecord).where(
+                RuntimePolicyRecord.policy_key == policy_key,
+                RuntimePolicyRecord.status == "active",
+            )
+        )
+        if row is None:
+            continue
+        enterprise_system_id = (row.content.get("constraints") or {}).get("enterprise_system_id")
+        if not enterprise_system_id:
+            continue
+        try:
+            system = db.get(EnterpriseSystem, uuid.UUID(enterprise_system_id))
+        except ValueError:
+            continue
+        if system is not None:
+            return system
+    return None
 
 
 def list_versions(db: Session, policy_key: uuid.UUID) -> list[RuntimePolicyRecord]:
@@ -398,6 +438,12 @@ class DeployOutcome:
     bundle_id: str
     bundle_hash: str
     deployed_at: datetime
+    # Authority-as-a-continuous-object, Stage I.5: additive. Threads out
+    # whatever _ensure_mandate already computed into `content["constraints"]`
+    # above -- null whenever this policy has no resolved Authority behind
+    # it, exactly as before.
+    authority_id: str | None = None
+    mandate_id: str | None = None
 
 
 # Authority-as-a-continuous-object, Stage G: a Runtime Policy with no
@@ -526,6 +572,8 @@ def deploy_policy(db: Session, policy_key: uuid.UUID, opa_url: str = "http://loc
         bundle_id=result.bundle.bundle_id,
         bundle_hash=result.bundle.bundle_hash,
         deployed_at=policy_row.activated_at,
+        authority_id=content["constraints"].get("authority_id"),
+        mandate_id=content["constraints"].get("mandate_id"),
     )
 
 

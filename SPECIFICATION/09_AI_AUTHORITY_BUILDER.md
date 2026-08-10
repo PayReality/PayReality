@@ -46,10 +46,11 @@ This is the most important nuance in this subsystem: **most of the Authority Gra
 | Finding type | What happens to it |
 |---|---|
 | Policy candidates | Can be promoted into a real, enforceable `RuntimePolicy` — the only category with a direct path into enforcement |
-| Principals, Resources, Operations, Relationships, Conflicts, Gaps | Displayed for human review; a reviewer can manually create real `Principal`/`Resource`/`AuthorityRelationship` rows informed by them, but there is **no automatic promotion path** from an `AuthorityPrincipal`/`AuthorityResource`/`AuthorityRelationship` finding into the Phase 1 Authority Model's real tables (§8) |
+| Principals, Relationships | **Update (Authority-as-a-continuous-object, Stages E-F):** a reviewer-triggered, code-driven resolution path now exists — `resolve_principal` (match an existing `Principal` or create one) and `resolve_relationship`/`activate_relationship` (derive and activate the real `from_principal_id`/`to_principal_id` FKs). Still never automatic: every step requires an explicit reviewer action, gated by `AUTHORITY_REVIEW`, exactly the discipline this section originally called for |
+| Resources, Operations, Conflicts, Gaps | Displayed for human review; a reviewer can manually create a real `Resource` row informed by them, but there is still no promotion path for these categories specifically |
 | Questions | Answered directly, informational only |
 
-This means the Authority Model (Part 8) and the AI Authority Builder's discovery output are connected by a human reviewer's judgment, not by code — a reviewer reads a discovered relationship and decides whether to go create the equivalent real `AuthorityRelationship` row with resolved `from_principal_id`/`to_principal_id`. Automating that promotion is a natural next step but is **not built** (see [16_CURRENT_LIMITATIONS.md](16_CURRENT_LIMITATIONS.md)).
+This means the Authority Model (Part 8) and the AI Authority Builder's discovery output are now connected by code as well as reviewer judgment for Principals and Relationships specifically: a reviewer still decides whether and how to resolve a discovered relationship, but the act of resolving it, deriving real ids and (separately) activating them for live enforcement, is a real API call, not a manual "go create the equivalent row yourself" step. Resources/Operations/Conflicts/Gaps remain exactly as originally described here: informational only, no promotion path (see [16_CURRENT_LIMITATIONS.md](16_CURRENT_LIMITATIONS.md)).
 
 ## 9.6 Provider architecture (extraction backend)
 

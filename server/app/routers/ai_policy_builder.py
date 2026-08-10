@@ -192,7 +192,7 @@ def promote_candidate(
     reviewer (if one is created) -- the same identity pattern Stage D
     already established for approvals, extended to this reviewed action."""
     try:
-        created = svc.promote_candidate(
+        created, authority_id = svc.promote_candidate(
             db, candidate_id,
             promoted_by=session_user.name if session_user else None,
         )
@@ -212,5 +212,6 @@ def promote_candidate(
             },
         )
     return PromoteCandidateResponse(
-        policy_key=str(created.policy_key), version=created.version, status=created.status
+        policy_key=str(created.policy_key), version=created.version, status=created.status,
+        authority_id=authority_id,
     )

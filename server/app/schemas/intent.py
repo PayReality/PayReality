@@ -30,6 +30,11 @@ class DecisionSummary(BaseModel):
     # above -- empty whenever none of the matched policies have a
     # Stage-G-created Mandate yet.
     evaluated_mandate_ids: list[str] = []
+    # Phase 5, Release 2 (Enterprise System binding): both additive, both
+    # None whenever no matched policy configured, or still references, a
+    # real EnterpriseSystem row -- never fabricated.
+    enterprise_system_id: UUID | None = None
+    enterprise_system_name: str | None = None
     reason: str | None = None
 
 
@@ -76,4 +81,6 @@ class GetDecisionResponse(BaseModel):
     currency: str
     evaluated_mandates: list[str]
     evaluated_mandate_ids: list[str] = []
+    enterprise_system_id: UUID | None = None
+    enterprise_system_name: str | None = None
     resolution: ResolutionSummary | None = None

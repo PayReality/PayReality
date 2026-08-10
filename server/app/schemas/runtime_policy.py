@@ -29,6 +29,13 @@ class ConstraintsSchema(BaseModel):
     # unpacking surfaces them without a separate response shape.
     authority_id: str | None = None
     mandate_id: str | None = None
+    # Phase 5, Release 2 (Enterprise System binding): unlike authority_id/
+    # mandate_id above, this one IS client-editable -- a reviewer
+    # explicitly declares which registered EnterpriseSystem this policy's
+    # allowed action reaches. Never inferred; runtime_policy_service.
+    # resolve_enterprise_system only trusts this value once it's
+    # confirmed to still reference a real row.
+    enterprise_system_id: str | None = None
 
 
 class MetadataSchema(BaseModel):
@@ -114,6 +121,11 @@ class DeployResponse(BaseModel):
     bundle_id: str
     bundle_hash: str
     deployed_at: datetime
+    # Authority-as-a-continuous-object, Stage I.5: additive, threaded
+    # from DeployOutcome. Null whenever this policy has no resolved
+    # Authority behind it.
+    authority_id: str | None = None
+    mandate_id: str | None = None
 
 
 class ConditionDiffSchema(BaseModel):

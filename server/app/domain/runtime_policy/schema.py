@@ -63,6 +63,7 @@ def to_dict(policy: RuntimePolicy) -> dict[str, Any]:
             else None,
             "authority_id": policy.constraints.authority_id,
             "mandate_id": policy.constraints.mandate_id,
+            "enterprise_system_id": policy.constraints.enterprise_system_id,
         },
         "metadata": {
             "owner": policy.metadata.owner,
@@ -120,6 +121,7 @@ def from_dict(data: dict[str, Any]) -> RuntimePolicy:
             else None,
             authority_id=constraints_data.get("authority_id"),
             mandate_id=constraints_data.get("mandate_id"),
+            enterprise_system_id=constraints_data.get("enterprise_system_id"),
         ),
         metadata=Metadata(
             owner=metadata_data.get("owner"),
@@ -201,6 +203,7 @@ JSON_SCHEMA: dict[str, Any] = {
                 },
                 "authority_id": {"type": ["string", "null"]},
                 "mandate_id": {"type": ["string", "null"]},
+                "enterprise_system_id": {"type": ["string", "null"]},
             },
         },
         "metadata": {

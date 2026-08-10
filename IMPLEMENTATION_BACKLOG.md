@@ -78,6 +78,7 @@ Every item is written to be pasted directly into a GitHub Issue. IDs are stable 
 - **Files affected**: `db/models.py` (three new classes), migration, minimal CRUD in `services/`
 - **Testing strategy**: Unit tests for CRUD; FK integrity tests (department requires business unit, etc.)
 - **Acceptance criteria**: Three-level hierarchy creatable and queryable; each level independently optional per Principal
+- **Status: Done in two parts.** The tables/migration shipped in Phase 1 as planned; the "minimal CRUD" half of this item did not ship then and had no HTTP surface at all until Phase 5 Release 1 (`GET/POST/PATCH/DELETE /v1/business-units`, `/v1/departments`, `/v1/teams`, plus an Organisation Settings UI) closed that specific gap.
 
 ### BL-1.3: Principal role/org/BU/department/team columns
 - **Priority**: High | **Complexity**: Small | **Dependencies**: BL-1.1, BL-1.2 | **Duration**: 1 day

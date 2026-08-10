@@ -53,7 +53,7 @@ Principal ──< Authority ──< Mandate >── Policy ──< Decision >─
 ```
 
 - **`Base.type_annotation_map`** forces every `datetime` column to `TIMESTAMPTZ`: a deliberate fix for a real bug hit during development (the local Postgres install's server timezone defaulted to UTC+2; without this, timezone-aware Python datetimes silently converted to server-local wall-clock time on write, which broke Mandate validity-window comparisons against Intent timestamps in the Rego bundle). This is why every timestamp column is explicit rather than left to Postgres's bare `TIMESTAMP` default.
-- **`reviewer_id`** and **`resolved_by`** are free-text columns, not foreign keys to a users table, because there is no users table yet (see "Known architectural gaps" below).
+- **`reviewer_id`** and **`resolved_by`** are free-text columns, kept exactly as every existing reader depends on. A real `users` table and RBAC now exist (RBAC.md); `resolved_by_user_id` (on `DecisionResolution`) and the approve/reject audit fields (on `RuntimePolicyRecord.content.audit`) additively record the real, authenticated `User` alongside the free-text field when a session exists (Authority-as-a-continuous-object, Stage D) -- the free-text columns themselves were not removed or replaced.
 - **JSONB** is used for genuinely variable-shape data (Intent `context`, Authority/Mandate `conditions`, Evidence `payload`), not as a substitute for real columns anywhere a fixed schema was knowable.
 - **`Evidence.status`** (`VERIFIED`/`PENDING`/`REJECTED`) is set at creation time based on the resolution outcome, not derived from a live signature check; `POST /v1/evidence/{id}/verify` is the actual cryptographic check and is intentionally a separate, repeatable operation.
 

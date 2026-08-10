@@ -59,6 +59,13 @@ class PromoteCandidateResponse(BaseModel):
     policy_key: str
     version: int
     status: str
+    # Authority-as-a-continuous-object, Stage I.4: additive. Non-null only
+    # when promote_candidate actually created a real Authority row for
+    # this candidate (Stage G); null whenever the candidate has no
+    # resolved Authority Builder principal behind it, in which case the
+    # policy was created with only the free-text delegated_by, exactly as
+    # it always has been.
+    authority_id: str | None = None
 
 
 class ValidationErrorSchema(BaseModel):

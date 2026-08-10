@@ -127,7 +127,7 @@ Ordering matters here: items are sequenced so that early items are valuable on t
 
 **Reason:** Same reasoning as item 6, one layer up the pipeline: `Authority.conditions` and a Mandate-side equivalent already exist as the flexible-data escape hatch.
 
-**Risk:** High, same category as item 6, plus this one also touches the document-extraction providers (`CandidateAuthority`'s shape) and the human-review UI (`LiveDocuments.tsx`'s edit form for extracted authorities), so the blast radius is wider.
+**Risk:** High, same category as item 6, plus this one also touches the document-extraction providers (`CandidateAuthority`'s shape). (Update: `LiveDocuments.tsx`, this item's original other blast-radius concern, was later fully retired -- `SPECIFICATION/17_LEGACY_COMPONENTS.md` -- so it no longer adds to the risk here.)
 
 **Breaking change?** Same constraint as item 6: additive only, no removal of existing behavior without a deliberate, separate decision.
 
