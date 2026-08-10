@@ -1,0 +1,24 @@
+# Terraform local state, provider plugin cache, and anything that could
+# ever contain a real secret value -- none of these should ever reach
+# git, regardless of how careful this project's own .tfvars files are.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Defensive: any tfvars file NOT explicitly named under environments/
+# (which this project keeps secret-free by design) is treated as
+# potentially containing a real value and is never committed.
+*.auto.tfvars
+*.auto.tfvars.json
+secrets.tfvars
+local.tfvars
+
+# .terraform.lock.hcl is deliberately NOT ignored -- it pins provider
+# versions and must be committed, per Terraform's own recommendation.
