@@ -54,9 +54,9 @@ This is the layer that doesn't exist anywhere else in this specification, becaus
 | Dependency Intelligence | None named, but the actual dependency graph (§18.3) is already acyclic and single-directional by discipline | **Structurally present, not declared** — see §23.1's correction |
 | Integrity Intelligence | None | **Missing**, and its absence is not abstract: §16.2 of this specification is itself a manually-performed instance of exactly the drift-detection this discipline should own going forward |
 
-### 23.4.1 Open question: is resolved Context persisted?
+### 23.4.1 Resolved: Context is already persisted
 
-`resolve_runtime_authority_context()` builds an ephemeral, request-scoped dict merged into `context.authority.*` before the OPA query. Whether that resolved context is captured into the `Evidence` payload (making a past decision's "which occurrence of reality" reconstructable on replay) or discarded after the request completes is not yet confirmed and must be checked in Phase 1 before any provenance work proceeds, since if it isn't persisted, replay cannot currently answer "what did the system believe the department/risk-level/delegation state was at decision time," only "what value fed OPA at decision time" via the Evidence payload's existing captured fields.
+Verified directly against `services/intent_service.py`: `authority_context` (the exact dict `resolve_runtime_authority_context()` builds) is passed straight into `append_evidence` → `_build_evidence_payload`, which stores it as `payload["authority_context"]` plus a surfaced `payload["delegation_chain"]` (lines 125–134, 406–412). This is already additive, already non-recomputed, and already exactly what Context Intelligence's persistence requirement asks for. **No Phase 1 work needed here** — this closes cleanly rather than opening a task.
 
 ### 23.4.2 Open question: full six-role provenance
 
