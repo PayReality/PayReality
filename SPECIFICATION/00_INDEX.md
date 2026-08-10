@@ -32,6 +32,7 @@ This is not a README and not a pitch deck. It is an internal architecture handbo
 | 20 | [20_ARCHITECTURAL_ASSESSMENT.md](20_ARCHITECTURAL_ASSESSMENT.md) | Candid critique: what's good, what's fragile |
 | 21 | [21_FOUNDER_LEARNING_GUIDE.md](21_FOUNDER_LEARNING_GUIDE.md) | Reading order + concepts for a non-engineer founder |
 | 22 | [22_BUILD_FROM_SCRATCH.md](22_BUILD_FROM_SCRATCH.md) | If you had to rebuild this platform in 90 days |
+| 23 | [23_RUNTIME_GOVERNANCE_MIGRATION_BASELINE.md](23_RUNTIME_GOVERNANCE_MIGRATION_BASELINE.md) | Frozen baseline (commit `eb54f3e`) for the Runtime Governance Architecture migration; maps every subsystem above to its owning discipline |
 | — | [GLOSSARY.md](GLOSSARY.md) | Every term of art, defined once |
 
 ## Relationship to existing documents
