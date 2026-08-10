@@ -12,8 +12,8 @@ from app.domain.decision import engine as decision_engine
 from app.domain.decision.scope_vocabulary import is_recognized_scope
 from app.domain.evidence.signing import payload_hash, sign_payload
 from app.opa_client import HttpOpaClient
-from app.services import runtime_policy_service
-from app.services.authority_context_service import classify_risk, resolve_runtime_authority_context
+from app.services import runtime_policy_service, runtime_truth_service
+from app.services.authority_context_service import classify_risk
 
 
 class AgentRevokedError(Exception):
@@ -407,33 +407,28 @@ def submit_intent(
         db.refresh(decision)
         return intent, decision, evidence
 
-    # RuntimePolicy.scope.principal is authored as the Principal's free-form
-    # *name* (AUTHORING_ARCHITECTURE.md: "a reviewer references it by name
-    # directly ... which is already a free-form string"), never a foreign
-    # key -- but Agent.acting_for_principal_id is a UUID FK into
-    # `principals`. The compiled Rego's scope match compares
-    # input.agent.acting_for_principal_id against that name string, so the
-    # raw FK must be resolved to the Principal's name before it ever
-    # reaches OPA; passing the UUID straight through (as this used to)
-    # means the scope check can never match any real Agent, for any
-    # RuntimePolicy, ever -- every real Intent silently falls through to
-    # the "no_policy_covers_scope" fallback regardless of amount.
-    principal = db.get(Principal, agent.acting_for_principal_id)
-    principal_name = principal.name if principal else str(agent.acting_for_principal_id)
-
-    # Runtime Authority Context (PHASE_2_RUNTIME_CONTEXT.md): an ephemeral,
-    # request-scoped enrichment, never stored, merged under "authority" so
-    # it can never collide with whatever a caller already put in
-    # Intent.context themselves. A policy's Condition can reference e.g.
-    # context.authority.department the moment it's authored to -- zero
-    # change to rego_generator.py, compile_bundle(), or OPA, since
-    # dot-path access into context already works for any field.
-    authority_context = resolve_runtime_authority_context(db, principal, amount)
+    # Runtime Governance Architecture, Phase 3
+    # (30_PHASE_3_RUNTIME_TRUTH_SPEC.md): Runtime Truth's resolution
+    # boundary, formalized as a single named call. RuntimePolicy.scope.
+    # principal is authored as the Principal's free-form *name*
+    # (AUTHORING_ARCHITECTURE.md), never a foreign key -- but
+    # Agent.acting_for_principal_id is a UUID FK into `principals`, so the
+    # raw FK must be resolved to a name before it can ever reach a
+    # compiled policy's scope match. Runtime Authority Context
+    # (PHASE_2_RUNTIME_CONTEXT.md) is resolved in the same step, from the
+    # same Principal, so a policy's Condition can reference e.g.
+    # context.authority.department. Resolution ends here; nothing past
+    # this point resolves anything further.
+    resolved = runtime_truth_service.resolve(db, agent, amount)
 
     engine_decision = decision_engine.evaluate(
         intent={"action": action, "amount": amount, "currency": currency},
-        context={**context, "timestamp": to_utc_iso(requested_at), "authority": authority_context},
-        acting_for_principal_id=principal_name,
+        context={
+            **context,
+            "timestamp": to_utc_iso(requested_at),
+            "authority": resolved.authority_context,
+        },
+        acting_for_principal_id=resolved.principal_name,
         policy_store=_DbPolicyStore(db),
         opa_client=_EngineOpaClient(HttpOpaClient()),
     )
@@ -466,11 +461,12 @@ def submit_intent(
         decision.outcome,
         status=_evidence_status_for_outcome(decision.outcome),
         # Authority-as-a-continuous-object, Stage C: the exact Principal
-        # and authority_context already resolved above for the OPA query
-        # itself, carried into Evidence instead of being discarded once
-        # the decision is made. Nothing here is recomputed.
-        principal_id=principal.id if principal else None,
-        authority_context=authority_context,
+        # and authority_context already resolved above (now via
+        # runtime_truth_service.resolve) for the OPA query itself,
+        # carried into Evidence instead of being discarded once the
+        # decision is made. Nothing here is recomputed.
+        principal_id=resolved.principal.id if resolved.principal else None,
+        authority_context=resolved.authority_context,
         mandate_ids=mandate_ids,
         # Runtime Governance Architecture, Phase 1: the exact values
         # decision_engine.evaluate() already resolved and pinned onto its

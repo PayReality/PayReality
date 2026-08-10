@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+from app.domain.decision.scope_vocabulary import KNOWN_SCOPES
 from app.domain.runtime_policy.conditions import Operator
 from app.domain.runtime_policy.runtime_policy import RuntimePolicy
 from app.domain.runtime_policy.validators import validate as validate_runtime_policy
@@ -44,13 +45,19 @@ class Vocabulary(Protocol):
 
 @dataclass(frozen=True)
 class FinancialVocabulary:
-    """Today's actual KNOWN_SCOPES (scope_vocabulary.py), reused here
-    rather than re-invented, so this default reflects the one real
-    adapter that exists rather than a guess at what it should contain."""
+    """Today's actual KNOWN_SCOPES (scope_vocabulary.py).
 
-    known_actions: frozenset[str] = frozenset(
-        {"vendor_payment", "purchase_order_create", "wire_transfer"}
-    )
+    Runtime Governance Architecture, Phase 3
+    (28_PHASE_3_CANONICAL_FACT_INTELLIGENCE_SPEC.md): this default used to
+    hand-copy KNOWN_SCOPES' three literal strings instead of importing
+    them -- two independently-written definitions of the same fact
+    ("action"), kept in sync only by convention, exactly the identity
+    problem Canonical Fact Intelligence exists to catch. Now imports the
+    one real definition instead of duplicating it. Zero behavior change:
+    the three strings are identical; this only guarantees they can never
+    silently drift apart."""
+
+    known_actions: frozenset[str] = KNOWN_SCOPES
 
     def is_valid_action(self, action: str) -> bool:
         return action in self.known_actions

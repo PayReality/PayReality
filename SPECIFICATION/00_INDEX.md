@@ -37,6 +37,13 @@ This is not a README and not a pitch deck. It is an internal architecture handbo
 | 25 | [25_PHASE_1_CONFORMANCE_REPORT.md](25_PHASE_1_CONFORMANCE_REPORT.md) | Phase 1 Architecture Conformance Report — gate passed |
 | 26 | [26_PHASE_2_DEPENDENCY_DECLARATION.md](26_PHASE_2_DEPENDENCY_DECLARATION.md) | Phase 2: declared ownership, allowed/forbidden dependency edges, automated conformance checks |
 | 27 | [27_PHASE_2_CONFORMANCE_REPORT.md](27_PHASE_2_CONFORMANCE_REPORT.md) | Phase 2 Architecture Conformance Report — gate passed |
+| 28 | [28_PHASE_3_CANONICAL_FACT_INTELLIGENCE_SPEC.md](28_PHASE_3_CANONICAL_FACT_INTELLIGENCE_SPEC.md) | Phase 3: catalog of every fact this platform resolves, with owner/version/authority basis |
+| 29 | [29_PHASE_3_RESOLVER_INTELLIGENCE_SPEC.md](29_PHASE_3_RESOLVER_INTELLIGENCE_SPEC.md) | Phase 3: resolution source/method/authority/freshness/confidence per fact |
+| 30 | [30_PHASE_3_RUNTIME_TRUTH_SPEC.md](30_PHASE_3_RUNTIME_TRUTH_SPEC.md) | Phase 3: the resolution/evaluation boundary, formalized as `runtime_truth_service.py` |
+| 31 | [31_PHASE_3_ARCHITECTURE_EXTRACTION_REPORT.md](31_PHASE_3_ARCHITECTURE_EXTRACTION_REPORT.md) | Phase 3: already-existed vs. formalized vs. renamed vs. invented, per concept |
+| 32 | [32_PHASE_3_GAP_ANALYSIS.md](32_PHASE_3_GAP_ANALYSIS.md) | Phase 3: what doesn't exist, what should stay absent, what should become an extension point |
+| 33 | [33_PHASE_3_MIGRATION_REPORT.md](33_PHASE_3_MIGRATION_REPORT.md) | Phase 3: every code change, with before/after and behavioral-impact verification |
+| 34 | [34_PHASE_3_CONFORMANCE_REPORT.md](34_PHASE_3_CONFORMANCE_REPORT.md) | Phase 3 Architecture Conformance Report — gate passed |
 | — | [GLOSSARY.md](GLOSSARY.md) | Every term of art, defined once |
 
 ## Relationship to existing documents
