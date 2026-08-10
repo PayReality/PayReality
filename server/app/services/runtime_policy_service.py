@@ -72,6 +72,21 @@ class UnexpectedActiveWriterError(Exception):
 _EXPECTED_BUNDLE_URI_PREFIX = "runtime_policy_studio:"
 
 
+def _is_unexpected_active_writer(prior_active) -> bool:
+    """Runtime Governance Architecture, Phase 2
+    (26_PHASE_2_DEPENDENCY_DECLARATION.md section 26.4, item 3): the exact
+    condition UnexpectedActiveWriterError guards on, pulled out to a pure,
+    directly-testable predicate. Identical behavior to the inline check
+    this replaces inside deploy_policy -- extracted only so the single-
+    writer guarantee can be unit tested without a database, not to change
+    what it does. Accepts anything with a `.bundle_uri` attribute (a real
+    Policy row, or a minimal test fake) rather than the ORM type itself,
+    so no database is required to exercise this logic."""
+    return prior_active is not None and not prior_active.bundle_uri.startswith(
+        _EXPECTED_BUNDLE_URI_PREFIX
+    )
+
+
 def _latest_version_row(db: Session, policy_key: uuid.UUID) -> RuntimePolicyRecord | None:
     return db.scalar(
         select(RuntimePolicyRecord)
@@ -472,7 +487,7 @@ def deploy_policy(db: Session, policy_key: uuid.UUID, opa_url: str = "http://loc
         )
 
     prior_active = db.scalar(select(Policy).where(Policy.status == "active"))
-    if prior_active is not None and not prior_active.bundle_uri.startswith(_EXPECTED_BUNDLE_URI_PREFIX):
+    if _is_unexpected_active_writer(prior_active):
         raise UnexpectedActiveWriterError(
             f"the currently-active policy (id={prior_active.id}, bundle_uri={prior_active.bundle_uri!r}) "
             "was not written by runtime_policy_service.deploy_policy -- refusing to silently overwrite it"

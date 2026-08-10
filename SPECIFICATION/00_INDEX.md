@@ -35,6 +35,8 @@ This is not a README and not a pitch deck. It is an internal architecture handbo
 | 23 | [23_RUNTIME_GOVERNANCE_MIGRATION_BASELINE.md](23_RUNTIME_GOVERNANCE_MIGRATION_BASELINE.md) | Frozen baseline (commit `eb54f3e`) for the Runtime Governance Architecture migration; maps every subsystem above to its owning discipline |
 | 24 | [24_PHASE_1_RUNTIME_CORE_PLAN.md](24_PHASE_1_RUNTIME_CORE_PLAN.md) | Phase 1 plan, risk assessment, conformance checklist, and roadmap |
 | 25 | [25_PHASE_1_CONFORMANCE_REPORT.md](25_PHASE_1_CONFORMANCE_REPORT.md) | Phase 1 Architecture Conformance Report — gate passed |
+| 26 | [26_PHASE_2_DEPENDENCY_DECLARATION.md](26_PHASE_2_DEPENDENCY_DECLARATION.md) | Phase 2: declared ownership, allowed/forbidden dependency edges, automated conformance checks |
+| 27 | [27_PHASE_2_CONFORMANCE_REPORT.md](27_PHASE_2_CONFORMANCE_REPORT.md) | Phase 2 Architecture Conformance Report — gate passed |
 | — | [GLOSSARY.md](GLOSSARY.md) | Every term of art, defined once |
 
 ## Relationship to existing documents
