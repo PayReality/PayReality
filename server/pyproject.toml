@@ -23,6 +23,10 @@ dependencies = [
     "openpyxl>=3.1",
     "python-multipart>=0.0.12",
     "bcrypt>=4.2",
+    # Opt-in only -- see app/observability.py's docstring. Inert (never
+    # imported past the `if not settings.applicationinsights_connection_string`
+    # guard) on Render, which never sets that variable.
+    "azure-monitor-opentelemetry>=1.6",
 ]
 
 [project.optional-dependencies]

@@ -24,6 +24,7 @@ from app.routers import (
     users as users_router,
 )
 from app.security import observability_middleware
+from app import observability as azure_observability
 
 configure_logging(level="INFO" if settings.environment == "production" else "DEBUG")
 logger = logging.getLogger("payreality.startup")
@@ -146,6 +147,8 @@ def create_app() -> FastAPI:
         ),
         lifespan=lifespan,
     )
+
+    azure_observability.configure(app)
 
     app.middleware("http")(observability_middleware)
 

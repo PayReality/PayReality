@@ -23,6 +23,12 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = ""
 
+    # Empty means "no Application Insights" -- the app runs exactly as it
+    # always has (Render never sets this). When present, app/observability.py
+    # activates OpenTelemetry auto-instrumentation; see that module's own
+    # docstring for why this is opt-in rather than always-on.
+    applicationinsights_connection_string: str = ""
+
     intent_signature_window_seconds: int = 300
 
     cors_origin: str = "http://localhost:5173"
