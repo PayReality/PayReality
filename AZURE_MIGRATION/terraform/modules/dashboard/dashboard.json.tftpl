@@ -1,0 +1,218 @@
+{
+  "lenses": {
+    "0": {
+      "order": 0,
+      "parts": {
+        "0": {
+          "position": { "x": 0, "y": 0, "rowSpan": 2, "colSpan": 8 },
+          "metadata": {
+            "inputs": [],
+            "type": "Extension/HubsExtension/PartType/MarkdownPart",
+            "settings": {
+              "content": {
+                "settings": {
+                  "content": "# PayReality -- ${environment}\nContainer App, PostgreSQL, and Key Vault at a glance. Built Milestone 5, closing the \"no monitoring dashboard\" gap. Backing data: Log Analytics (`${environment}` workspace) and each resource's own platform metrics.",
+                  "title": "PayReality ${environment}",
+                  "subtitle": "Milestone 5 monitoring dashboard"
+                }
+              }
+            }
+          }
+        },
+        "1": {
+          "position": { "x": 0, "y": 2, "rowSpan": 4, "colSpan": 6 },
+          "metadata": {
+            "inputs": [
+              { "name": "options", "isOptional": true },
+              { "name": "sharedTimeRange", "isOptional": true }
+            ],
+            "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+            "settings": {
+              "content": {
+                "options": {
+                  "chart": {
+                    "metrics": [
+                      {
+                        "resourceMetadata": { "id": "${container_app_id}" },
+                        "name": "CpuPercentage",
+                        "aggregationType": 4,
+                        "namespace": "microsoft.app/containerapps",
+                        "metricVisualization": { "displayName": "CPU %25" }
+                      },
+                      {
+                        "resourceMetadata": { "id": "${container_app_id}" },
+                        "name": "MemoryPercentage",
+                        "aggregationType": 4,
+                        "namespace": "microsoft.app/containerapps",
+                        "metricVisualization": { "displayName": "Memory %25" }
+                      }
+                    ],
+                    "title": "Container App -- ${container_app_name}: CPU / Memory",
+                    "titleKind": 1,
+                    "visualization": { "chartType": 2 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "2": {
+          "position": { "x": 6, "y": 2, "rowSpan": 4, "colSpan": 6 },
+          "metadata": {
+            "inputs": [
+              { "name": "options", "isOptional": true },
+              { "name": "sharedTimeRange", "isOptional": true }
+            ],
+            "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+            "settings": {
+              "content": {
+                "options": {
+                  "chart": {
+                    "metrics": [
+                      {
+                        "resourceMetadata": { "id": "${container_app_id}" },
+                        "name": "Requests",
+                        "aggregationType": 1,
+                        "namespace": "microsoft.app/containerapps",
+                        "metricVisualization": { "displayName": "Requests" }
+                      },
+                      {
+                        "resourceMetadata": { "id": "${container_app_id}" },
+                        "name": "RestartCount",
+                        "aggregationType": 1,
+                        "namespace": "microsoft.app/containerapps",
+                        "metricVisualization": { "displayName": "Restarts" }
+                      }
+                    ],
+                    "title": "Container App -- ${container_app_name}: Requests / Restarts",
+                    "titleKind": 1,
+                    "visualization": { "chartType": 2 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "3": {
+          "position": { "x": 0, "y": 6, "rowSpan": 4, "colSpan": 6 },
+          "metadata": {
+            "inputs": [
+              { "name": "options", "isOptional": true },
+              { "name": "sharedTimeRange", "isOptional": true }
+            ],
+            "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+            "settings": {
+              "content": {
+                "options": {
+                  "chart": {
+                    "metrics": [
+                      {
+                        "resourceMetadata": { "id": "${postgres_id}" },
+                        "name": "cpu_percent",
+                        "aggregationType": 4,
+                        "namespace": "microsoft.dbforpostgresql/flexibleservers",
+                        "metricVisualization": { "displayName": "CPU %25" }
+                      },
+                      {
+                        "resourceMetadata": { "id": "${postgres_id}" },
+                        "name": "storage_percent",
+                        "aggregationType": 4,
+                        "namespace": "microsoft.dbforpostgresql/flexibleservers",
+                        "metricVisualization": { "displayName": "Storage %25" }
+                      }
+                    ],
+                    "title": "PostgreSQL -- ${postgres_name}: CPU / Storage",
+                    "titleKind": 1,
+                    "visualization": { "chartType": 2 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "4": {
+          "position": { "x": 6, "y": 6, "rowSpan": 4, "colSpan": 6 },
+          "metadata": {
+            "inputs": [
+              { "name": "options", "isOptional": true },
+              { "name": "sharedTimeRange", "isOptional": true }
+            ],
+            "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+            "settings": {
+              "content": {
+                "options": {
+                  "chart": {
+                    "metrics": [
+                      {
+                        "resourceMetadata": { "id": "${postgres_id}" },
+                        "name": "active_connections",
+                        "aggregationType": 4,
+                        "namespace": "microsoft.dbforpostgresql/flexibleservers",
+                        "metricVisualization": { "displayName": "Active connections" }
+                      },
+                      {
+                        "resourceMetadata": { "id": "${postgres_id}" },
+                        "name": "is_db_alive",
+                        "aggregationType": 4,
+                        "namespace": "microsoft.dbforpostgresql/flexibleservers",
+                        "metricVisualization": { "displayName": "Alive (1=up)" }
+                      }
+                    ],
+                    "title": "PostgreSQL -- ${postgres_name}: Connections / Availability",
+                    "titleKind": 1,
+                    "visualization": { "chartType": 2 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "5": {
+          "position": { "x": 0, "y": 10, "rowSpan": 4, "colSpan": 6 },
+          "metadata": {
+            "inputs": [
+              { "name": "options", "isOptional": true },
+              { "name": "sharedTimeRange", "isOptional": true }
+            ],
+            "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+            "settings": {
+              "content": {
+                "options": {
+                  "chart": {
+                    "metrics": [
+                      {
+                        "resourceMetadata": { "id": "${key_vault_id}" },
+                        "name": "Availability",
+                        "aggregationType": 4,
+                        "namespace": "microsoft.keyvault/vaults",
+                        "metricVisualization": { "displayName": "Availability %25" }
+                      },
+                      {
+                        "resourceMetadata": { "id": "${key_vault_id}" },
+                        "name": "ServiceApiHit",
+                        "aggregationType": 1,
+                        "namespace": "microsoft.keyvault/vaults",
+                        "metricVisualization": { "displayName": "API hits" }
+                      }
+                    ],
+                    "title": "Key Vault -- ${key_vault_name}: Availability / API hits",
+                    "titleKind": 1,
+                    "visualization": { "chartType": 2 }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "metadata": {
+    "model": {
+      "timeRange": {
+        "value": { "relative": { "duration": 24, "timeUnit": 1 } },
+        "type": "MsPortalFx.Composition.Configuration.ValueTypes.TimeRange"
+      }
+    }
+  }
+}

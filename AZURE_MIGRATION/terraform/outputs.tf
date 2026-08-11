@@ -31,3 +31,11 @@ output "cicd_identity_client_id" {
   description = "For the future GitHub Actions workflow's azure/login step (not used this milestone)."
   value       = module.managed_identity.cicd_client_id
 }
+
+output "monitoring_dashboard_url" {
+  value = module.dashboard.portal_url
+}
+
+output "alert_action_group_name" {
+  value = module.alerts.action_group_name
+}

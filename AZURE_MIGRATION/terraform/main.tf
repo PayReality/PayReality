@@ -124,6 +124,7 @@ module "container_apps" {
   log_analytics_workspace_id      = module.monitoring.log_analytics_workspace_id
   container_app_identity_id       = module.managed_identity.id
   container_registry_login_server = module.container_registry.login_server
+  app_insights_connection_string  = module.monitoring.app_insights_connection_string
 
   database_url_secret_id = module.postgres.connection_string_secret_id
   application_secret_ids = module.key_vault.application_secret_ids
@@ -132,6 +133,35 @@ module "container_apps" {
   cors_origin     = var.environment == "prod" ? "https://payreality.aisecurewatch.com" : "https://staging.payreality.aisecurewatch.com"
   owner_email     = var.owner
   min_replicas    = var.container_apps_min_replicas
+}
+
+module "alerts" {
+  source = "./modules/alerts"
+
+  resource_group_name = module.resource_group.name
+  environment         = var.environment
+  tags                = local.common_tags
+  notification_email  = var.alert_notification_email
+
+  container_app_id = module.container_apps.container_app_id
+  postgres_id      = module.postgres.server_id
+  key_vault_id     = module.key_vault.id
+}
+
+module "dashboard" {
+  source = "./modules/dashboard"
+
+  resource_group_name = module.resource_group.name
+  location            = var.location
+  environment         = var.environment
+  tags                = local.common_tags
+
+  container_app_id   = module.container_apps.container_app_id
+  container_app_name = module.container_apps.container_app_name
+  postgres_id        = module.postgres.server_id
+  postgres_name      = module.postgres.server_name
+  key_vault_id       = module.key_vault.id
+  key_vault_name     = module.key_vault.name
 }
 
 module "diagnostics" {

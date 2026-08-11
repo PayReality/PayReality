@@ -74,3 +74,8 @@ variable "container_image" {
   type        = string
   default     = "mcr.microsoft.com/k8se/quickstart:latest" # a public, harmless placeholder image so `terraform apply` succeeds before Milestone 6 exists -- swapped for the real image explicitly in Milestone 6, never assumed here.
 }
+
+variable "alert_notification_email" {
+  description = "Milestone 5: where every azurerm_monitor_action_group in modules/alerts sends notifications. No default -- closing MILESTONE_4_RISK_REGISTER.md's #1 finding (zero alerts, nothing pages anyone) means every environment must consciously set a real recipient, not inherit a placeholder."
+  type        = string
+}

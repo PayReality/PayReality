@@ -104,6 +104,10 @@ resource "azurerm_container_app" "api" {
         name  = "OWNER_EMAIL"
         value = var.owner_email
       }
+      env {
+        name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+        value = var.app_insights_connection_string
+      }
 
       # Secret-backed configuration.
       env {

@@ -19,7 +19,11 @@ github_repository = "PayReality/PayReality"
 # tagged with the exact source commit it was built from -- see
 # MILESTONE_3_DEPLOYMENT_REPORT.md for the full build record (registry,
 # tag, digest, auth method).
-container_image = "acrprstagingadzg.azurecr.io/payreality-api:staging-3f34349"
+container_image = "acrprstagingadzg.azurecr.io/payreality-api:staging-371906d"
+
+# Milestone 5: closes the "zero alert rules" gap from MILESTONE_4_RISK_REGISTER.md.
+# Same address used throughout this program's tagging (owner, above).
+alert_notification_email = "payreality.ceo@gmail.com"
 
 # Staging is disposable and re-seedable (Sprint 1's own Infrastructure
 # Blueprint) -- cheaper, non-geo-redundant choices throughout.

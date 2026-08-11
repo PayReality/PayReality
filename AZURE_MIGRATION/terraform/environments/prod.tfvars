@@ -18,3 +18,7 @@ github_repository = "PayReality/PayReality"
 postgres_geo_redundant_backup_enabled = true
 storage_replication_type              = "GRS"
 container_apps_min_replicas           = 1
+
+# Milestone 5: see staging.tfvars's identical comment -- every environment
+# must consciously set this, no default exists.
+alert_notification_email = "payreality.ceo@gmail.com"

@@ -21,6 +21,6 @@ output "uri" {
 }
 
 output "application_secret_ids" {
-  description = "Map of secret name -> Key Vault Secret resource ID, for the four Render-originated placeholder secrets. Consumed by modules/container-apps to build each secret's Key-Vault-backed environment variable reference."
-  value       = { for name, secret in azurerm_key_vault_secret.application_secrets : name => secret.id }
+  description = "Map of secret name -> Key Vault Secret VERSIONLESS resource ID, for the four Render-originated application secrets. Consumed by modules/container-apps to build each secret's Key-Vault-backed environment variable reference. Milestone 5 finding: `.id` (versioned) pins the Container App to the exact secret version that existed at the last `terraform apply` -- rotating a value with `az keyvault secret set` (the documented, correct mechanism -- see AZURE_RUNBOOK.md) creates a new version the app never picks up until Terraform re-applies, defeating the entire point of rotating out-of-band. `.versionless_id` always resolves to the current version, which is what the Container App's own secret rows actually need."
+  value       = { for name, secret in azurerm_key_vault_secret.application_secrets : name => secret.versionless_id }
 }

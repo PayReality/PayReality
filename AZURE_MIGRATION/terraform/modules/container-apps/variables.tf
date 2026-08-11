@@ -40,6 +40,11 @@ variable "container_registry_login_server" {
   type        = string
 }
 
+variable "app_insights_connection_string" {
+  description = "modules/monitoring's app_insights_connection_string output. Passed as a plain (non-Key-Vault) env var -- Azure documents this value as safe to embed directly, since it only grants write-telemetry, not read access to anything. Milestone 5: application code now activates OpenTelemetry auto-instrumentation only when this is set (app/observability.py), closing the gap where Application Insights was provisioned but received zero application-level telemetry."
+  type        = string
+}
+
 variable "database_url_secret_id" {
   description = "Key Vault Secret resource ID from modules/postgres."
   type        = string
