@@ -144,11 +144,12 @@ module "container_apps" {
   environment                     = var.environment
   tags                            = local.common_tags
 
-  container_apps_subnet_id        = module.networking.container_apps_subnet_id
-  log_analytics_workspace_id      = module.monitoring.log_analytics_workspace_id
-  container_app_identity_id       = module.managed_identity.id
-  container_registry_login_server = module.container_registry.login_server
-  app_insights_connection_string  = module.monitoring.app_insights_connection_string
+  container_apps_subnet_id         = module.networking.container_apps_subnet_id
+  log_analytics_workspace_id       = module.monitoring.log_analytics_workspace_id
+  container_app_identity_id        = module.managed_identity.id
+  container_app_identity_client_id = module.managed_identity.client_id
+  container_registry_login_server  = module.container_registry.login_server
+  app_insights_connection_string   = module.monitoring.app_insights_connection_string
 
   database_url_secret_id = module.postgres.connection_string_secret_id
   application_secret_ids = module.key_vault.application_secret_ids

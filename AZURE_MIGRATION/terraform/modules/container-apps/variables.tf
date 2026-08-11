@@ -35,6 +35,11 @@ variable "container_app_identity_id" {
   type        = string
 }
 
+variable "container_app_identity_client_id" {
+  description = "modules/managed-identity's client_id output. Set as AZURE_CLIENT_ID -- see that env block's own comment for why a user-assigned identity needs this and a system-assigned one wouldn't."
+  type        = string
+}
+
 variable "container_registry_login_server" {
   description = "modules/container-registry's login_server output (e.g. acrprstagingadzg.azurecr.io). Milestone 3 finding: holding the AcrPull role (granted in modules/container-registry) is not sufficient on its own -- Container Apps also needs an explicit `registry` block naming which identity to present when pulling from that specific server, or every revision using a private-registry image fails at provisioning with an UNAUTHORIZED pull error. Unnoticed in Milestone 2 because the placeholder image (mcr.microsoft.com/k8se/quickstart) is public and needs no registry auth at all."
   type        = string

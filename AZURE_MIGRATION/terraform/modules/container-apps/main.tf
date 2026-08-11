@@ -116,6 +116,23 @@ resource "azurerm_container_app" "api" {
       # modules/ai-foundry / modules/ai-search haven't been applied to
       # this environment) mean Authority Builder runs exactly as it did
       # before this program existed.
+      #
+      # AZURE_CLIENT_ID: confirmed live-necessary, not a preemptive
+      # addition -- the first staging deploy of this program's code
+      # (the first application code ever calling DefaultAzureCredential()
+      # itself; Key Vault secret resolution above is done by the
+      # platform, not app code) failed at boot with "Unable to load the
+      # proper Managed Identity" / invalid_scope. This Container App has
+      # only a user-assigned identity (identity_ids, above); unlike a
+      # system-assigned identity, DefaultAzureCredential can't resolve
+      # which identity to use without an explicit client ID. Setting
+      # AZURE_CLIENT_ID is azure-identity's own documented, standard,
+      # code-free fix for exactly this -- ManagedIdentityCredential reads
+      # it automatically, no application code change required.
+      env {
+        name  = "AZURE_CLIENT_ID"
+        value = var.container_app_identity_client_id
+      }
       env {
         name  = "AZURE_AI_FOUNDRY_ENDPOINT"
         value = var.azure_ai_foundry_endpoint

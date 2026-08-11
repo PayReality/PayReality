@@ -69,6 +69,17 @@ resource "azurerm_cognitive_deployment" "this" {
     type     = "GlobalStandard"
     capacity = var.sku_capacity
   }
+
+  # Same class of finding as container-apps/main.tf's
+  # infrastructure_resource_group_name / workload_profile_name
+  # (Milestone 3): Azure auto-assigns a default Responsible AI policy
+  # ("Microsoft.DefaultV2") on create that this config never asked to
+  # manage. Left alone, every later plan proposes nulling it back out --
+  # not destructive, but permanent diff noise for a value this module
+  # has no opinion on.
+  lifecycle {
+    ignore_changes = [rai_policy_name]
+  }
 }
 
 # The Container App's own identity is the only identity that can call
