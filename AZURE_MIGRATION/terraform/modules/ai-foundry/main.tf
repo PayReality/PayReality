@@ -85,8 +85,19 @@ resource "azurerm_cognitive_deployment" "this" {
 # The Container App's own identity is the only identity that can call
 # this deployment -- no key ever leaves Key Vault (there is no key to
 # leave; nothing sensitive is stored there for this resource at all).
+#
+# "Cognitive Services OpenAI User", not the generic "Cognitive Services
+# User" this was originally granted (Phase 1). Live testing (Phase 2)
+# confirmed the generic role does not include Azure OpenAI's own data
+# actions -- a direct authenticated call against this account with only
+# "Cognitive Services User" fails with a 401 "PermissionDenied: Principal
+# does not have access to API/Operation," confirmed via a raw HTTP probe
+# with a captured AAD token, not inferred from documentation alone.
+# "Cognitive Services OpenAI User" is the specific, minimal role Azure
+# OpenAI's own data plane (chat completions) actually requires; it is not
+# a broader grant than what's needed.
 resource "azurerm_role_assignment" "container_app_cognitive_services_user" {
   scope                = azurerm_cognitive_account.this.id
-  role_definition_name = "Cognitive Services User"
+  role_definition_name = "Cognitive Services OpenAI User"
   principal_id         = var.container_app_identity_principal_id
 }

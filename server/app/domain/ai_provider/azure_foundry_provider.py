@@ -10,6 +10,30 @@ against a Foundry model deployment -- the minimal SDK for a single
 inference need, deliberately not the heavier `azure-ai-projects`/Hub
 client, which is built for multi-project ML Studio scenarios this
 program's single-deployment use case doesn't have.
+
+Endpoint shape (Phase 2 finding, confirmed live): the deployed Cognitive
+Services account is `kind = "OpenAI"`, not the newer `"AIServices"` kind
+(forced by the pinned azurerm provider version -- see
+AZURE_MIGRATION/terraform/modules/ai-foundry/main.tf). A `kind = "OpenAI"`
+resource does not expose the unified Foundry "Models" inference route
+(`{endpoint}/chat/completions`) at all -- only the classic, deployment-
+scoped Azure OpenAI route does. Live testing (Phase 2) confirmed this
+directly: constructing the client with the bare resource endpoint 404s
+("Resource not found"); constructing it with the deployment path appended
+and a classic-compatible api_version reaches the same underlying model
+correctly. The `azure-ai-inference` SDK supports both shapes -- this is
+an endpoint-construction fix, not a different SDK or a new dependency.
+
+Token parameter (Phase 2 finding, confirmed live): gpt-5-mini is a
+reasoning model and rejects `max_tokens` outright ("Unsupported
+parameter... Use 'max_completion_tokens' instead"). It also spends part
+of whatever budget it's given on invisible `reasoning_tokens` before any
+visible content/tool-call output -- confirmed live: a 20-token budget
+produced zero visible output, all 20 spent on reasoning. `max_tokens` is
+therefore never sent (it stays out of the request body when None); the
+budget is passed as `max_completion_tokens` via `model_extras`, the SDK's
+documented pass-through mechanism for parameters outside its fixed
+signature.
 """
 
 import json
@@ -31,9 +55,10 @@ class AzureFoundryProviderError(Exception):
 class AzureAIFoundryProvider:
     def __init__(self, client: ChatCompletionsClient | None = None):
         self._client = client or ChatCompletionsClient(
-            endpoint=settings.azure_ai_foundry_endpoint,
+            endpoint=f"{settings.azure_ai_foundry_endpoint.rstrip('/')}/openai/deployments/{settings.azure_ai_foundry_deployment_name}",
             credential=DefaultAzureCredential(),
             credential_scopes=["https://cognitiveservices.azure.com/.default"],
+            api_version="2024-06-01",
         )
 
     def generate_structured(
@@ -62,7 +87,7 @@ class AzureAIFoundryProvider:
                 }
             ],
             tool_choice={"type": "function", "function": {"name": schema_name}},
-            max_tokens=max_tokens,
+            model_extras={"max_completion_tokens": max_tokens},
         )
 
         message = response.choices[0].message
