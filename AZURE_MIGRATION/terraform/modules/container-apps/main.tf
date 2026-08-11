@@ -109,6 +109,38 @@ resource "azurerm_container_app" "api" {
         value = var.app_insights_connection_string
       }
 
+      # Authority Intelligence Program, Phase 1: endpoints and names
+      # only, never credentials -- Managed Identity authenticates to all
+      # three, so none of this belongs in Key Vault (app/config.py's own
+      # comment makes the same point). Empty strings (the default when
+      # modules/ai-foundry / modules/ai-search haven't been applied to
+      # this environment) mean Authority Builder runs exactly as it did
+      # before this program existed.
+      env {
+        name  = "AZURE_AI_FOUNDRY_ENDPOINT"
+        value = var.azure_ai_foundry_endpoint
+      }
+      env {
+        name  = "AZURE_AI_FOUNDRY_DEPLOYMENT_NAME"
+        value = var.azure_ai_foundry_deployment_name
+      }
+      env {
+        name  = "AZURE_AI_SEARCH_ENDPOINT"
+        value = var.azure_ai_search_endpoint
+      }
+      env {
+        name  = "AZURE_AI_SEARCH_INDEX_NAME"
+        value = var.azure_ai_search_index_name
+      }
+      env {
+        name  = "AZURE_STORAGE_ACCOUNT_URL"
+        value = var.azure_storage_account_url
+      }
+      env {
+        name  = "AZURE_STORAGE_CONTAINER_NAME"
+        value = var.azure_storage_container_name
+      }
+
       # Secret-backed configuration.
       env {
         name        = "DATABASE_URL"

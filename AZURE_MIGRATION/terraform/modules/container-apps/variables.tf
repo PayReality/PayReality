@@ -45,6 +45,39 @@ variable "app_insights_connection_string" {
   type        = string
 }
 
+variable "azure_ai_foundry_endpoint" {
+  description = "modules/ai-foundry's endpoint output. Empty string (the default) means Authority Builder falls back to Anthropic, then the Fake provider -- see routers/ai_authority_builder.py's _provider()."
+  type        = string
+  default     = ""
+}
+
+variable "azure_ai_foundry_deployment_name" {
+  type    = string
+  default = ""
+}
+
+variable "azure_ai_search_endpoint" {
+  description = "modules/ai-search's endpoint output. Empty string (the default) means Authority Builder falls back to Postgres-backed document retrieval -- see app/services/authority_intelligence_service.py."
+  type        = string
+  default     = ""
+}
+
+variable "azure_ai_search_index_name" {
+  type    = string
+  default = "authority-intelligence-documents"
+}
+
+variable "azure_storage_account_url" {
+  description = "Empty string (the default) means Authority Builder document uploads are stored in Postgres only, exactly as before this program existed."
+  type        = string
+  default     = ""
+}
+
+variable "azure_storage_container_name" {
+  type    = string
+  default = "uploads"
+}
+
 variable "database_url_secret_id" {
   description = "Key Vault Secret resource ID from modules/postgres."
   type        = string

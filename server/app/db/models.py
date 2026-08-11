@@ -843,7 +843,13 @@ class AuthorityCorpus(Base):
 class AuthorityCorpusDocument(Base):
     """One uploaded file within a corpus. `content` stored in Postgres for
     the same reason every other document/upload table in this platform
-    already does (documents.content, policy_extraction_uploads.content)."""
+    already does (documents.content, policy_extraction_uploads.content).
+
+    `blob_path` (Authority Intelligence Program, Phase 1): set when this
+    document was also written to Blob Storage. Additive, not a
+    replacement -- `content` keeps being written on every upload
+    regardless, so nothing about this table's existing read path
+    changes for any environment that never configures Blob Storage."""
 
     __tablename__ = "authority_corpus_documents"
 
@@ -854,6 +860,7 @@ class AuthorityCorpusDocument(Base):
     filename: Mapped[str] = mapped_column(Text, nullable=False)
     format: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    blob_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     __table_args__ = (

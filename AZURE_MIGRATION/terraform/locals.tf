@@ -45,6 +45,18 @@ locals {
   storage_account_name    = "st${local.app_name_short}${var.environment}${random_string.suffix.result}"
   container_registry_name = "acr${local.app_name_short}${var.environment}${random_string.suffix.result}"
 
+  # Authority Intelligence Program, Phase 1. ai_foundry_account_name
+  # draws from its own dedicated suffix, not the shared one, for the
+  # same reason key_vault_name does: Cognitive Services accounts (the
+  # resource type backing Azure AI Foundry) support soft-delete, which
+  # can leave a name reserved for a retention period after deletion --
+  # exactly the trap Milestone 3 already hit and fixed for Key Vault.
+  # Search service names have no such trap (deletion is immediate, no
+  # soft-delete concept for the service resource), so ai_search_service_name
+  # safely shares the same suffix Storage/ACR already use.
+  ai_foundry_account_name = "aif-${local.app_name_short}-${var.environment}-${random_string.ai_foundry_suffix.result}"
+  ai_search_service_name  = "srch-${local.app_name_short}-${var.environment}-${random_string.suffix.result}"
+
   common_tags = {
     Environment = var.environment
     Application = "PayReality"
@@ -73,6 +85,15 @@ resource "random_string" "suffix" {
 # resource where a collision costs a 90-day naming lockout instead of a
 # harmless retry.
 resource "random_string" "key_vault_suffix" {
+  length  = 6
+  special = false
+  upper   = false
+  numeric = true
+}
+
+# See ai_foundry_account_name's comment above for why this is separate
+# from both random_string.suffix and random_string.key_vault_suffix.
+resource "random_string" "ai_foundry_suffix" {
   length  = 6
   special = false
   upper   = false

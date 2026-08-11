@@ -29,6 +29,18 @@ class Settings(BaseSettings):
     # docstring for why this is opt-in rather than always-on.
     applicationinsights_connection_string: str = ""
 
+    # Authority Intelligence (Phase 1): all empty means "run exactly as
+    # today" -- Authority Builder falls back to Anthropic (if configured)
+    # then the Fake provider, precisely as it already does. Endpoints and
+    # names only; Managed Identity authenticates to all three services,
+    # so none of this is a credential and none of it belongs in Key Vault.
+    azure_ai_foundry_endpoint: str = ""
+    azure_ai_foundry_deployment_name: str = "gpt-5-mini"
+    azure_ai_search_endpoint: str = ""
+    azure_ai_search_index_name: str = "authority-intelligence-documents"
+    azure_storage_account_url: str = ""
+    azure_storage_container_name: str = "uploads"
+
     intent_signature_window_seconds: int = 300
 
     cors_origin: str = "http://localhost:5173"

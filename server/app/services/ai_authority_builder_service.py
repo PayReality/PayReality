@@ -9,6 +9,7 @@ corpus-derived candidates in the same table those functions already
 operate on.
 """
 
+import logging
 import uuid
 
 from sqlalchemy import func, select
@@ -29,6 +30,7 @@ from app.db.models import (
 )
 from app.domain.ai_authority_builder.provider import AuthorityGraph, AuthorityGraphExtractionProvider
 from app.domain.ai_policy_builder.text_extraction import extract_text
+from app.services import authority_intelligence_service
 from app.services.ai_policy_builder_service import candidate_to_content
 
 
@@ -88,6 +90,30 @@ def add_document(db: Session, corpus: AuthorityCorpus, filename: str, format: st
     db.add(doc)
     db.commit()
     db.refresh(doc)
+
+    # Authority Intelligence Program, Phase 1: best-effort, additive.
+    # Postgres (above) remains the write that must succeed for this
+    # function to succeed at all; Blob Storage and Azure AI Search are
+    # populated afterward and never block or fail this call -- neither
+    # because they aren't configured for this environment yet, nor
+    # because this particular document's text couldn't be extracted
+    # (see authority_intelligence_service's own docstring for the same
+    # posture on its own two functions).
+    try:
+        blob_path = authority_intelligence_service.upload_document_to_blob(
+            corpus.id, doc.id, filename, raw
+        )
+        if blob_path:
+            doc.blob_path = blob_path
+            db.commit()
+            db.refresh(doc)
+        authority_intelligence_service.index_document(
+            corpus.id, doc.id, filename, format, extract_text(format, raw), blob_path
+        )
+    except Exception:
+        logging.getLogger("payreality.authority_intelligence").exception(
+            "authority_intelligence_ingestion_failed corpus_id=%s document_id=%s", corpus.id, doc.id
+        )
     return doc
 
 
@@ -113,7 +139,13 @@ def run_extraction(
     pipeline in this platform already follows. Zero findings in any
     category is a valid outcome, not an error."""
     try:
-        corpus_text = build_corpus_text(documents)
+        # Authority Intelligence Program, Phase 1: retrieve through Azure
+        # AI Search when it's configured and has this corpus indexed;
+        # otherwise fall back to the original, always-available Postgres
+        # read (build_corpus_text, unchanged and still directly tested).
+        corpus_text = authority_intelligence_service.retrieve_corpus_text(corpus.id)
+        if corpus_text is None:
+            corpus_text = build_corpus_text(documents)
         graph: AuthorityGraph = provider.extract(corpus_text)
     except Exception as e:
         corpus.status = "failed"

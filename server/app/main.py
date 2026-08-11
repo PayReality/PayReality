@@ -105,11 +105,27 @@ def _reconcile_opa_with_active_policies() -> None:
         logger.exception("opa_policy_reconciliation_failed_at_startup")
 
 
+def _ensure_authority_intelligence_search_index() -> None:
+    """Authority Intelligence Program, Phase 1: idempotent Azure AI
+    Search index creation, no-ops entirely if
+    AZURE_AI_SEARCH_ENDPOINT isn't configured for this environment. Same
+    failure posture as the other three startup hooks: never raises, logs
+    and lets the app boot -- Authority Builder's Postgres-backed fallback
+    keeps working regardless of whether this succeeds."""
+    try:
+        from app.services.authority_intelligence_service import ensure_search_index
+
+        ensure_search_index()
+    except Exception:
+        logger.exception("authority_intelligence_search_index_failed_at_startup")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _register_current_signing_key()
     _bootstrap_organisation_owner()
     _reconcile_opa_with_active_policies()
+    _ensure_authority_intelligence_search_index()
     yield
 
 

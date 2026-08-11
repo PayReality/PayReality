@@ -110,6 +110,30 @@ module "monitoring" {
   tags                = local.common_tags
 }
 
+module "ai_foundry" {
+  source = "./modules/ai-foundry"
+
+  account_name        = local.ai_foundry_account_name
+  resource_group_name = module.resource_group.name
+  location            = var.location
+  environment         = var.environment
+  tags                = local.common_tags
+
+  container_app_identity_principal_id = module.managed_identity.principal_id
+}
+
+module "ai_search" {
+  source = "./modules/ai-search"
+
+  search_service_name = local.ai_search_service_name
+  resource_group_name = module.resource_group.name
+  location            = var.location
+  environment         = var.environment
+  tags                = local.common_tags
+
+  container_app_identity_principal_id = module.managed_identity.principal_id
+}
+
 module "container_apps" {
   source = "./modules/container-apps"
 
@@ -133,6 +157,11 @@ module "container_apps" {
   cors_origin     = var.environment == "prod" ? "https://payreality.aisecurewatch.com" : "https://staging.payreality.aisecurewatch.com"
   owner_email     = var.owner
   min_replicas    = var.container_apps_min_replicas
+
+  azure_ai_foundry_endpoint        = module.ai_foundry.endpoint
+  azure_ai_foundry_deployment_name = module.ai_foundry.deployment_name
+  azure_ai_search_endpoint         = module.ai_search.endpoint
+  azure_storage_account_url        = module.storage.primary_blob_endpoint
 }
 
 module "alerts" {
@@ -175,6 +204,8 @@ module "diagnostics" {
     storage            = module.storage.blob_service_id
     container-apps-env = module.container_apps.environment_id
     container-registry = module.container_registry.id
+    ai-foundry         = module.ai_foundry.id
+    ai-search          = module.ai_search.id
   }
 
   # See modules/diagnostics/variables.tf's metric_categories comment:

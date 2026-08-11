@@ -27,6 +27,16 @@ dependencies = [
     # imported past the `if not settings.applicationinsights_connection_string`
     # guard) on Render, which never sets that variable.
     "azure-monitor-opentelemetry>=1.6",
+    # Authority Intelligence Program, Phase 1 -- see
+    # app/services/authority_intelligence_service.py's docstring. All
+    # three are opt-in the same way: imported only inside functions that
+    # already checked their own settings field first, so they're
+    # installed but never touched on Render or any environment that
+    # hasn't had modules/ai-foundry / modules/ai-search applied yet.
+    "azure-ai-inference>=1.0.0b9",
+    "azure-search-documents>=11.5",
+    "azure-storage-blob>=12.23",
+    "azure-identity>=1.19",
 ]
 
 [project.optional-dependencies]

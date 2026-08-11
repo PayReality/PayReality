@@ -18,6 +18,9 @@ from app.db.models import (
 from app.db.models import Organization
 from app.db.session import get_db
 from app.dependencies import get_current_organization, require_permission
+from app.domain.ai_authority_builder.azure_foundry_provider import (
+    AzureFoundryAuthorityGraphExtractionProvider,
+)
 from app.domain.ai_authority_builder.claude_provider import ClaudeAuthorityGraphExtractionProvider
 from app.domain.ai_authority_builder.fake_provider import FakeAuthorityGraphExtractionProvider
 from app.domain.ai_policy_builder.text_extraction import UnsupportedFormatError, detect_format
@@ -54,6 +57,13 @@ router = APIRouter(prefix="/v1/ai-authority-builder", tags=["ai-authority-builde
 
 
 def _provider():
+    # Authority Intelligence Program, Phase 1: Azure AI Foundry is
+    # preferred once configured, but ANTHROPIC_API_KEY alone keeps
+    # working exactly as before on any environment that hasn't had
+    # modules/ai-foundry applied yet -- this ordering is what makes the
+    # rollout backward-compatible rather than a breaking cutover.
+    if settings.azure_ai_foundry_endpoint:
+        return AzureFoundryAuthorityGraphExtractionProvider()
     if settings.anthropic_api_key:
         return ClaudeAuthorityGraphExtractionProvider()
     return FakeAuthorityGraphExtractionProvider()
@@ -120,10 +130,13 @@ def _question_to_response(q: AuthorityQuestion) -> QuestionResponse:
 
 @router.get("/status", response_model=ProviderStatusResponse)
 def get_status():
-    """Whether this deployment currently has a real Anthropic key
-    configured, so the frontend can be honest with users about whether
-    they're looking at real extraction or illustrative sample output."""
-    return ProviderStatusResponse(ai_enabled=bool(settings.anthropic_api_key))
+    """Whether this deployment currently has a real provider configured
+    (Azure AI Foundry or Anthropic), so the frontend can be honest with
+    users about whether they're looking at real extraction or
+    illustrative sample output."""
+    return ProviderStatusResponse(
+        ai_enabled=bool(settings.azure_ai_foundry_endpoint or settings.anthropic_api_key)
+    )
 
 
 @router.post(
