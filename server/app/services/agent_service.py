@@ -9,6 +9,14 @@ from app.config import settings
 from app.db.models import Agent, AgentAuditEvent, Certificate, Principal
 from app.domain.evidence.signing import sign_payload, verify_payload, Signature
 from app.services import signing_key_service
+from app.services.organization_structure_service import (
+    BusinessUnitNotFoundError,
+    DepartmentNotFoundError,
+    TeamNotFoundError,
+    business_unit_organization_id,
+    department_organization_id,
+    team_organization_id,
+)
 
 logger = logging.getLogger("payreality.agent_lifecycle")
 
@@ -63,8 +71,8 @@ class AuditEventNotFoundError(Exception):
 def create_principal(
     db: Session,
     name: str,
+    organization_id: uuid.UUID,
     role: str | None = None,
-    organization_id: uuid.UUID | None = None,
     business_unit_id: uuid.UUID | None = None,
     department_id: uuid.UUID | None = None,
     team_id: uuid.UUID | None = None,
@@ -74,6 +82,23 @@ def create_principal(
     # defaults Phase 1's schema already established. A caller passing
     # only `name`, as every existing caller does, gets identical
     # behaviour to before this change.
+    #
+    # Milestone 1 (Security & Authorization Hardening): organization_id
+    # is now required and must be the caller's OWN organization (the
+    # router resolves it via get_current_organization, never trusts a
+    # client-supplied value) -- previously a caller could name any
+    # organization_id in the request body and create a Principal under
+    # it. business_unit_id/department_id/team_id, if given, must each
+    # resolve to that same organization; a mismatch is treated as "not
+    # found" for whichever one didn't resolve, the same
+    # not-found-not-403 pattern used everywhere else in this milestone.
+    if business_unit_id is not None and business_unit_organization_id(db, business_unit_id) != organization_id:
+        raise BusinessUnitNotFoundError(str(business_unit_id))
+    if department_id is not None and department_organization_id(db, department_id) != organization_id:
+        raise DepartmentNotFoundError(str(department_id))
+    if team_id is not None and team_organization_id(db, team_id) != organization_id:
+        raise TeamNotFoundError(str(team_id))
+
     principal = Principal(
         name=name,
         role=role,
@@ -88,8 +113,8 @@ def create_principal(
     return principal
 
 
-def list_principals(db: Session) -> list[Principal]:
-    return list(db.scalars(select(Principal)))
+def list_principals(db: Session, organization_id: uuid.UUID) -> list[Principal]:
+    return list(db.scalars(select(Principal).where(Principal.organization_id == organization_id)))
 
 
 def _append_audit_event(

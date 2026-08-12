@@ -36,28 +36,31 @@ class StillReferencedError(Exception):
 # have no organization_id column of their own -- organisation is only
 # reachable by walking Team -> Department -> BusinessUnit ->
 # organization_id. These three helpers are the single place that walk,
-# reused by every function below rather than re-joined ad hoc, so a
-# caller in one organisation can never read, rename, or delete a row
-# that resolves to a different one.
+# reused by every function below (and by agent_service.create_principal,
+# which needs the same check for business_unit_id/department_id/
+# team_id) rather than re-joined ad hoc, so a caller in one organisation
+# can never read, rename, or delete a row that resolves to a different
+# one. Public (no leading underscore) specifically because they're
+# shared across service modules, not just within this one.
 
 
-def _business_unit_organization_id(db: Session, business_unit_id: uuid.UUID) -> uuid.UUID | None:
+def business_unit_organization_id(db: Session, business_unit_id: uuid.UUID) -> uuid.UUID | None:
     unit = db.get(BusinessUnit, business_unit_id)
     return unit.organization_id if unit is not None else None
 
 
-def _department_organization_id(db: Session, department_id: uuid.UUID) -> uuid.UUID | None:
+def department_organization_id(db: Session, department_id: uuid.UUID) -> uuid.UUID | None:
     department = db.get(Department, department_id)
     if department is None:
         return None
-    return _business_unit_organization_id(db, department.business_unit_id)
+    return business_unit_organization_id(db, department.business_unit_id)
 
 
-def _team_organization_id(db: Session, team_id: uuid.UUID) -> uuid.UUID | None:
+def team_organization_id(db: Session, team_id: uuid.UUID) -> uuid.UUID | None:
     team = db.get(Team, team_id)
     if team is None:
         return None
-    return _department_organization_id(db, team.department_id)
+    return department_organization_id(db, team.department_id)
 
 
 # --- Business Units ---------------------------------------------------
@@ -123,7 +126,7 @@ def list_departments(
 def create_department(
     db: Session, organization_id: uuid.UUID, business_unit_id: uuid.UUID, name: str
 ) -> Department:
-    if _business_unit_organization_id(db, business_unit_id) != organization_id:
+    if business_unit_organization_id(db, business_unit_id) != organization_id:
         raise BusinessUnitNotFoundError(str(business_unit_id))
     department = Department(business_unit_id=business_unit_id, name=name)
     db.add(department)
@@ -135,7 +138,7 @@ def create_department(
 def update_department(
     db: Session, department_id: uuid.UUID, organization_id: uuid.UUID, name: str
 ) -> Department:
-    if _department_organization_id(db, department_id) != organization_id:
+    if department_organization_id(db, department_id) != organization_id:
         raise DepartmentNotFoundError(str(department_id))
     department = db.get(Department, department_id)
     department.name = name
@@ -145,7 +148,7 @@ def update_department(
 
 
 def delete_department(db: Session, department_id: uuid.UUID, organization_id: uuid.UUID) -> None:
-    if _department_organization_id(db, department_id) != organization_id:
+    if department_organization_id(db, department_id) != organization_id:
         raise DepartmentNotFoundError(str(department_id))
     department = db.get(Department, department_id)
     db.delete(department)
@@ -174,7 +177,7 @@ def list_teams(
 
 
 def create_team(db: Session, organization_id: uuid.UUID, department_id: uuid.UUID, name: str) -> Team:
-    if _department_organization_id(db, department_id) != organization_id:
+    if department_organization_id(db, department_id) != organization_id:
         raise DepartmentNotFoundError(str(department_id))
     team = Team(department_id=department_id, name=name)
     db.add(team)
@@ -184,7 +187,7 @@ def create_team(db: Session, organization_id: uuid.UUID, department_id: uuid.UUI
 
 
 def update_team(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID, name: str) -> Team:
-    if _team_organization_id(db, team_id) != organization_id:
+    if team_organization_id(db, team_id) != organization_id:
         raise TeamNotFoundError(str(team_id))
     team = db.get(Team, team_id)
     team.name = name
@@ -194,7 +197,7 @@ def update_team(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID, nam
 
 
 def delete_team(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID) -> None:
-    if _team_organization_id(db, team_id) != organization_id:
+    if team_organization_id(db, team_id) != organization_id:
         raise TeamNotFoundError(str(team_id))
     team = db.get(Team, team_id)
     db.delete(team)
