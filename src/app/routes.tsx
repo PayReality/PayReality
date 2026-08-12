@@ -105,6 +105,11 @@ export const router = createBrowserRouter([
           // own entry-point links).
           { path: "governance", lazy: () => import("./policy-studio/PolicyListPage").then((m) => ({ Component: m.PolicyListPage })) },
           { path: "governance/approvals", lazy: () => import("./policy-studio/ReviewQueuePage").then((m) => ({ Component: m.ReviewQueuePage })) },
+          // Runtime Policy Lifecycle (Phase 5, RUNTIME_POLICY_LIFECYCLE.md
+          // sections 9-10): Dashboard and Search folded into one page, the
+          // same "related views, one destination" pattern as Versions+Diff
+          // and Compile+DryRun+Deploy below.
+          { path: "governance/dashboard", lazy: () => import("./policy-studio/RuntimePolicyDashboardPage").then((m) => ({ Component: m.RuntimePolicyDashboardPage })) },
           { path: "governance/new", lazy: () => import("./policy-studio/PolicyWorkspacePage").then((m) => ({ Component: m.PolicyWorkspacePage })) },
           { path: "governance/upload", lazy: () => import("./ai-policy-builder/UploadPage").then((m) => ({ Component: m.AIPolicyBuilderUploadPage })) },
           { path: "governance/upload/:uploadId", lazy: () => import("./ai-policy-builder/ReviewPage").then((m) => ({ Component: m.AIPolicyBuilderReviewPage })) },

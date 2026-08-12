@@ -714,10 +714,34 @@ class RuntimePolicyRecord(Base):
     bundle_id: Mapped[str | None] = mapped_column(Text)
     bundle_hash: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Runtime Policy Lifecycle (Phase 5, RUNTIME_POLICY_LIFECYCLE.md): all
+    # nullable and additive -- every row created before this phase, and
+    # every existing read of this table, is completely unaffected.
+    # activated_*/effective_* are set only by
+    # services/runtime_policy_lifecycle_service.py's activate_policy(),
+    # layered on top of the existing, unmodified deploy_policy(); they
+    # are never read by deploy_policy, reconcile_opa_with_active_policies,
+    # or anything in the Runtime Authority Engine.
+    activated_by: Mapped[str | None] = mapped_column(Text)
+    activated_at: Mapped[datetime | None]
+    activation_reason: Mapped[str | None] = mapped_column(Text)
+    effective_from: Mapped[datetime | None]
+    effective_until: Mapped[datetime | None]
+    # Set only by deprecate_policy() -- a label on an ACTIVE row, never a
+    # status change: a deprecated-but-not-yet-retired policy must keep
+    # being enforced (status stays "active") until its scheduled
+    # retirement actually runs, or "scheduled for retirement" would mean
+    # nothing.
+    deprecated_at: Mapped[datetime | None]
+    deprecation_reason: Mapped[str | None] = mapped_column(Text)
+    # Set only by rollback_policy() on the NEW version it creates, so the
+    # timeline can say "this version is a rollback to v{N}" without
+    # guessing from content diffs.
+    rollback_of_version: Mapped[int | None]
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('draft','pending_review','approved','rejected','compiled','active','retired')",
+            "status IN ('draft','pending_review','approved','rejected','compiled','active','retired','archived')",
             name="ck_runtime_policy_records_status",
         ),
         UniqueConstraint(
@@ -1212,4 +1236,88 @@ class SimulationScenario(Base):
             name="ck_simulation_scenarios_expected_outcome",
         ),
         Index("idx_simulation_scenarios_policy_key", "policy_key"),
+    )
+
+
+class RuntimePolicyLifecycleEvent(Base):
+    """Runtime Policy Lifecycle (Phase 5, RUNTIME_POLICY_LIFECYCLE.md):
+    one immutable row per lifecycle transition on a RuntimePolicyRecord
+    -- created, edited, submitted, approved, rejected, compiled,
+    activated, activation_blocked (a safety check refused it),
+    scheduled, rolled_back, deprecated, archived. Never updated or
+    deleted, the same discipline `evidence`, `agent_audit_events`, and
+    Phase 3's `authority_graph_approvals` already hold themselves to.
+
+    This is simultaneously the Policy Timeline (read back in order,
+    grouped by policy_key) and the Enterprise Audit trail (every
+    transition, hashed) -- one mechanism serving both, not two separate
+    tables recording the same facts twice.
+
+    `event_hash` reuses domain/evidence/signing.py's canonicalize()/
+    payload_hash() pattern unchanged, the same precedent
+    `authority_graph_approvals.graph_hash` already established, rather
+    than inventing a second hashing scheme.
+
+    Written as a best-effort, defensive side effect from the existing,
+    unmodified runtime_policy_service.py transition functions (see that
+    module's own `_record_lifecycle_event` calls) -- a failure to write
+    this row never blocks or fails the real transition it's recording."""
+
+    __tablename__ = "runtime_policy_lifecycle_events"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    policy_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    version: Mapped[int] = mapped_column(nullable=False)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    event_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "event_type IN ('created','edited','submitted','approved','rejected',"
+            "'compiled','activated','activation_blocked','scheduled','schedule_cancelled',"
+            "'rolled_back','deprecated','archived','retired')",
+            name="ck_runtime_policy_lifecycle_events_event_type",
+        ),
+        Index("idx_runtime_policy_lifecycle_events_policy_key", "policy_key"),
+    )
+
+
+class PolicyActivationSchedule(Base):
+    """Runtime Policy Lifecycle (Phase 5): a future-dated activation or
+    retirement, recorded now, executed later. Recording the schedule and
+    executing it are deliberately two different actions
+    (services/runtime_policy_lifecycle_service.py's schedule_activation/
+    schedule_retirement vs. process_due_schedules) -- there is no
+    background task runner anywhere in this platform, so this table is
+    the durable record a periodic or manually-triggered call to
+    process_due_schedules reads; nothing executes a schedule
+    automatically on its own. See RUNTIME_POLICY_LIFECYCLE.md's "Known
+    limitations" for this honestly stated."""
+
+    __tablename__ = "policy_activation_schedules"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    policy_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    version: Mapped[int] = mapped_column(nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    effective_at: Mapped[datetime] = mapped_column(nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    executed_at: Mapped[datetime | None]
+    execution_error: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("action IN ('activate','retire')", name="ck_policy_activation_schedules_action"),
+        CheckConstraint(
+            "status IN ('pending','executed','failed','cancelled')",
+            name="ck_policy_activation_schedules_status",
+        ),
+        Index("idx_policy_activation_schedules_policy_key", "policy_key"),
+        Index("idx_policy_activation_schedules_status", "status"),
     )

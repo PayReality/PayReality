@@ -10,7 +10,16 @@ export type PolicyStatus =
   | "rejected"
   | "compiled"
   | "active"
-  | "retired";
+  | "retired"
+  | "archived";
+
+// Runtime Policy Lifecycle (Phase 5): "superseded" is never a stored
+// status (see server/app/domain/runtime_policy/runtime_policy.py's
+// PolicyStatus.ARCHIVED docstring) -- it's a read-side label the backend
+// computes for a "retired" row that has a newer active sibling. Mirrored
+// here as its own type so the frontend can render it distinctly from a
+// row that's simply "retired" with nothing replacing it.
+export type EffectiveStatus = PolicyStatus | "superseded";
 
 export type Effect = "allow" | "deny" | "require_human_review";
 
@@ -145,3 +154,107 @@ export interface PolicyDiff {
 }
 
 export const KNOWN_OPERATORS = ["<=", ">=", "==", "!=", "<", ">", "in", "contains", "exists"] as const;
+
+// --- Runtime Policy Lifecycle (Phase 5) -------------------------------------
+// Mirrors server/app/schemas/runtime_policy_lifecycle.py exactly, the
+// same hand-synced convention as everything above.
+
+export interface SafetyViolation {
+  check: string;
+  message: string;
+  details: Record<string, unknown>;
+}
+
+export interface SafetyCheckResult {
+  ok: boolean;
+  violations: SafetyViolation[];
+}
+
+export interface ActivationImpactPreview {
+  policy_key: string;
+  candidate_version: number;
+  current_active_version: number | null;
+  diff: PolicyDiff | null;
+  safety: SafetyCheckResult;
+}
+
+export interface LifecycleEvent {
+  id: string;
+  policy_key: string;
+  version: number;
+  event_type: string;
+  actor: string | null;
+  reason: string | null;
+  payload: Record<string, unknown>;
+  event_hash: string;
+  occurred_at: string;
+}
+
+export interface PolicyTimeline {
+  policy_key: string;
+  events: LifecycleEvent[];
+}
+
+export type ScheduleAction = "activate" | "retire";
+export type ScheduleStatus = "pending" | "executed" | "failed" | "cancelled";
+
+export interface ActivationSchedule {
+  id: string;
+  policy_key: string;
+  version: number;
+  action: ScheduleAction;
+  effective_at: string;
+  reason: string | null;
+  status: ScheduleStatus;
+  created_by: string | null;
+  created_at: string;
+  executed_at: string | null;
+  execution_error: string | null;
+}
+
+export interface PolicyLifecycleSummary {
+  policy_key: string;
+  version: number;
+  name: string;
+  status: PolicyStatus;
+  effective_status: EffectiveStatus;
+  scope: Scope;
+  created_at: string;
+  activated_by: string | null;
+  activated_at: string | null;
+  activation_reason: string | null;
+  effective_from: string | null;
+  effective_until: string | null;
+  deprecated_at: string | null;
+  deprecation_reason: string | null;
+  rollback_of_version: number | null;
+}
+
+export interface ConflictAlert {
+  policy_key: string;
+  version: number;
+  violations: SafetyViolation[];
+}
+
+export interface LifecycleDashboard {
+  counts_by_state: Record<string, number>;
+  pending_approvals: PolicyLifecycleSummary[];
+  upcoming_activations: ActivationSchedule[];
+  upcoming_expirations: PolicyLifecycleSummary[];
+  upcoming_retirements: ActivationSchedule[];
+  recently_activated: PolicyLifecycleSummary[];
+  deprecated_policies: PolicyLifecycleSummary[];
+  rollback_history: PolicyLifecycleSummary[];
+  conflict_alerts: ConflictAlert[];
+}
+
+export interface PolicySearchParams {
+  principal?: string;
+  resource?: string;
+  action?: string;
+  state?: string;
+  version?: number;
+  reviewer?: string;
+  created_after?: string;
+  created_before?: string;
+}

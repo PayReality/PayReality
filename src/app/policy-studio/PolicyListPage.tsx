@@ -88,6 +88,9 @@ export function PolicyListPage() {
           <HelpIcon articleId="runtime_policy" />
         </div>
         <div className="flex items-center gap-3">
+          <Link to="/governance/dashboard" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
+            Dashboard
+          </Link>
           <Link to="/governance/approvals" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
             Approvals
           </Link>
@@ -145,6 +148,7 @@ export function PolicyListPage() {
           <option value="compiled">Compiled</option>
           <option value="active">Active</option>
           <option value="retired">Retired</option>
+          <option value="archived">Archived</option>
         </select>
         <select
           aria-label="Sort by"

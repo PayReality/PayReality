@@ -34,6 +34,25 @@ class PolicyStatus(str, Enum):
     COMPILED = "compiled"
     ACTIVE = "active"
     RETIRED = "retired"
+    # Runtime Policy Lifecycle (Phase 5, RUNTIME_POLICY_LIFECYCLE.md): the
+    # one genuinely new terminal status this phase adds. Additive only --
+    # every existing transition (draft/pending_review/approved/rejected/
+    # compiled/active/retired) and everything that checks for those exact
+    # string values is completely unaffected, since nothing before this
+    # phase could ever produce "archived." "Superseded" is deliberately
+    # NOT a stored status: a retired RuntimePolicyRecord that has a newer
+    # active sibling of the same policy_key is presented as "Superseded"
+    # by services/runtime_policy_lifecycle_service.py's read-side label,
+    # computed on the fly -- not a second status value for what
+    # deploy_policy already correctly marks "retired," to avoid touching
+    # that already-working transition at all. "Deprecated" is likewise
+    # not a status: it is a flag (RuntimePolicyRecord.deprecated_at) on
+    # an ACTIVE row, since a deprecated-but-not-yet-retired policy must
+    # keep being enforced until its scheduled retirement -- changing its
+    # status away from "active" would silently stop Runtime Authority
+    # from enforcing it, which is explicitly not what "scheduled for
+    # retirement" means.
+    ARCHIVED = "archived"
 
 
 @dataclass(frozen=True)

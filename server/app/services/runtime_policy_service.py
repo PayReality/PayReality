@@ -27,6 +27,7 @@ from app.domain.runtime_policy.conditions import Operator
 from app.domain.runtime_policy.runtime_policy import RuntimePolicy
 from app.domain.runtime_policy.schema import from_dict, to_dict
 from app.opa_client import HttpOpaClient
+from app.services.runtime_policy_lifecycle_events import record_lifecycle_event
 
 _NUMERIC_OPERATORS = {Operator.LTE, Operator.GTE, Operator.LT, Operator.GT}
 
@@ -251,6 +252,7 @@ def create_policy(db: Session, policy: RuntimePolicy) -> RuntimePolicyRecord:
     db.add(row)
     db.commit()
     db.refresh(row)
+    record_lifecycle_event(db, row.policy_key, row.version, "created", actor=policy.metadata.created_by)
     return row
 
 
@@ -259,6 +261,8 @@ def edit_policy(db: Session, policy_key: uuid.UUID, updated_policy: RuntimePolic
     (RUNTIME_POLICY_LANGUAGE.md's immutability, POLICY_STUDIO_WORKFLOW.md's
     "edit always produces a new draft version")."""
     latest = get_latest(db, policy_key)
+    if latest.status == "archived":
+        raise InvalidTransitionError(latest.status, "edit")
     new_version = latest.version + 1
     row = RuntimePolicyRecord(
         id=uuid.uuid4(),
@@ -270,6 +274,7 @@ def edit_policy(db: Session, policy_key: uuid.UUID, updated_policy: RuntimePolic
     db.add(row)
     db.commit()
     db.refresh(row)
+    record_lifecycle_event(db, row.policy_key, row.version, "edited", actor=updated_policy.metadata.created_by)
     return row
 
 
@@ -280,6 +285,7 @@ def submit_for_review(db: Session, policy_key: uuid.UUID) -> RuntimePolicyRecord
     row.status = "pending_review"
     db.commit()
     db.refresh(row)
+    record_lifecycle_event(db, row.policy_key, row.version, "submitted")
     return row
 
 
@@ -307,6 +313,7 @@ def approve(
     row.status = "approved"
     db.commit()
     db.refresh(row)
+    record_lifecycle_event(db, row.policy_key, row.version, "approved", actor=approver)
     return row
 
 
@@ -338,6 +345,7 @@ def reject(
     row.status = "rejected"
     db.commit()
     db.refresh(row)
+    record_lifecycle_event(db, row.policy_key, row.version, "rejected", actor=reviewer, reason=reason)
     return row
 
 
@@ -445,6 +453,9 @@ def compile_policy(db: Session, policy_key: uuid.UUID) -> CompileOutcome:
     row.bundle_hash = result.bundle.bundle_hash
     db.commit()
     db.refresh(row)
+    record_lifecycle_event(
+        db, row.policy_key, row.version, "compiled", payload={"bundle_hash": row.bundle_hash}
+    )
     return CompileOutcome(
         record=row, diagnostics=result.diagnostics, bundle_id=row.bundle_id, bundle_hash=row.bundle_hash
     )

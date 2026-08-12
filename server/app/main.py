@@ -22,6 +22,7 @@ from app.routers import (
     policy_simulation,
     principals,
     runtime_policies,
+    runtime_policy_lifecycle,
     users as users_router,
 )
 from app.security import observability_middleware
@@ -269,6 +270,8 @@ def create_app() -> FastAPI:
     app.include_router(intents.router)
     app.include_router(evidence.router)
     app.include_router(runtime_policies.router)
+    app.include_router(runtime_policy_lifecycle.router)
+    app.include_router(runtime_policy_lifecycle.dashboard_router)
     app.include_router(policy_simulation.router)
     app.include_router(ai_policy_builder.router)
     app.include_router(ai_authority_builder.router)

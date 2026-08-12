@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { policyStudioApi } from "./api";
+import { policyLifecycleApi } from "./lifecycleApi";
 import { PolicyStatusBadge } from "./components/PolicyStatusBadge";
-import { formatStatus } from "../live/format";
+import { formatStatus, describeApiError } from "../live/format";
 import { OPERATOR_LABEL } from "./describePolicy";
 import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
+import { ConfirmButton } from "../components/ui/confirm-button";
 import { Skeleton, SkeletonRows } from "../components/ui/skeleton";
+import { useAuth } from "../auth/AuthContext";
 import type { PolicyDiff, RuntimePolicy } from "./types";
 
 // Replaces the separate Version History and Diff pages
@@ -31,11 +34,34 @@ const RISK_COLOR: Record<string, string> = {
 
 export function VersionsPage() {
   const { policyKey } = useParams();
+  const navigate = useNavigate();
+  const { user, hasPermission } = useAuth();
+  const canPublish = !user || hasPermission("runtime_policy.publish");
   const [versions, setVersions] = useState<RuntimePolicy[] | null>(null);
   const [versionsError, setVersionsError] = useState(false);
   const [selected, setSelected] = useState<[number, number] | null>(null);
   const [diff, setDiff] = useState<PolicyDiff | null>(null);
   const [diffError, setDiffError] = useState(false);
+  const [actor, setActor] = useState("");
+  const [rollbackError, setRollbackError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (user) setActor(user.name);
+  }, [user]);
+
+  async function handleRollback(targetVersion: number) {
+    if (!actor.trim()) {
+      setRollbackError("Enter your name first.");
+      return;
+    }
+    setRollbackError(null);
+    try {
+      await policyLifecycleApi.rollback(policyKey!, targetVersion, actor);
+      navigate(`/governance/${policyKey}`);
+    } catch (e) {
+      setRollbackError(describeApiError(e, "Rollback"));
+    }
+  }
 
   function loadVersions() {
     setVersionsError(false);
@@ -79,6 +105,27 @@ export function VersionsPage() {
 
       {!versions && !versionsError && <SkeletonRows count={3} height={20} />}
 
+      {canPublish && versions && versions.some((v) => v.status === "retired") && (
+        <div className="flex items-center gap-2 mb-3" style={{ fontSize: 12 }}>
+          <label htmlFor="rollback-actor" style={{ color: "var(--pr-text-muted)" }}>
+            {user ? "Acting as" : "Your name (for rollback)"}
+          </label>
+          <input
+            id="rollback-actor"
+            value={actor}
+            onChange={(e) => setActor(e.target.value)}
+            readOnly={!!user}
+            style={{
+              backgroundColor: user ? "var(--pr-bg-primary)" : "var(--pr-bg-hover)",
+              border: "1px solid var(--pr-overlay-10)",
+              color: user ? "var(--pr-text-muted)" : "var(--pr-text-primary)",
+              borderRadius: 6, padding: "4px 8px", fontSize: 12, width: 180,
+            }}
+          />
+        </div>
+      )}
+      {rollbackError && <Alert severity="error" style={{ marginBottom: 12 }}>{rollbackError}</Alert>}
+
       {versions?.map((v) => (
         <div
           key={v.version}
@@ -103,9 +150,20 @@ export function VersionsPage() {
             <PolicyStatusBadge status={v.status} />
             <span style={{ color: "var(--pr-text-muted)" }}>{new Date(v.created_at).toLocaleString()}</span>
           </div>
-          {v.status !== "active" && (
+          {v.status === "retired" && canPublish && (
+            <ConfirmButton
+              variant="ghost"
+              size="sm"
+              onConfirm={() => handleRollback(v.version)}
+              confirmLabel="Rollback"
+              style={{ color: "var(--pr-warning-amber)" }}
+            >
+              Rollback to this version
+            </ConfirmButton>
+          )}
+          {v.status !== "active" && v.status !== "retired" && (
             <span style={{ color: "var(--pr-text-muted)" }}>
-              (rollback: edit and republish this version once checked for errors)
+              (edit and republish this version once checked for errors)
             </span>
           )}
         </div>

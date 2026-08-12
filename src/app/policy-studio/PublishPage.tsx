@@ -1,11 +1,15 @@
 import { useEffect, useId, useState } from "react";
 import { Link, useParams } from "react-router";
 import { policyStudioApi } from "./api";
+import { policyLifecycleApi } from "./lifecycleApi";
+import { ApiError } from "../live/apiClient";
 import { PolicyStatusBadge } from "./components/PolicyStatusBadge";
 import { CompilerDiagnosticsList } from "./components/CompilerDiagnosticsList";
+import { SafetyViolationsList } from "./components/LifecycleTimeline";
 import { describeApiError, describeReason, formatStatus } from "../live/format";
 import { NextStepGuidance } from "../help/NextStepGuidance";
-import type { CompileResult, DeployResult, DryRunResult, RuntimePolicy } from "./types";
+import { useAuth } from "../auth/AuthContext";
+import type { ActivationImpactPreview, CompileResult, DryRunResult, PolicyLifecycleSummary, RuntimePolicy } from "./types";
 import { Card } from "../components/ui/card";
 import { FieldLabel } from "../components/ui/label";
 import { Input, getInputStyle } from "../components/ui/input";
@@ -25,7 +29,18 @@ import { Alert } from "../components/ui/alert";
 export function PublishPage() {
   const { policyKey } = useParams();
   const formId = useId();
+  const { user } = useAuth();
   const [policy, setPolicy] = useState<RuntimePolicy | null>(null);
+
+  const [preview, setPreview] = useState<ActivationImpactPreview | null>(null);
+  const [previewErrorMsg, setPreviewErrorMsg] = useState<string | null>(null);
+  const [actor, setActor] = useState("");
+  const [scheduleAt, setScheduleAt] = useState("");
+  const [scheduleMessage, setScheduleMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (user) setActor(user.name);
+  }, [user]);
 
   const [compileResult, setCompileResult] = useState<CompileResult | null>(null);
   const [compiling, setCompiling] = useState(false);
@@ -42,7 +57,7 @@ export function PublishPage() {
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
-  const [publishResult, setPublishResult] = useState<DeployResult | null>(null);
+  const [publishResult, setPublishResult] = useState<PolicyLifecycleSummary | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
 
@@ -57,6 +72,18 @@ export function PublishPage() {
   useEffect(load, [policyKey]);
 
   const isCompiled = policy?.status === "compiled" || policy?.status === "active";
+
+  function loadActivationPreview() {
+    setPreviewErrorMsg(null);
+    policyLifecycleApi
+      .activationPreview(policyKey!)
+      .then(setPreview)
+      .catch((e) => setPreviewErrorMsg(describeApiError(e, "Load activation preview")));
+  }
+
+  useEffect(() => {
+    if (isCompiled) loadActivationPreview();
+  }, [isCompiled, policyKey]);
 
   async function runCompile() {
     setCompiling(true);
@@ -102,16 +129,45 @@ export function PublishPage() {
   }
 
   async function runPublish() {
+    if (!actor.trim()) {
+      setPublishError("Enter your name before publishing.");
+      return;
+    }
     setPublishing(true);
     setPublishError(null);
     try {
-      const r = await policyStudioApi.deploy(policyKey!);
+      const r = await policyLifecycleApi.activate(policyKey!, actor);
       setPublishResult(r);
       load();
     } catch (e) {
-      setPublishError(describeApiError(e, "Publish"));
+      if (e instanceof ApiError && e.status === 422) {
+        const detail = e.body && typeof e.body === "object" ? (e.body as { detail?: { message?: string } }).detail : undefined;
+        setPublishError(detail?.message ?? "Activation blocked by a safety check. See details above.");
+        loadActivationPreview();
+      } else {
+        setPublishError(describeApiError(e, "Publish"));
+      }
     } finally {
       setPublishing(false);
+    }
+  }
+
+  async function runSchedule() {
+    if (!actor.trim() || !scheduleAt) {
+      setScheduleMessage("Enter your name and an activation date/time first.");
+      return;
+    }
+    setScheduleMessage(null);
+    try {
+      await policyLifecycleApi.scheduleActivation(policyKey!, new Date(scheduleAt).toISOString(), actor);
+      setScheduleMessage(`Activation scheduled for ${new Date(scheduleAt).toLocaleString()}.`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 422) {
+        const detail = e.body && typeof e.body === "object" ? (e.body as { detail?: { message?: string } }).detail : undefined;
+        setScheduleMessage(detail?.message ?? "Scheduling blocked by a safety check. See details above.");
+      } else {
+        setScheduleMessage(describeApiError(e, "Schedule"));
+      }
     }
   }
 
@@ -213,6 +269,43 @@ export function PublishPage() {
         )}
       </Card>
 
+      {/* Runtime Impact Preview + Runtime Authority Safety Checks (Phase 5,
+          RUNTIME_POLICY_LIFECYCLE.md sections 5-6): shown before activation
+          is even attempted, reusing the existing Diff engine
+          (svc.diff_versions) and the new safety-check gate. */}
+      {isCompiled && (
+        <Card style={{ marginBottom: 16 }}>
+          <h2 className="text-sm font-medium mb-2" style={{ color: "var(--pr-text-primary)" }}>Activation readiness</h2>
+          {previewErrorMsg && (
+            <Alert severity="warning" style={{ marginBottom: 8 }}>
+              <div className="flex items-center gap-3">
+                <span>{previewErrorMsg}</span>
+                <Button variant="ghost" size="sm" onClick={loadActivationPreview}>Retry</Button>
+              </div>
+            </Alert>
+          )}
+          {!preview && !previewErrorMsg && <p style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>Checking...</p>}
+          {preview && (
+            <>
+              <p style={{ fontSize: 13, color: "var(--pr-text-muted)", marginBottom: 8 }}>
+                {preview.current_active_version
+                  ? `Activating this version will replace the currently active v${preview.current_active_version}.`
+                  : "This is the first version of this policy to be activated."}
+              </p>
+              <SafetyViolationsList violations={preview.safety.violations} />
+              {preview.diff && (
+                <p style={{ fontSize: 13, color: "var(--pr-text-muted)", marginTop: 8 }}>
+                  Risk impact vs. the currently active version:{" "}
+                  <strong style={{ color: "var(--pr-text-primary)" }}>{preview.diff.risk_impact}</strong>. See{" "}
+                  <Link to={`/governance/${policyKey}/versions`} style={{ color: "var(--pr-authority-blue)" }}>History</Link>{" "}
+                  for the full comparison.
+                </p>
+              )}
+            </>
+          )}
+        </Card>
+      )}
+
       {/* Step 3: publish */}
       <Card style={{ marginBottom: 16 }}>
         <h2 className="text-sm font-medium mb-2" style={{ color: "var(--pr-text-primary)" }}>3. Publish</h2>
@@ -221,27 +314,58 @@ export function PublishPage() {
             Check for errors first: only a rule with no errors can be published.
           </p>
         )}
-        <p style={{ color: "var(--pr-warning-amber)", fontSize: 13, marginBottom: 16, maxWidth: 480 }}>
+        <p style={{ color: "var(--pr-warning-amber)", fontSize: 13, marginBottom: 12, maxWidth: 480 }}>
           Publishing replaces whatever rule is currently active for this principal and action, effective
           immediately for real decisions. This is not a preview.
         </p>
-        <ConfirmButton variant="danger" onConfirm={runPublish} disabled={publishing || !isCompiled} confirmLabel="Publish">
-          {publishing ? "Publishing..." : "Publish"}
-        </ConfirmButton>
+        <div className="flex items-center gap-2 mb-3" style={{ fontSize: 12 }}>
+          <label htmlFor={`${formId}-publish-actor`} style={{ color: "var(--pr-text-muted)" }}>
+            {user ? "Acting as" : "Your name"}
+          </label>
+          <input
+            id={`${formId}-publish-actor`}
+            value={actor}
+            onChange={(e) => setActor(e.target.value)}
+            readOnly={!!user}
+            style={{
+              backgroundColor: user ? "var(--pr-bg-primary)" : "var(--pr-bg-hover)",
+              border: "1px solid var(--pr-overlay-10)",
+              color: user ? "var(--pr-text-muted)" : "var(--pr-text-primary)",
+              borderRadius: 6, padding: "4px 8px", fontSize: 12, width: 180,
+            }}
+          />
+        </div>
+        <div className="flex items-center gap-3">
+          <ConfirmButton variant="danger" onConfirm={runPublish} disabled={publishing || !isCompiled} confirmLabel="Publish">
+            {publishing ? "Publishing..." : "Publish now"}
+          </ConfirmButton>
+          <span style={{ color: "var(--pr-text-muted)", fontSize: 12 }}>or</span>
+          <input
+            type="datetime-local"
+            aria-label="Schedule activation for"
+            value={scheduleAt}
+            onChange={(e) => setScheduleAt(e.target.value)}
+            style={getInputStyle("hover", { width: "auto" })}
+          />
+          <Button variant="ghost" onClick={runSchedule} disabled={!isCompiled}>
+            Schedule
+          </Button>
+        </div>
+        {scheduleMessage && <p style={{ fontSize: 13, color: "var(--pr-text-secondary)", marginTop: 8 }}>{scheduleMessage}</p>}
         {publishError && <Alert severity="error" style={{ marginTop: 8 }}>{publishError}</Alert>}
         {publishResult && (
           <div style={{ marginTop: 12 }}>
             <p style={{ color: "var(--pr-trust-green)", fontWeight: 600 }}>
-              Published at {new Date(publishResult.deployed_at).toLocaleString()}.
+              Published{publishResult.activated_at ? ` at ${new Date(publishResult.activated_at).toLocaleString()}` : ""}.
             </p>
-            {publishResult.mandate_id ? (
+            {policy?.constraints.mandate_id ? (
               <div
                 className="mt-2 p-3"
                 style={{ borderLeft: "3px solid var(--pr-authority-blue)", backgroundColor: "var(--pr-overlay-04)", borderRadius: 6 }}
               >
                 <p style={{ color: "var(--pr-authority-blue)", fontSize: 12, fontWeight: 600, marginBottom: 2 }}>Authority-backed</p>
                 <p style={{ color: "var(--pr-text-primary)", fontSize: 13, fontFamily: "monospace" }}>
-                  Mandate {publishResult.mandate_id} (Authority {publishResult.authority_id})
+                  Mandate {policy.constraints.mandate_id} (Authority {policy.constraints.authority_id})
                 </p>
               </div>
             ) : (

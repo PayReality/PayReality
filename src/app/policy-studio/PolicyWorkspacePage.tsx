@@ -7,6 +7,7 @@ import type { Condition, Constraints, Effect, Metadata, RuntimePolicy, RuntimePo
 import { PolicyStatusBadge } from "./components/PolicyStatusBadge";
 import { ConditionRow } from "./components/ConditionRow";
 import { ScopeFields } from "./components/ScopeFields";
+import { LifecycleTimeline } from "./components/LifecycleTimeline";
 import { describeApiError } from "../live/format";
 import { describePolicy, EFFECT_LABEL } from "./describePolicy";
 import { track, trackError } from "../services/analytics";
@@ -15,6 +16,8 @@ import { FieldLabel } from "../components/ui/label";
 import { Input, getInputStyle } from "../components/ui/input";
 import { Button } from "../components/ui/button";
 import { ConfirmButton } from "../components/ui/confirm-button";
+import { policyLifecycleApi } from "./lifecycleApi";
+import { useAuth } from "../auth/AuthContext";
 
 const EMPTY: RuntimePolicyRequest = {
   name: "",
@@ -34,12 +37,20 @@ export function PolicyWorkspacePage() {
   const isNew = !policyKey || policyKey === "new";
   const navigate = useNavigate();
   const formId = useId();
+  const { user, hasPermission } = useAuth();
 
   const [existing, setExisting] = useState<RuntimePolicy | null>(null);
   const [form, setForm] = useState<RuntimePolicyRequest>(EMPTY);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
+  const [actor, setActor] = useState("");
+  const [lifecycleMessage, setLifecycleMessage] = useState<string | null>(null);
+  const canPublish = !user || hasPermission("runtime_policy.publish");
+
+  useEffect(() => {
+    if (user) setActor(user.name);
+  }, [user]);
   // Phase 5, Release 2 (Enterprise System binding): the configuration
   // surface for which registered system this policy's allowed action
   // reaches -- lives here, alongside delegated_by/risk_level, not in
@@ -108,6 +119,22 @@ export function PolicyWorkspacePage() {
       setMessage(describeApiError(e, "Submit"));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function runLifecycleAction(action: (key: string, actor: string) => Promise<unknown>, label: string) {
+    if (!actor.trim()) {
+      setLifecycleMessage("Enter your name first.");
+      return;
+    }
+    setLifecycleMessage(null);
+    try {
+      await action(policyKey!, actor);
+      setLifecycleMessage(`${label} recorded.`);
+      const refreshed = await policyStudioApi.get(policyKey!);
+      setExisting(refreshed);
+    } catch (e) {
+      setLifecycleMessage(describeApiError(e, label));
     }
   }
 
@@ -187,7 +214,61 @@ export function PolicyWorkspacePage() {
               Publish
             </Link>
           )}
+          {canPublish && existing.status === "active" && (
+            <>
+              <ConfirmButton
+                variant="ghost"
+                onConfirm={() => runLifecycleAction(policyLifecycleApi.deprecate, "Deprecate")}
+                confirmLabel="Deprecate"
+                style={{ color: "var(--pr-warning-amber)" }}
+              >
+                Deprecate
+              </ConfirmButton>
+              <ConfirmButton
+                variant="ghost"
+                onConfirm={() => runLifecycleAction(policyLifecycleApi.retire, "Retire")}
+                confirmLabel="Retire"
+                style={{ color: "var(--pr-critical-red)" }}
+              >
+                Retire
+              </ConfirmButton>
+            </>
+          )}
+          {canPublish && existing.status !== "active" && existing.status !== "archived" && existing.status !== "draft" && (
+            <ConfirmButton
+              variant="ghost"
+              onConfirm={() => runLifecycleAction(policyLifecycleApi.archive, "Archive")}
+              confirmLabel="Archive"
+              style={{ color: "var(--pr-text-muted)" }}
+            >
+              Archive
+            </ConfirmButton>
+          )}
         </div>
+      )}
+
+      {existing && canPublish && (existing.status === "active" || (existing.status !== "draft" && existing.status !== "archived")) && (
+        <div className="mb-4 flex items-center gap-2" style={{ fontSize: 12 }}>
+          <label htmlFor={`${formId}-actor`} style={{ color: "var(--pr-text-muted)" }}>
+            {user ? "Acting as" : "Your name (for lifecycle actions)"}
+          </label>
+          <input
+            id={`${formId}-actor`}
+            value={actor}
+            onChange={(e) => setActor(e.target.value)}
+            readOnly={!!user}
+            style={{
+              backgroundColor: user ? "var(--pr-bg-primary)" : "var(--pr-bg-hover)",
+              border: "1px solid var(--pr-overlay-10)",
+              color: user ? "var(--pr-text-muted)" : "var(--pr-text-primary)",
+              borderRadius: 6, padding: "4px 8px", fontSize: 12, width: 180,
+            }}
+          />
+        </div>
+      )}
+
+      {lifecycleMessage && (
+        <p role="alert" style={{ color: "var(--pr-text-secondary)", fontSize: 13, marginBottom: 16 }}>{lifecycleMessage}</p>
       )}
 
       <Card borderColor="rgba(77,124,254,0.25)" style={{ marginBottom: 16 }}>
@@ -369,15 +450,10 @@ export function PolicyWorkspacePage() {
         </div>
       </Card>
 
-      {existing?.audit && (
+      {existing && (
         <Card style={{ marginBottom: 16 }}>
-          <h2 className="text-sm font-medium mb-2" style={{ color: "var(--pr-text-primary)" }}>Audit</h2>
-          <p style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>
-            {Object.entries(existing.audit)
-              .filter(([, v]) => v)
-              .map(([k, v]) => `${k}: ${v}`)
-              .join(", ")}
-          </p>
+          <h2 className="text-sm font-medium mb-3" style={{ color: "var(--pr-text-primary)" }}>Timeline</h2>
+          <LifecycleTimeline policyKey={policyKey!} />
         </Card>
       )}
     </div>
