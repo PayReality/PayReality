@@ -15,9 +15,9 @@ from app.db.models import (
     AuthorityRelationship,
     AuthorityResource,
 )
-from app.db.models import Organization
+from app.db.models import Organization, User
 from app.db.session import get_db
-from app.dependencies import get_current_organization, require_permission
+from app.dependencies import get_current_organization, get_current_user_if_session, require_permission
 from app.domain.ai_authority_builder.azure_foundry_provider import (
     AzureFoundryAuthorityGraphExtractionProvider,
 )
@@ -27,10 +27,15 @@ from app.domain.ai_policy_builder.text_extraction import UnsupportedFormatError,
 from app.domain.rbac.permissions import Permission
 from app.schemas.ai_authority_builder import (
     AnswerQuestionRequest,
+    ApproveGraphRequest,
     ConflictResponse,
     CorpusResponse,
+    CoverageResponse,
     GapResponse,
+    GraphApprovalResponse,
+    GraphDiffResponse,
     GraphSummaryResponse,
+    MissingInformationItem,
     OperationResponse,
     PrincipalCandidateResponse,
     PrincipalResponse,
@@ -80,11 +85,21 @@ def _corpus_to_response(corpus: AuthorityCorpus, document_count: int) -> CorpusR
     )
 
 
+def _explainability_kwargs(row) -> dict:
+    return {
+        "clause_reference": row.clause_reference,
+        "extraction_reasoning": row.extraction_reasoning,
+        "detected_assumptions": list(row.detected_assumptions or []),
+        "ambiguity_flags": list(row.ambiguity_flags or []),
+    }
+
+
 def _principal_to_response(p: AuthorityPrincipal) -> PrincipalResponse:
     return PrincipalResponse(
         id=str(p.id), name=p.name, role=p.role, reports_to=p.reports_to, confidence=p.confidence,
         source_excerpt=p.source_excerpt, source_location=p.source_location,
         resolved_principal_id=str(p.resolved_principal_id) if p.resolved_principal_id else None,
+        **_explainability_kwargs(p),
     )
 
 
@@ -92,6 +107,7 @@ def _resource_to_response(r: AuthorityResource) -> ResourceResponse:
     return ResourceResponse(
         id=str(r.id), name=r.name, description=r.description, confidence=r.confidence,
         source_excerpt=r.source_excerpt, source_location=r.source_location,
+        **_explainability_kwargs(r),
     )
 
 
@@ -99,6 +115,7 @@ def _operation_to_response(o: AuthorityOperation) -> OperationResponse:
     return OperationResponse(
         id=str(o.id), name=o.name, description=o.description, confidence=o.confidence,
         source_excerpt=o.source_excerpt, source_location=o.source_location,
+        **_explainability_kwargs(o),
     )
 
 
@@ -110,11 +127,15 @@ def _relationship_to_response(r: AuthorityRelationship) -> RelationshipResponse:
         from_principal_id=str(r.from_principal_id) if r.from_principal_id else None,
         to_principal_id=str(r.to_principal_id) if r.to_principal_id else None,
         status=r.status,
+        **_explainability_kwargs(r),
     )
 
 
 def _conflict_to_response(c: AuthorityConflict) -> ConflictResponse:
-    return ConflictResponse(id=str(c.id), description=c.description, reasoning=c.reasoning, confidence=c.confidence)
+    return ConflictResponse(
+        id=str(c.id), description=c.description, reasoning=c.reasoning, confidence=c.confidence,
+        conflict_type=c.conflict_type, reviewer_recommendation=c.reviewer_recommendation,
+    )
 
 
 def _gap_to_response(g: AuthorityGap) -> GapResponse:
@@ -353,3 +374,81 @@ def answer_question(question_id: uuid.UUID, body: AnswerQuestionRequest, db: Ses
     except QuestionNotFoundError:
         raise HTTPException(status_code=404, detail="question_not_found")
     return _question_to_response(question)
+
+
+# --- Phase 3: Explainability & Human Review -----------------------------
+
+
+@router.get("/corpora/{corpus_id}/coverage", response_model=CoverageResponse)
+def get_coverage(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Task 5: deterministic parsing statistics aggregated across this
+    corpus's documents -- see AuthorityCorpusDocument's own columns and
+    text_extraction.extract_text_with_coverage. Never an LLM's estimate
+    of its own completeness."""
+    return CoverageResponse(**svc.get_coverage(db, corpus_id))
+
+
+@router.get("/corpora/{corpus_id}/missing-information", response_model=list[MissingInformationItem])
+def get_missing_information(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Task 4: a deterministic, code-computed backstop for the model's
+    own self-reported Gaps/Questions -- every item here is read directly
+    from already-persisted rows, never re-asked of an LLM."""
+    return [MissingInformationItem(**item) for item in svc.detect_missing_information(db, corpus_id)]
+
+
+@router.get("/corpora/{corpus_id}/diff", response_model=GraphDiffResponse)
+def get_graph_diff(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Task 7: this corpus's candidate Authority Graph vs. the Authority
+    Graph already in force for the same organisation. A deterministic
+    comparison -- the model's job ended at extraction time."""
+    try:
+        diff = svc.get_graph_diff(db, corpus_id)
+    except CorpusNotFoundError:
+        raise HTTPException(status_code=404, detail="corpus_not_found")
+    return GraphDiffResponse(**diff)
+
+
+@router.post(
+    "/corpora/{corpus_id}/approve",
+    response_model=GraphApprovalResponse,
+    status_code=201,
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
+def approve_graph(
+    corpus_id: uuid.UUID,
+    body: ApproveGraphRequest,
+    db: Session = Depends(get_db),
+    session_user: User | None = Depends(get_current_user_if_session),
+):
+    """Task 8: an ADDITIVE audit record of the reviewer's decision that
+    this corpus's Authority Graph has been reviewed -- it does not
+    itself promote, resolve, or activate anything (that stays exactly
+    resolve_principal/resolve_relationship/activate_relationship/
+    ai_policy_builder's promote_candidate, all unmodified). Gated by the
+    same Permission.AUTHORITY_REVIEW every other reviewer action here
+    already requires -- no new permission introduced."""
+    try:
+        approval = svc.approve_graph(
+            db, corpus_id,
+            reviewer=session_user.name if session_user else "operator",
+            approval_reason=body.approval_reason,
+        )
+    except CorpusNotFoundError:
+        raise HTTPException(status_code=404, detail="corpus_not_found")
+    return GraphApprovalResponse(
+        id=str(approval.id), corpus_id=str(approval.corpus_id), reviewer=approval.reviewer,
+        version=approval.version, approval_reason=approval.approval_reason,
+        graph_hash=approval.graph_hash, approved_at=approval.approved_at,
+    )
+
+
+@router.get("/corpora/{corpus_id}/approvals", response_model=list[GraphApprovalResponse])
+def list_approvals(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+    """The immutable approval history for this corpus, newest first."""
+    return [
+        GraphApprovalResponse(
+            id=str(a.id), corpus_id=str(a.corpus_id), reviewer=a.reviewer, version=a.version,
+            approval_reason=a.approval_reason, graph_hash=a.graph_hash, approved_at=a.approved_at,
+        )
+        for a in svc.list_approvals(db, corpus_id)
+    ]

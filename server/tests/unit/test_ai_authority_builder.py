@@ -18,7 +18,11 @@ from app.domain.ai_authority_builder.provider import (
     CandidateRelationship,
     CandidateResource,
 )
-from app.services.ai_authority_builder_service import build_corpus_text
+from app.services.ai_authority_builder_service import (
+    _reviewer_recommendation,
+    build_corpus_text,
+    detect_circular_delegations,
+)
 
 
 def _doc(filename, format, content):
@@ -117,3 +121,68 @@ def test_relationship_kind_is_constrained_to_three_values_in_the_fake_default():
     graph = FakeAuthorityGraphExtractionProvider().extract("text")
     for rel in graph.relationships:
         assert rel.kind in ("delegation", "escalation", "inheritance")
+
+
+# --- Phase 3: Conflict Workspace, deterministic detection ---------------
+
+
+def _delegation(a, b):
+    return CandidateRelationship(
+        kind="delegation", from_principal=a, to_principal=b, confidence=0.9,
+        source_excerpt="e", source_location="l",
+    )
+
+
+def test_detect_circular_delegations_finds_a_three_hop_cycle():
+    graph = AuthorityGraph(relationships=(_delegation("A", "B"), _delegation("B", "C"), _delegation("C", "A")))
+    conflicts = detect_circular_delegations(graph)
+    assert len(conflicts) == 1
+    assert conflicts[0].conflict_type == "circular_delegation"
+    assert conflicts[0].confidence == 1.0
+    assert "a -> b -> c -> a" in conflicts[0].description.lower()
+
+
+def test_detect_circular_delegations_finds_nothing_in_a_normal_hierarchy():
+    graph = AuthorityGraph(relationships=(_delegation("CFO", "Treasury Head"), _delegation("Treasury Head", "Treasury Manager")))
+    assert detect_circular_delegations(graph) == []
+
+
+def test_detect_circular_delegations_ignores_escalation_edges():
+    """An escalation pointing back up a delegation chain is normal
+    hierarchy, not a circular delegation -- only `delegation`-kind edges
+    are considered."""
+    graph = AuthorityGraph(
+        relationships=(
+            _delegation("CFO", "Treasury Head"),
+            CandidateRelationship(
+                kind="escalation", from_principal="Treasury Head", to_principal="CFO",
+                confidence=0.9, source_excerpt="e", source_location="l",
+            ),
+        )
+    )
+    assert detect_circular_delegations(graph) == []
+
+
+def test_detect_circular_delegations_deduplicates_the_same_cycle():
+    """Two delegation edges that form one cycle produce exactly one
+    conflict, not one per starting node walked."""
+    graph = AuthorityGraph(relationships=(_delegation("A", "B"), _delegation("B", "A")))
+    assert len(detect_circular_delegations(graph)) == 1
+
+
+def test_reviewer_recommendation_always_recommends_human_review():
+    """This platform never auto-resolves a conflict -- every
+    recommendation must contain "Human Review", regardless of type or
+    confidence; only the wording varies."""
+    for conflict_type in (None, "authority", "threshold", "role", "policy", "delegation", "circular_delegation"):
+        for confidence in (0.5, 0.95):
+            assert "Human Review" in _reviewer_recommendation(conflict_type, confidence)
+
+
+def test_reviewer_recommendation_flags_circular_delegation_distinctly():
+    assert _reviewer_recommendation("circular_delegation", 0.99) == "Human Review Required -- Circular Delegation"
+
+
+def test_reviewer_recommendation_flags_low_confidence_distinctly():
+    assert "Low Confidence" in _reviewer_recommendation("threshold", 0.5)
+    assert "Low Confidence" not in _reviewer_recommendation("threshold", 0.95)

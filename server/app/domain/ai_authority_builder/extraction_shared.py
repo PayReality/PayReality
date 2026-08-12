@@ -66,6 +66,35 @@ came from) for every finding except Conflicts (which relate multiple
 findings to each other, not one passage) and Questions (which are
 requests for information, not claims about the text).
 
+For every Principal, Resource, Operation, Relationship, and Runtime
+Policy, also provide:
+- clause_reference: the document's OWN internal numbering for this
+  passage, if it states one (e.g. "Clause 4.2", "Section 7.1(a)") --
+  distinct from source_location, which is your own page/paragraph marker.
+  Null if the source text has no such internal numbering.
+- extraction_reasoning: one or two sentences on how you reached this
+  finding. If it is a direct, explicit statement, say so plainly. If you
+  had to infer it (combining two separate sentences, resolving a pronoun,
+  matching a title to a name), explain the inference.
+- detected_assumptions: anything you had to assume to reach this finding
+  that the text does not state outright (e.g. that two differently-worded
+  references are the same person). Empty list if none.
+- ambiguity_flags: specific ways the source text is ambiguous about this
+  finding, if any. Empty list if the text is unambiguous.
+Never guess these fields into false confidence -- a direct quotation with
+"stated explicitly" as the reasoning and no assumptions or ambiguity is a
+completely normal, common answer, not an incomplete one.
+
+For every Conflict, also classify conflict_type as one of: authority,
+threshold, role, policy, delegation, circular_delegation. Pick whichever
+best describes what actually contradicts -- a threshold conflict is two
+different numeric limits for the same principal/scope; a role conflict is
+two different reporting lines or titles for the same person; a delegation
+conflict is two different, incompatible delegation claims; circular_
+delegation is a delegation chain that loops back on itself (A delegates
+to B who delegates back to A, directly or through intermediate
+principals) if you notice one directly in the text.
+
 You produce structured fields only. You never produce Rego, source code,
 or any other executable policy language, and you never suggest or imply
 that anything should be deployed or activated; that does not exist in
@@ -93,6 +122,30 @@ def build_tool_schema() -> dict:
     }
     confidence_field = {
         "confidence": {"type": "number", "description": "Your own honest confidence, 0.0 to 1.0."}
+    }
+    # Explainability Model (Phase 3, EXPLAINABILITY_MODEL.md): the same
+    # four fields on every entity/relationship/policy item, spread in
+    # alongside `cited` and `confidence_field` -- never a separate,
+    # optional bolt-on a provider could omit.
+    explainable = {
+        "clause_reference": {
+            "type": ["string", "null"],
+            "description": "The document's own internal clause/section numbering for this passage, e.g. \"Clause 4.2\". Null if the text states none.",
+        },
+        "extraction_reasoning": {
+            "type": ["string", "null"],
+            "description": "One or two sentences on how you reached this finding -- a direct statement, or the inference you made.",
+        },
+        "detected_assumptions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Anything you had to assume to reach this finding that the text does not state outright. Empty if none.",
+        },
+        "ambiguity_flags": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Specific ways the source text is ambiguous about this finding. Empty if unambiguous.",
+        },
     }
 
     policy_item = {
@@ -128,6 +181,7 @@ def build_tool_schema() -> dict:
             **confidence_field,
             "missing_fields": {"type": "array", "items": {"type": "string"}},
             **cited,
+            **explainable,
         },
         "required": ["name", "principal", "action", "effect", "confidence", "source_excerpt", "source_location"],
     }
@@ -140,6 +194,7 @@ def build_tool_schema() -> dict:
             "reports_to": {"type": ["string", "null"], "description": "Name of this principal's manager/superior, if stated or clearly implied."},
             **confidence_field,
             **cited,
+            **explainable,
         },
         "required": ["name", "confidence", "source_excerpt", "source_location"],
     }
@@ -151,6 +206,7 @@ def build_tool_schema() -> dict:
             "description": {"type": ["string", "null"]},
             **confidence_field,
             **cited,
+            **explainable,
         },
         "required": ["name", "confidence", "source_excerpt", "source_location"],
     }
@@ -164,6 +220,7 @@ def build_tool_schema() -> dict:
             "description": {"type": ["string", "null"]},
             **confidence_field,
             **cited,
+            **explainable,
         },
         "required": ["kind", "from_principal", "to_principal", "confidence", "source_excerpt", "source_location"],
     }
@@ -173,9 +230,13 @@ def build_tool_schema() -> dict:
         "properties": {
             "description": {"type": "string"},
             "reasoning": {"type": ["string", "null"]},
+            "conflict_type": {
+                "type": "string",
+                "enum": ["authority", "threshold", "role", "policy", "delegation", "circular_delegation"],
+            },
             **confidence_field,
         },
-        "required": ["description", "confidence"],
+        "required": ["description", "confidence", "conflict_type"],
     }
 
     gap_item = {
@@ -219,6 +280,19 @@ def parse_graph_input(graph_input: dict) -> AuthorityGraph:
     provider-independent: given the same structured dict, every provider
     produces the identical AuthorityGraph, regardless of which model or
     vendor produced that dict."""
+    def _explainable_kwargs(item: dict) -> dict:
+        """Shared read of the four Phase 3 explainability fields --
+        `.get(...)` throughout so a raw dict from before this schema
+        change (a cached/replayed response, or a provider that hasn't
+        adopted the new prompt yet) still parses, just with these fields
+        at their null/empty defaults."""
+        return {
+            "clause_reference": item.get("clause_reference"),
+            "extraction_reasoning": item.get("extraction_reasoning"),
+            "detected_assumptions": tuple(item.get("detected_assumptions", []) or []),
+            "ambiguity_flags": tuple(item.get("ambiguity_flags", []) or []),
+        }
+
     policies = tuple(
         CandidateRuntimePolicy(
             name=p["name"],
@@ -239,6 +313,7 @@ def parse_graph_input(graph_input: dict) -> AuthorityGraph:
             metadata_owner=p.get("metadata_owner"),
             metadata_tags=tuple(p.get("metadata_tags", [])),
             missing_fields=tuple(p.get("missing_fields", [])),
+            **_explainable_kwargs(p),
         )
         for p in graph_input.get("policies", [])
     )
@@ -251,6 +326,7 @@ def parse_graph_input(graph_input: dict) -> AuthorityGraph:
             source_location=p["source_location"],
             role=p.get("role"),
             reports_to=p.get("reports_to"),
+            **_explainable_kwargs(p),
         )
         for p in graph_input.get("principals", [])
     )
@@ -262,6 +338,7 @@ def parse_graph_input(graph_input: dict) -> AuthorityGraph:
             source_excerpt=r["source_excerpt"],
             source_location=r["source_location"],
             description=r.get("description"),
+            **_explainable_kwargs(r),
         )
         for r in graph_input.get("resources", [])
     )
@@ -273,6 +350,7 @@ def parse_graph_input(graph_input: dict) -> AuthorityGraph:
             source_excerpt=o["source_excerpt"],
             source_location=o["source_location"],
             description=o.get("description"),
+            **_explainable_kwargs(o),
         )
         for o in graph_input.get("operations", [])
     )
@@ -286,6 +364,7 @@ def parse_graph_input(graph_input: dict) -> AuthorityGraph:
             source_excerpt=r["source_excerpt"],
             source_location=r["source_location"],
             description=r.get("description"),
+            **_explainable_kwargs(r),
         )
         for r in graph_input.get("relationships", [])
     )
@@ -295,6 +374,7 @@ def parse_graph_input(graph_input: dict) -> AuthorityGraph:
             description=c["description"],
             confidence=max(0.0, min(1.0, float(c["confidence"]))),
             reasoning=c.get("reasoning"),
+            conflict_type=c.get("conflict_type"),
         )
         for c in graph_input.get("conflicts", [])
     )

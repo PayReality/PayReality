@@ -16,10 +16,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
+    Authority,
     AuthorityConflict,
     AuthorityCorpus,
     AuthorityCorpusDocument,
     AuthorityGap,
+    AuthorityGraphApproval,
     AuthorityOperation,
     AuthorityPrincipal,
     AuthorityQuestion,
@@ -28,10 +30,16 @@ from app.db.models import (
     PolicyExtractionCandidate,
     Principal,
 )
-from app.domain.ai_authority_builder.provider import AuthorityGraph, AuthorityGraphExtractionProvider
-from app.domain.ai_policy_builder.text_extraction import extract_text
+from app.domain.ai_authority_builder.provider import (
+    AuthorityGraph,
+    AuthorityGraphExtractionProvider,
+    CandidateConflict,
+)
+from app.domain.decision.scope_vocabulary import KNOWN_SCOPES
+from app.domain.evidence.signing import payload_hash
+from app.domain.ai_policy_builder.text_extraction import extract_text, extract_text_with_coverage
 from app.services import authority_intelligence_service
-from app.services.ai_policy_builder_service import candidate_to_content
+from app.services.ai_policy_builder_service import _infer_amount_limit, candidate_to_content
 
 
 class CorpusNotFoundError(Exception):
@@ -107,9 +115,18 @@ def add_document(db: Session, corpus: AuthorityCorpus, filename: str, format: st
             doc.blob_path = blob_path
             db.commit()
             db.refresh(doc)
-        authority_intelligence_service.index_document(
-            corpus.id, doc.id, filename, format, extract_text(format, raw), blob_path
-        )
+        text, coverage = extract_text_with_coverage(format, raw)
+        # Coverage Analysis (Phase 3): deterministic parsing statistics,
+        # persisted alongside the document regardless of whether Blob/
+        # Search ingestion above succeeded -- coverage describes what the
+        # parser itself saw, not what got indexed.
+        doc.clauses_analysed = coverage.clauses_analysed
+        doc.clauses_ignored = coverage.clauses_ignored
+        doc.tables_extracted = coverage.tables_extracted
+        doc.images_skipped = coverage.images_skipped
+        db.commit()
+        db.refresh(doc)
+        authority_intelligence_service.index_document(corpus.id, doc.id, filename, format, text, blob_path)
     except Exception:
         logging.getLogger("payreality.authority_intelligence").exception(
             "authority_intelligence_ingestion_failed corpus_id=%s document_id=%s", corpus.id, doc.id
@@ -165,6 +182,10 @@ def run_extraction(
                 source_excerpt=policy.source_excerpt,
                 source_location=policy.source_location,
                 status="pending_review",
+                clause_reference=policy.clause_reference,
+                extraction_reasoning=policy.extraction_reasoning,
+                detected_assumptions=list(policy.detected_assumptions),
+                ambiguity_flags=list(policy.ambiguity_flags),
             )
         )
 
@@ -173,6 +194,8 @@ def run_extraction(
             AuthorityPrincipal(
                 id=uuid.uuid4(), corpus_id=corpus.id, name=p.name, role=p.role, reports_to=p.reports_to,
                 confidence=p.confidence, source_excerpt=p.source_excerpt, source_location=p.source_location,
+                clause_reference=p.clause_reference, extraction_reasoning=p.extraction_reasoning,
+                detected_assumptions=list(p.detected_assumptions), ambiguity_flags=list(p.ambiguity_flags),
             )
         )
 
@@ -181,6 +204,8 @@ def run_extraction(
             AuthorityResource(
                 id=uuid.uuid4(), corpus_id=corpus.id, name=r.name, description=r.description,
                 confidence=r.confidence, source_excerpt=r.source_excerpt, source_location=r.source_location,
+                clause_reference=r.clause_reference, extraction_reasoning=r.extraction_reasoning,
+                detected_assumptions=list(r.detected_assumptions), ambiguity_flags=list(r.ambiguity_flags),
             )
         )
 
@@ -189,6 +214,8 @@ def run_extraction(
             AuthorityOperation(
                 id=uuid.uuid4(), corpus_id=corpus.id, name=o.name, description=o.description,
                 confidence=o.confidence, source_excerpt=o.source_excerpt, source_location=o.source_location,
+                clause_reference=o.clause_reference, extraction_reasoning=o.extraction_reasoning,
+                detected_assumptions=list(o.detected_assumptions), ambiguity_flags=list(o.ambiguity_flags),
             )
         )
 
@@ -199,14 +226,24 @@ def run_extraction(
                 from_principal=rel.from_principal, to_principal=rel.to_principal,
                 description=rel.description, confidence=rel.confidence,
                 source_excerpt=rel.source_excerpt, source_location=rel.source_location,
+                clause_reference=rel.clause_reference, extraction_reasoning=rel.extraction_reasoning,
+                detected_assumptions=list(rel.detected_assumptions), ambiguity_flags=list(rel.ambiguity_flags),
             )
         )
 
-    for c in graph.conflicts:
+    # Conflict Workspace (Phase 3): the model's own reported conflicts,
+    # PLUS deterministic circular-delegation detection over the same
+    # graph -- independent confirmation, not a duplicate of the same
+    # judgment. reviewer_recommendation is computed for every conflict
+    # here, in Python, never asked of the model (see AuthorityConflict's
+    # own docstring for why).
+    all_conflicts = list(graph.conflicts) + detect_circular_delegations(graph)
+    for c in all_conflicts:
         db.add(
             AuthorityConflict(
                 id=uuid.uuid4(), corpus_id=corpus.id, description=c.description,
-                reasoning=c.reasoning, confidence=c.confidence,
+                reasoning=c.reasoning, confidence=c.confidence, conflict_type=c.conflict_type,
+                reviewer_recommendation=_reviewer_recommendation(c.conflict_type, c.confidence),
             )
         )
 
@@ -462,3 +499,335 @@ def activate_relationship(db: Session, relationship_id: uuid.UUID) -> AuthorityR
     db.commit()
     db.refresh(relationship)
     return relationship
+
+
+# --- Phase 3: Conflict Workspace, deterministic detection --------------
+
+
+def detect_circular_delegations(graph: AuthorityGraph) -> list[CandidateConflict]:
+    """Deterministic graph-cycle detection over this extraction's own
+    `delegation`-kind relationships (by extracted name, before principal
+    resolution -- the whole point is to catch this before a reviewer has
+    to resolve anything). Deliberately restricted to `delegation` edges:
+    an escalation edge pointing back up a delegation chain is normal
+    hierarchy, not a cycle -- see EXPLAINABILITY_MODEL.md's Conflict
+    Workspace section. Never asks the model to do this: a human-authored
+    corpus can name far more principals than a model can reliably trace
+    a multi-hop cycle across in one pass, so this is checked in code,
+    with confidence=1.0 because it is a graph fact, not a probabilistic
+    claim."""
+    edges: dict[str, set[str]] = {}
+    for rel in graph.relationships:
+        if rel.kind != "delegation":
+            continue
+        edges.setdefault(rel.from_principal.strip().lower(), set()).add(rel.to_principal.strip().lower())
+
+    found: list[CandidateConflict] = []
+    seen_cycles: set[frozenset] = set()
+
+    def dfs(node: str, path: list[str], visiting: frozenset) -> None:
+        if node in visiting:
+            # `path` already ends with `node` -- the caller appends the
+            # neighbor before recursing, so slicing from its first
+            # occurrence is the whole cycle already closed.
+            cycle = path[path.index(node):]
+            key = frozenset(cycle)
+            if key not in seen_cycles:
+                seen_cycles.add(key)
+                found.append(
+                    CandidateConflict(
+                        description=f"Circular delegation detected: {' -> '.join(cycle)}.",
+                        confidence=1.0,
+                        reasoning="Detected by deterministic delegation-chain analysis (graph cycle "
+                        "detection), not the extraction model.",
+                        conflict_type="circular_delegation",
+                    )
+                )
+            return
+        for neighbor in edges.get(node, ()):
+            dfs(neighbor, path + [neighbor], visiting | {node})
+
+    for start in edges:
+        dfs(start, [start], frozenset())
+
+    return found
+
+
+def _reviewer_recommendation(conflict_type: str | None, confidence: float) -> str:
+    """Never asked of the model -- computed deterministically from
+    conflict_type/confidence, so this column is always populated from
+    auditable Python logic (Phase 3's "only deterministic evidence
+    stored" security principle). Every conflict recommends human review
+    (this platform never auto-resolves one); the wording differs only to
+    tell a reviewer which conflicts to look at first."""
+    if conflict_type == "circular_delegation":
+        return "Human Review Required -- Circular Delegation"
+    if confidence < 0.7:
+        return "Human Review -- Low Confidence, Verify Manually"
+    return "Human Review"
+
+
+# --- Phase 3: Missing Information Detection -----------------------------
+
+
+def detect_missing_information(db: Session, corpus_id: uuid.UUID) -> list[dict]:
+    """Deterministic, code-computed pass over already-persisted rows --
+    independent of, and a backstop for, the model's own self-reported
+    Gaps/Questions (EXPLAINABILITY_MODEL.md's Missing Information
+    Detection section). Every item here is read directly from stored
+    data, never re-asked of an LLM."""
+    items: list[dict] = []
+
+    principals = list_principals(db, corpus_id)
+    for p in principals:
+        if not p.reports_to:
+            items.append({
+                "category": "unknown_reporting_line",
+                "subject": p.name,
+                "description": f"No reporting line stated for {p.name}.",
+            })
+
+    policies = list(
+        db.scalars(select(PolicyExtractionCandidate).where(PolicyExtractionCandidate.corpus_id == corpus_id))
+    )
+    principal_by_name = {p.name.strip().lower(): p for p in principals}
+    policy_principal_names: set[str] = set()
+    for row in policies:
+        scope = row.content.get("scope") or {}
+        principal_name, action = scope.get("principal"), scope.get("action")
+        if principal_name:
+            policy_principal_names.add(principal_name.strip().lower())
+        if action in KNOWN_SCOPES and _infer_amount_limit(row.content) is None:
+            items.append({
+                "category": "unknown_spending_limit",
+                "subject": principal_name,
+                "description": f"No numeric spending limit stated for {principal_name}'s {action} authority.",
+            })
+        constraints = row.content.get("constraints") or {}
+        if not constraints.get("delegated_by"):
+            holder = principal_by_name.get((principal_name or "").strip().lower())
+            if holder is not None and holder.reports_to:
+                items.append({
+                    "category": "missing_delegation",
+                    "subject": principal_name,
+                    "description": f"{principal_name} exercises {action} authority but no delegation "
+                    "source is stated.",
+                })
+
+    relationships = list_relationships(db, corpus_id)
+    for rel in relationships:
+        if rel.from_principal_id is None or rel.to_principal_id is None:
+            items.append({
+                "category": "undefined_approver",
+                "subject": f"{rel.from_principal} -> {rel.to_principal}",
+                "description": f"{rel.from_principal} -> {rel.to_principal} ({rel.kind}) has not been "
+                "resolved to real, known Principals.",
+            })
+        if rel.status == "active" and rel.to_principal.strip().lower() not in policy_principal_names:
+            items.append({
+                "category": "missing_policy",
+                "subject": rel.to_principal,
+                "description": f"{rel.to_principal} has an active delegation but no Runtime Policy "
+                "candidate governs their authority.",
+            })
+
+    return items
+
+
+# --- Phase 3: Coverage Analysis -----------------------------------------
+
+
+def get_coverage(db: Session, corpus_id: uuid.UUID) -> dict:
+    """Aggregates the deterministic, parser-level CoverageStats each
+    document already recorded at upload time (add_document ->
+    extract_text_with_coverage) -- never an LLM's self-report of its own
+    completeness. `sections_unsupported` is honestly 0: every document
+    that reached this corpus parsed successfully by definition (an
+    unsupported format is rejected before a document row is ever
+    created, see routers/ai_authority_builder.py's create_corpus)."""
+    documents = list_documents(db, corpus_id)
+    clauses_analysed = sum(d.clauses_analysed or 0 for d in documents)
+    clauses_ignored = sum(d.clauses_ignored or 0 for d in documents)
+    tables_extracted = sum(d.tables_extracted or 0 for d in documents)
+    images_skipped = sum(d.images_skipped or 0 for d in documents)
+    total = clauses_analysed + clauses_ignored
+    return {
+        "documents_processed": len(documents),
+        "clauses_analysed": clauses_analysed,
+        "clauses_ignored": clauses_ignored,
+        "tables_extracted": tables_extracted,
+        "images_skipped": images_skipped,
+        "sections_unsupported": 0,
+        "coverage_percent": round(100.0 * clauses_analysed / total, 1) if total else 100.0,
+    }
+
+
+# --- Phase 3: Graph Diff -------------------------------------------------
+
+
+def get_graph_diff(db: Session, corpus_id: uuid.UUID) -> dict:
+    """Task 7: this corpus's candidate graph vs. the Authority Graph
+    already in force for the same organisation -- a deterministic set/
+    value comparison, since the model already did its extraction job;
+    diffing is not a second extraction task."""
+    corpus = get_corpus(db, corpus_id)
+    candidate_principals = list_principals(db, corpus_id)
+    candidate_policies = list(
+        db.scalars(select(PolicyExtractionCandidate).where(PolicyExtractionCandidate.corpus_id == corpus_id))
+    )
+
+    new_authorities: list[dict] = []
+    changed_reporting_lines: list[dict] = []
+    changed_responsibilities: list[dict] = []
+    for p in candidate_principals:
+        if p.resolved_principal_id is None:
+            new_authorities.append({"name": p.name, "role": p.role})
+            continue
+        prior = db.scalar(
+            select(AuthorityPrincipal)
+            .where(AuthorityPrincipal.resolved_principal_id == p.resolved_principal_id)
+            .where(AuthorityPrincipal.corpus_id != corpus_id)
+            .order_by(AuthorityPrincipal.created_at.desc())
+        )
+        if prior is None:
+            continue
+        if (prior.reports_to or "").strip().lower() != (p.reports_to or "").strip().lower():
+            changed_reporting_lines.append({
+                "name": p.name, "previous_reports_to": prior.reports_to, "new_reports_to": p.reports_to,
+            })
+        if (prior.role or "").strip().lower() != (p.role or "").strip().lower():
+            changed_responsibilities.append({
+                "name": p.name, "previous_role": prior.role, "new_role": p.role,
+            })
+
+    new_thresholds: list[dict] = []
+    changed_thresholds: list[dict] = []
+    candidate_scope_keys: set[tuple[str, str]] = set()
+    for row in candidate_policies:
+        scope = row.content.get("scope") or {}
+        principal_name, action = scope.get("principal"), scope.get("action")
+        if not principal_name or not action:
+            continue
+        candidate_scope_keys.add((principal_name.strip().lower(), action))
+        new_limit = _infer_amount_limit(row.content)
+        existing = db.scalar(
+            select(Authority)
+            .join(Principal, Authority.principal_id == Principal.id)
+            .where(func.lower(Principal.name) == principal_name.strip().lower())
+            .where(Authority.scope == action)
+            .where(Authority.status == "approved")
+            .order_by(Authority.created_at.desc())
+        )
+        if existing is None:
+            new_thresholds.append({"principal": principal_name, "action": action, "limit": new_limit})
+        else:
+            previous_limit = float(existing.limit_amount) if existing.limit_amount is not None else None
+            if previous_limit != new_limit:
+                changed_thresholds.append({
+                    "principal": principal_name, "action": action,
+                    "previous_limit": previous_limit, "new_limit": new_limit,
+                })
+
+    removed_authorities: list[dict] = []
+    if corpus.organization_id is not None:
+        existing_for_org = list(
+            db.scalars(
+                select(Authority)
+                .join(Principal, Authority.principal_id == Principal.id)
+                .where(Principal.organization_id == corpus.organization_id)
+                .where(Authority.status == "approved")
+            )
+        )
+        for a in existing_for_org:
+            principal = db.get(Principal, a.principal_id)
+            if principal is None:
+                continue
+            key = (principal.name.strip().lower(), a.scope)
+            if key not in candidate_scope_keys:
+                removed_authorities.append({"principal": principal.name, "action": a.scope})
+
+    return {
+        "new_authorities": new_authorities,
+        "removed_authorities": removed_authorities,
+        "new_thresholds": new_thresholds,
+        "changed_thresholds": changed_thresholds,
+        "changed_reporting_lines": changed_reporting_lines,
+        "changed_responsibilities": changed_responsibilities,
+    }
+
+
+# --- Phase 3: Approval Audit ---------------------------------------------
+
+
+def _corpus_evidence_snapshot(db: Session, corpus_id: uuid.UUID) -> dict:
+    """Everything a reviewer saw when they approved this graph, captured
+    as plain data -- never a reference that could later change
+    underneath the approval record. Field order doesn't matter here:
+    canonicalize() (domain/evidence/signing.py, reused unchanged) sorts
+    keys before hashing, exactly as it already does for Decision
+    Evidence."""
+    return {
+        "principals": [
+            {"id": str(p.id), "name": p.name, "role": p.role, "reports_to": p.reports_to,
+             "confidence": p.confidence, "resolved_principal_id": str(p.resolved_principal_id) if p.resolved_principal_id else None}
+            for p in list_principals(db, corpus_id)
+        ],
+        "relationships": [
+            {"id": str(r.id), "kind": r.kind, "from_principal": r.from_principal, "to_principal": r.to_principal,
+             "status": r.status, "confidence": r.confidence}
+            for r in list_relationships(db, corpus_id)
+        ],
+        "conflicts": [
+            {"id": str(c.id), "description": c.description, "conflict_type": c.conflict_type,
+             "reviewer_recommendation": c.reviewer_recommendation, "confidence": c.confidence}
+            for c in list_conflicts(db, corpus_id)
+        ],
+        "gaps": [{"id": str(g.id), "description": g.description} for g in list_gaps(db, corpus_id)],
+        "coverage": get_coverage(db, corpus_id),
+    }
+
+
+def approve_graph(
+    db: Session, corpus_id: uuid.UUID, reviewer: str, approval_reason: str | None = None
+) -> AuthorityGraphApproval:
+    """Task 8: an ADDITIVE audit record of the reviewer's "I have
+    reviewed this corpus's Authority Graph" decision. Deliberately does
+    NOT itself promote, resolve, or activate anything -- the existing,
+    unmodified per-item workflow (resolve_principal, resolve_relationship,
+    activate_relationship, ai_policy_builder_service.promote_candidate)
+    is what does that, exactly as before this phase. This function only
+    ever appends a new, immutable row; corpus_id+version is unique, so
+    calling it again for the same corpus creates the next version rather
+    than overwriting anything."""
+    version = (
+        db.scalar(
+            select(func.max(AuthorityGraphApproval.version)).where(
+                AuthorityGraphApproval.corpus_id == corpus_id
+            )
+        )
+        or 0
+    ) + 1
+    snapshot = _corpus_evidence_snapshot(db, corpus_id)
+    approval = AuthorityGraphApproval(
+        id=uuid.uuid4(),
+        corpus_id=corpus_id,
+        reviewer=reviewer,
+        version=version,
+        evidence_snapshot=snapshot,
+        approval_reason=approval_reason,
+        graph_hash=payload_hash(snapshot),
+    )
+    db.add(approval)
+    db.commit()
+    db.refresh(approval)
+    return approval
+
+
+def list_approvals(db: Session, corpus_id: uuid.UUID) -> list[AuthorityGraphApproval]:
+    return list(
+        db.scalars(
+            select(AuthorityGraphApproval)
+            .where(AuthorityGraphApproval.corpus_id == corpus_id)
+            .order_by(AuthorityGraphApproval.version.desc())
+        )
+    )

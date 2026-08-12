@@ -12,12 +12,33 @@ itself to.
 
 import csv
 import io
+from dataclasses import dataclass
 
 import openpyxl
 from docx import Document as DocxDocument
 from pypdf import PdfReader
 
 SUPPORTED_FORMATS = ("pdf", "docx", "xlsx", "csv", "text")
+
+
+@dataclass(frozen=True)
+class CoverageStats:
+    """Coverage Analysis (Authority Intelligence Program, Phase 3,
+    EXPLAINABILITY_MODEL.md): deterministic counts produced by the
+    parser itself, never an LLM's self-report of how much of a document
+    it "covered." A `clause` here means whatever this format's own
+    location marker in extract_text() denotes -- a PDF page, a docx
+    paragraph/table row, an xlsx/csv row."""
+
+    clauses_analysed: int
+    clauses_ignored: int
+    tables_extracted: int
+    images_skipped: int
+
+    @property
+    def coverage_percent(self) -> float:
+        total = self.clauses_analysed + self.clauses_ignored
+        return round(100.0 * self.clauses_analysed / total, 1) if total else 100.0
 
 _EXTENSION_TO_FORMAT = {
     ".pdf": "pdf",
@@ -124,3 +145,101 @@ def extract_text(format: str, raw: bytes) -> str:
     if format not in _EXTRACTORS:
         raise UnsupportedFormatError(f"unsupported_format: {format!r}")
     return _EXTRACTORS[format](raw)
+
+
+def _extract_pdf_with_coverage(raw: bytes) -> tuple[str, CoverageStats]:
+    reader = PdfReader(io.BytesIO(raw))
+    parts = []
+    analysed = ignored = images = 0
+    for i, page in enumerate(reader.pages):
+        text = page.extract_text() or ""
+        parts.append(f"--- page {i + 1} ---\n{text}")
+        if text.strip():
+            analysed += 1
+        else:
+            # A page with no extractable text -- most commonly a scanned
+            # image with no text layer. Genuinely unsupported by this
+            # extractor (no OCR here), not silently treated as "empty and
+            # fine": it's counted so a reviewer can see it happened.
+            ignored += 1
+        try:
+            images += len(page.images)
+        except Exception:
+            pass
+    return "\n\n".join(parts), CoverageStats(analysed, ignored, 0, images)
+
+
+def _extract_docx_with_coverage(raw: bytes) -> tuple[str, CoverageStats]:
+    doc = DocxDocument(io.BytesIO(raw))
+    parts = []
+    n = analysed = ignored = 0
+    for para in doc.paragraphs:
+        if not para.text.strip():
+            ignored += 1
+            continue
+        n += 1
+        analysed += 1
+        parts.append(f"--- paragraph {n} ---\n{para.text}")
+    for table in doc.tables:
+        for row in table.rows:
+            n += 1
+            analysed += 1
+            cells = [c.text for c in row.cells]
+            parts.append(f"--- paragraph {n} ---\n{chr(9).join(cells)}")
+    images_skipped = len(doc.inline_shapes)
+    return "\n\n".join(parts), CoverageStats(analysed, ignored, len(doc.tables), images_skipped)
+
+
+def _extract_xlsx_with_coverage(raw: bytes) -> tuple[str, CoverageStats]:
+    workbook = openpyxl.load_workbook(io.BytesIO(raw), data_only=True, read_only=True)
+    parts = []
+    analysed = ignored = 0
+    for sheet in workbook.worksheets:
+        for row_idx, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+            if all(cell is None for cell in row):
+                ignored += 1
+                continue
+            analysed += 1
+            cells = ["" if cell is None else str(cell) for cell in row]
+            parts.append(f"--- sheet '{sheet.title}', row {row_idx} ---\n{chr(9).join(cells)}")
+    return "\n\n".join(parts), CoverageStats(analysed, ignored, len(workbook.worksheets), 0)
+
+
+def _extract_csv_with_coverage(raw: bytes) -> tuple[str, CoverageStats]:
+    text = raw.decode("utf-8", errors="replace")
+    parts = []
+    analysed = ignored = 0
+    for row_idx, row in enumerate(csv.reader(io.StringIO(text)), start=1):
+        if not any(cell.strip() for cell in row):
+            ignored += 1
+            continue
+        analysed += 1
+        parts.append(f"--- row {row_idx} ---\n{chr(9).join(row)}")
+    return "\n\n".join(parts), CoverageStats(analysed, ignored, 1, 0)
+
+
+def _extract_text_with_coverage(raw: bytes) -> tuple[str, CoverageStats]:
+    text = raw.decode("utf-8", errors="replace")
+    analysed = 1 if text.strip() else 0
+    return f"--- document ---\n{text}", CoverageStats(analysed, 1 - analysed, 0, 0)
+
+
+_EXTRACTORS_WITH_COVERAGE = {
+    "pdf": _extract_pdf_with_coverage,
+    "docx": _extract_docx_with_coverage,
+    "xlsx": _extract_xlsx_with_coverage,
+    "csv": _extract_csv_with_coverage,
+    "text": _extract_text_with_coverage,
+}
+
+
+def extract_text_with_coverage(format: str, raw: bytes) -> tuple[str, CoverageStats]:
+    """Coverage Analysis (Phase 3): same marked-up text as extract_text(),
+    plus deterministic parsing statistics. A NEW function, not a change
+    to extract_text()'s signature -- the original AI Policy Builder's
+    single-document upload path keeps calling extract_text() completely
+    unchanged; only the AI Authority Builder's corpus path (Phase 3) calls
+    this one, so there is no behavior change for any existing caller."""
+    if format not in _EXTRACTORS_WITH_COVERAGE:
+        raise UnsupportedFormatError(f"unsupported_format: {format!r}")
+    return _EXTRACTORS_WITH_COVERAGE[format](raw)

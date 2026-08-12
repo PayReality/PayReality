@@ -2,8 +2,12 @@ import { apiClient } from "../live/apiClient";
 import type {
   Conflict,
   Corpus,
+  Coverage,
   Gap,
+  GraphApproval,
+  GraphDiff,
   GraphSummary,
+  MissingInformationItem,
   Operation,
   Principal,
   PrincipalCandidate,
@@ -45,4 +49,13 @@ export const aiAuthorityBuilderApi = {
     apiClient.post<Relationship>(`${BASE}/relationships/${relationshipId}/resolve`),
   activateRelationship: (relationshipId: string) =>
     apiClient.post<Relationship>(`${BASE}/relationships/${relationshipId}/activate`),
+
+  // Authority Intelligence Program, Phase 3: Explainability & Human Review.
+  getCoverage: (corpusId: string) => apiClient.get<Coverage>(`${BASE}/corpora/${corpusId}/coverage`),
+  getMissingInformation: (corpusId: string) =>
+    apiClient.get<MissingInformationItem[]>(`${BASE}/corpora/${corpusId}/missing-information`),
+  getDiff: (corpusId: string) => apiClient.get<GraphDiff>(`${BASE}/corpora/${corpusId}/diff`),
+  approveGraph: (corpusId: string, approvalReason?: string) =>
+    apiClient.post<GraphApproval>(`${BASE}/corpora/${corpusId}/approve`, { approval_reason: approvalReason ?? null }),
+  getApprovals: (corpusId: string) => apiClient.get<GraphApproval[]>(`${BASE}/corpora/${corpusId}/approvals`),
 };

@@ -793,6 +793,17 @@ class PolicyExtractionCandidate(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False)
     promoted_policy_key: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Explainability Model (Phase 3): the "extracted threshold" category
+    # from EXPLAINABILITY_MODEL.md -- same four columns as the Authority
+    # Graph's own entity/relationship tables, kept at the row level here
+    # for the same reason confidence/source_excerpt/source_location
+    # already are: `content`'s JSON shape is the RuntimePolicyRequest
+    # itself (RUNTIME_POLICY_MAPPING.md), not an extension point for
+    # extraction metadata.
+    clause_reference: Mapped[str | None] = mapped_column(Text)
+    extraction_reasoning: Mapped[str | None] = mapped_column(Text)
+    detected_assumptions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    ambiguity_flags: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     __table_args__ = (
         CheckConstraint(
@@ -862,6 +873,19 @@ class AuthorityCorpusDocument(Base):
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     blob_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Coverage Analysis (Phase 3, EXPLAINABILITY_MODEL.md): deterministic
+    # counts from the text-extraction step itself (domain/ai_policy_builder/
+    # text_extraction.py's extract_text_with_coverage), never an LLM's
+    # self-report -- a reviewer's "how much of this document did the
+    # system actually see" question has to be answered by real parsing
+    # statistics, not a model's guess about its own completeness. All
+    # nullable: every document uploaded before this phase, and every
+    # document whose extraction predates this column existing, simply has
+    # no coverage figures rather than a fabricated zero.
+    clauses_analysed: Mapped[int | None]
+    clauses_ignored: Mapped[int | None]
+    tables_extracted: Mapped[int | None]
+    images_skipped: Mapped[int | None]
 
     __table_args__ = (
         CheckConstraint(
@@ -904,6 +928,15 @@ class AuthorityPrincipal(Base):
     resolved_principal_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("principals.id")
     )
+    # Explainability Model (Authority Intelligence Program, Phase 3,
+    # EXPLAINABILITY_MODEL.md): first-class columns, not fields buried
+    # inside a JSON blob of raw LLM output -- a reviewer's "why was this
+    # extracted" question is answered by a real column, queryable and
+    # displayable the same way source_excerpt/source_location already are.
+    clause_reference: Mapped[str | None] = mapped_column(Text)
+    extraction_reasoning: Mapped[str | None] = mapped_column(Text)
+    detected_assumptions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    ambiguity_flags: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     __table_args__ = (Index("idx_authority_principals_corpus", "corpus_id"),)
 
@@ -925,6 +958,11 @@ class AuthorityResource(Base):
     source_excerpt: Mapped[str | None] = mapped_column(Text)
     source_location: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Explainability Model (Phase 3) -- see AuthorityPrincipal's comment.
+    clause_reference: Mapped[str | None] = mapped_column(Text)
+    extraction_reasoning: Mapped[str | None] = mapped_column(Text)
+    detected_assumptions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    ambiguity_flags: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     __table_args__ = (Index("idx_authority_resources_corpus", "corpus_id"),)
 
@@ -945,6 +983,11 @@ class AuthorityOperation(Base):
     source_excerpt: Mapped[str | None] = mapped_column(Text)
     source_location: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Explainability Model (Phase 3) -- see AuthorityPrincipal's comment.
+    clause_reference: Mapped[str | None] = mapped_column(Text)
+    extraction_reasoning: Mapped[str | None] = mapped_column(Text)
+    detected_assumptions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    ambiguity_flags: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     __table_args__ = (Index("idx_authority_operations_corpus", "corpus_id"),)
 
@@ -996,6 +1039,11 @@ class AuthorityRelationship(Base):
     # flagged -- fail-closed default, never silently possible just
     # because a name happened to resolve across an org boundary.
     cross_org_approved: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    # Explainability Model (Phase 3) -- see AuthorityPrincipal's comment.
+    clause_reference: Mapped[str | None] = mapped_column(Text)
+    extraction_reasoning: Mapped[str | None] = mapped_column(Text)
+    detected_assumptions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    ambiguity_flags: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     __table_args__ = (
         CheckConstraint(
@@ -1026,8 +1074,29 @@ class AuthorityConflict(Base):
     reasoning: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Conflict Workspace (Phase 3, EXPLAINABILITY_MODEL.md): conflict_type
+    # is the model's own classification (extraction_shared.py's tool
+    # schema); circular_delegation conflicts may also be added
+    # independently by deterministic graph analysis
+    # (ai_authority_builder_service.detect_circular_delegations), never by
+    # the model guessing at a cycle across principals it can't see the
+    # whole graph for. reviewer_recommendation is NEVER asked of the
+    # model -- it's computed deterministically from conflict_type/
+    # confidence in the service layer, so this column is always populated
+    # from auditable Python logic, never a second, opaque round of AI
+    # judgment (Phase 3's own "only deterministic evidence stored"
+    # security principle).
+    conflict_type: Mapped[str | None] = mapped_column(Text)
+    reviewer_recommendation: Mapped[str | None] = mapped_column(Text)
 
-    __table_args__ = (Index("idx_authority_conflicts_corpus", "corpus_id"),)
+    __table_args__ = (
+        CheckConstraint(
+            "conflict_type IS NULL OR conflict_type IN "
+            "('authority','threshold','role','policy','delegation','circular_delegation')",
+            name="ck_authority_conflicts_conflict_type",
+        ),
+        Index("idx_authority_conflicts_corpus", "corpus_id"),
+    )
 
 
 class AuthorityGap(Base):
@@ -1068,3 +1137,44 @@ class AuthorityQuestion(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     __table_args__ = (Index("idx_authority_questions_corpus", "corpus_id"),)
+
+
+class AuthorityGraphApproval(Base):
+    """Approval Audit (Authority Intelligence Program, Phase 3,
+    EXPLAINABILITY_MODEL.md): one immutable row per "approve this
+    corpus's Authority Graph" reviewer action
+    (ai_authority_builder_service.approve_graph). Never updated or
+    deleted, same discipline as `evidence` and `agent_audit_events`.
+
+    This is an ADDITIVE audit record layered on top of the existing,
+    unmodified per-item approval workflow (resolve_principal/
+    resolve_relationship/activate_relationship,
+    ai_policy_builder_service.promote_candidate) -- it does not change
+    what any of those functions do, and approving a graph here does not
+    itself promote or activate anything. It exists so a reviewer's
+    decision to treat a corpus as reviewed is itself a permanent,
+    independently-verifiable record, the same way an Evidence row is a
+    permanent record of a Decision.
+
+    `graph_hash` reuses domain/evidence/signing.py's canonicalize()/
+    payload_hash() pattern unchanged -- SHA-256 of the sorted-key,
+    whitespace-free JSON of `evidence_snapshot` -- rather than inventing
+    a second hashing scheme for the same purpose."""
+
+    __tablename__ = "authority_graph_approvals"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    corpus_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("authority_corpora.id"), nullable=False
+    )
+    reviewer: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(nullable=False)
+    evidence_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    approval_reason: Mapped[str | None] = mapped_column(Text)
+    graph_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("corpus_id", "version", name="uq_authority_graph_approvals_corpus_version"),
+        Index("idx_authority_graph_approvals_corpus", "corpus_id"),
+    )
