@@ -5,8 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.db.models import Organization
 from app.db.session import get_db
+from app.dependencies import get_current_organization, require_permission
 from app.domain.evidence.signing import public_key_b64_from_signing_key_b64
+from app.domain.rbac.permissions import Permission
 from app.schemas.evidence import (
     ChainVerificationResponse,
     EvidenceResponse,
@@ -59,27 +62,54 @@ def get_verification_key_history(db: Session = Depends(get_db)):
     )
 
 
-@router.get("/{evidence_id}", response_model=EvidenceResponse)
-def get_evidence(evidence_id: UUID, db: Session = Depends(get_db)):
-    """spec 19.6."""
-    evidence = evidence_service.get_evidence(db, evidence_id)
+@router.get(
+    "/{evidence_id}", response_model=EvidenceResponse,
+    dependencies=[Depends(require_permission(Permission.EVIDENCE_VIEW))],
+)
+def get_evidence(
+    evidence_id: UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    """spec 19.6. Milestone 1 (Security & Authorization Hardening):
+    permission-gated and org-scoped -- a record belonging to a different
+    organisation 404s identically to one that doesn't exist."""
+    evidence = evidence_service.get_evidence(db, evidence_id, organization.id)
     if evidence is None:
         raise HTTPException(status_code=404, detail="evidence_not_found")
     return EvidenceResponse.from_model(evidence)
 
 
-@router.get("", response_model=list[EvidenceResponse])
-def list_evidence(decision_id: UUID | None = None, db: Session = Depends(get_db)):
-    """spec 19.6."""
-    return [EvidenceResponse.from_model(e) for e in evidence_service.list_evidence(db, decision_id)]
+@router.get(
+    "", response_model=list[EvidenceResponse],
+    dependencies=[Depends(require_permission(Permission.EVIDENCE_VIEW))],
+)
+def list_evidence(
+    decision_id: UUID | None = None,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    """spec 19.6. Milestone 1: permission-gated and org-scoped."""
+    return [
+        EvidenceResponse.from_model(e)
+        for e in evidence_service.list_evidence(db, organization.id, decision_id)
+    ]
 
 
-@router.post("/{evidence_id}/verify", response_model=VerifyEvidenceResponse)
-def verify_evidence(evidence_id: UUID, db: Session = Depends(get_db)):
+@router.post(
+    "/{evidence_id}/verify", response_model=VerifyEvidenceResponse,
+    dependencies=[Depends(require_permission(Permission.EVIDENCE_VIEW))],
+)
+def verify_evidence(
+    evidence_id: UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     """spec 19.7 / 17.5. A False result indicates tampering or corruption
-    and must be treated as a P1 operational incident by the caller."""
+    and must be treated as a P1 operational incident by the caller.
+    Milestone 1: permission-gated and org-scoped, same as get/list above."""
     try:
-        valid, key_id = evidence_service.verify_evidence(db, evidence_id)
+        valid, key_id = evidence_service.verify_evidence(db, evidence_id, organization.id)
     except EvidenceNotFoundError:
         raise HTTPException(status_code=404, detail="evidence_not_found")
 

@@ -40,18 +40,28 @@ class ChainVerificationResult:
         return not self.invalid_signatures and not self.broken_links
 
 
-def get_evidence(db: Session, evidence_id: uuid.UUID) -> Evidence | None:
-    return db.get(Evidence, evidence_id)
+def get_evidence(db: Session, evidence_id: uuid.UUID, organization_id: uuid.UUID) -> Evidence | None:
+    """Milestone 1 (Security & Authorization Hardening): org-scoped by
+    construction. A record belonging to a different organisation is
+    treated identically to a record that doesn't exist -- never
+    distinguished from a genuine 404 -- so this can't be used to probe
+    for another org's evidence IDs."""
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.organization_id != organization_id:
+        return None
+    return evidence
 
 
-def list_evidence(db: Session, decision_id: uuid.UUID | None = None) -> list[Evidence]:
-    stmt = select(Evidence)
+def list_evidence(
+    db: Session, organization_id: uuid.UUID, decision_id: uuid.UUID | None = None
+) -> list[Evidence]:
+    stmt = select(Evidence).where(Evidence.organization_id == organization_id)
     if decision_id is not None:
         stmt = stmt.where(Evidence.decision_id == decision_id)
     return list(db.scalars(stmt.order_by(Evidence.created_at)))
 
 
-def verify_evidence(db: Session, evidence_id: uuid.UUID) -> tuple[bool, str]:
+def verify_evidence(db: Session, evidence_id: uuid.UUID, organization_id: uuid.UUID) -> tuple[bool, str]:
     """spec 17.5. A False result is a P1-severity signal for the caller to
     surface, not something this function itself escalates: verification
     is a query, not an alerting action.
@@ -63,9 +73,14 @@ def verify_evidence(db: Session, evidence_id: uuid.UUID) -> tuple[bool, str]:
     a key_id has no registry entry is a defensive safety net (should not
     happen once `ensure_current_key_registered` has run at least once),
     never a regression from this table's pre-registry behavior.
+
+    Milestone 1 (Security & Authorization Hardening): org-scoped the same
+    way get_evidence/list_evidence now are -- a caller cannot use this to
+    learn whether an evidence_id belonging to another organisation
+    exists, let alone whether its signature is valid.
     """
     evidence = db.get(Evidence, evidence_id)
-    if evidence is None:
+    if evidence is None or evidence.organization_id != organization_id:
         raise EvidenceNotFoundError(str(evidence_id))
 
     public_key = signing_key_service.get_public_key_for_key_id(db, evidence.key_id)

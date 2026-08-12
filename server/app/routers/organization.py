@@ -89,8 +89,10 @@ def get_health():
     response_model=list[EvidenceResponse],
     dependencies=[Depends(require_permission(Permission.AUDIT_EXPORT))],
 )
-def export_evidence(db: Session = Depends(get_db)):
-    return [EvidenceResponse.from_model(e) for e in evidence_service.list_evidence(db)]
+def export_evidence(
+    organization: Organization = Depends(get_current_organization), db: Session = Depends(get_db)
+):
+    return [EvidenceResponse.from_model(e) for e in evidence_service.list_evidence(db, organization.id)]
 
 
 @router.get(
