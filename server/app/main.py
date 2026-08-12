@@ -19,6 +19,7 @@ from app.routers import (
     organization as organization_router,
     organization_structure,
     policies,
+    policy_simulation,
     principals,
     runtime_policies,
     users as users_router,
@@ -268,6 +269,7 @@ def create_app() -> FastAPI:
     app.include_router(intents.router)
     app.include_router(evidence.router)
     app.include_router(runtime_policies.router)
+    app.include_router(policy_simulation.router)
     app.include_router(ai_policy_builder.router)
     app.include_router(ai_authority_builder.router)
     app.include_router(auth_router.router)

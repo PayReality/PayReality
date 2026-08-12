@@ -168,6 +168,9 @@ export function PolicyWorkspacePage() {
           <Link to={`/governance/${policyKey}/versions`} style={{ color: "var(--pr-authority-blue)" }}>
             History
           </Link>
+          <Link to={`/governance/${policyKey}/simulate`} style={{ color: "var(--pr-authority-blue)" }}>
+            Simulate
+          </Link>
           {existing.status === "draft" && (
             <ConfirmButton
               variant="ghost"

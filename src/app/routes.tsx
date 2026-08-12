@@ -120,6 +120,10 @@ export const router = createBrowserRouter([
           // Compile + Dry Run + Deploy merged into one Publish page, same reason.
           { path: "governance/:policyKey/versions", lazy: () => import("./policy-studio/VersionsPage").then((m) => ({ Component: m.VersionsPage })) },
           { path: "governance/:policyKey/publish", lazy: () => import("./policy-studio/PublishPage").then((m) => ({ Component: m.PublishPage })) },
+          // Runtime Policy Simulator (Authority Intelligence Program, Phase 4,
+          // POLICY_SIMULATOR.md): a dry run of Runtime Authority for a
+          // hypothetical Intent against this specific policy version.
+          { path: "governance/:policyKey/simulate", lazy: () => import("./policy-simulation/SimulationPage").then((m) => ({ Component: m.PolicySimulationPage })) },
           // Old separate URLs redirect rather than 404 for anyone with a bookmark.
           { path: "governance/:policyKey/diff", element: <RedirectToVersions /> },
           { path: "governance/:policyKey/compile", element: <RedirectToPublish /> },

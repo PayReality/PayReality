@@ -1178,3 +1178,38 @@ class AuthorityGraphApproval(Base):
         UniqueConstraint("corpus_id", "version", name="uq_authority_graph_approvals_corpus_version"),
         Index("idx_authority_graph_approvals_corpus", "corpus_id"),
     )
+
+
+class SimulationScenario(Base):
+    """Runtime Policy Simulator (Authority Intelligence Program, Phase 4,
+    POLICY_SIMULATOR.md): a saved hypothetical Intent plus an expected
+    outcome, so a reviewer can re-run "does this policy still do what we
+    expect" after every edit.
+
+    Only the scenario's DEFINITION is persisted here -- its most recent
+    actual outcome and PASS/FAIL are computed live on every run
+    (services/policy_simulation_service.run_scenario), never stored.
+    This is deliberate, not an oversight: a scenario is a saved
+    QUESTION, not a saved ANSWER, matching this phase's "never persist
+    simulated decisions" principle exactly. `policy_key` is a bare UUID,
+    not a foreign key -- the same convention `PolicyExtractionCandidate.
+    promoted_policy_key` already established, since a policy_key groups
+    RuntimePolicyRecord versions rather than identifying one single row."""
+
+    __tablename__ = "simulation_scenarios"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    policy_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    input: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    expected_outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "expected_outcome IN ('ALLOW','DENY','HUMAN_REVIEW')",
+            name="ck_simulation_scenarios_expected_outcome",
+        ),
+        Index("idx_simulation_scenarios_policy_key", "policy_key"),
+    )
