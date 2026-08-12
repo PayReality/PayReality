@@ -202,22 +202,47 @@ async def create_corpus(
     return _corpus_to_response(corpus, len(documents))
 
 
-@router.get("/corpora", response_model=list[CorpusResponse])
-def list_corpora(db: Session = Depends(get_db)):
-    return [_corpus_to_response(c, len(svc.list_documents(db, c.id))) for c in svc.list_corpora(db)]
-
-
-@router.get("/corpora/{corpus_id}", response_model=CorpusResponse)
-def get_corpus(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+def _authorized_corpus(
+    corpus_id: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+) -> AuthorityCorpus:
+    """Milestone 1 (Security & Authorization Hardening): the single gate
+    every corpus-scoped read endpoint below depends on. Every sub-resource
+    (principals, resources, operations, relationships, conflicts, gaps,
+    questions, coverage, missing-information, diff, approvals) is keyed
+    purely off corpus_id with no organization column of its own, so
+    gating here protects all of them transitively -- a corpus belonging
+    to a different organization 404s identically to a corpus_id that
+    doesn't exist at all, never distinguished, so this can't be used to
+    probe for another org's corpus IDs."""
     try:
         corpus = svc.get_corpus(db, corpus_id)
     except CorpusNotFoundError:
         raise HTTPException(status_code=404, detail="corpus_not_found")
+    if corpus.organization_id != organization.id:
+        raise HTTPException(status_code=404, detail="corpus_not_found")
+    return corpus
+
+
+@router.get("/corpora", response_model=list[CorpusResponse])
+def list_corpora(
+    organization: Organization = Depends(get_current_organization), db: Session = Depends(get_db)
+):
+    return [
+        _corpus_to_response(c, len(svc.list_documents(db, c.id)))
+        for c in svc.list_corpora(db)
+        if c.organization_id == organization.id
+    ]
+
+
+@router.get("/corpora/{corpus_id}", response_model=CorpusResponse)
+def get_corpus(corpus_id: uuid.UUID, corpus: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return _corpus_to_response(corpus, len(svc.list_documents(db, corpus_id)))
 
 
 @router.get("/corpora/{corpus_id}/summary", response_model=GraphSummaryResponse)
-def get_summary(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_summary(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     """Counts only, matching AI_AUTHORITY_BUILDER_ARCHITECTURE.md's own
     example. Runtime Policy candidates are counted via the AI Policy
     Builder's own list_candidates(corpus_id=...), not a duplicated
@@ -237,7 +262,7 @@ def get_summary(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.get("/corpora/{corpus_id}/principals", response_model=list[PrincipalResponse])
-def get_principals(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_principals(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_principal_to_response(p) for p in svc.list_principals(db, corpus_id)]
 
 
@@ -297,17 +322,17 @@ def resolve_principal(
 
 
 @router.get("/corpora/{corpus_id}/resources", response_model=list[ResourceResponse])
-def get_resources(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_resources(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_resource_to_response(r) for r in svc.list_resources(db, corpus_id)]
 
 
 @router.get("/corpora/{corpus_id}/operations", response_model=list[OperationResponse])
-def get_operations(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_operations(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_operation_to_response(o) for o in svc.list_operations(db, corpus_id)]
 
 
 @router.get("/corpora/{corpus_id}/relationships", response_model=list[RelationshipResponse])
-def get_relationships(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_relationships(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_relationship_to_response(r) for r in svc.list_relationships(db, corpus_id)]
 
 
@@ -349,17 +374,17 @@ def activate_relationship(relationship_id: uuid.UUID, db: Session = Depends(get_
 
 
 @router.get("/corpora/{corpus_id}/conflicts", response_model=list[ConflictResponse])
-def get_conflicts(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_conflicts(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_conflict_to_response(c) for c in svc.list_conflicts(db, corpus_id)]
 
 
 @router.get("/corpora/{corpus_id}/gaps", response_model=list[GapResponse])
-def get_gaps(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_gaps(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_gap_to_response(g) for g in svc.list_gaps(db, corpus_id)]
 
 
 @router.get("/corpora/{corpus_id}/questions", response_model=list[QuestionResponse])
-def get_questions(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_questions(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_question_to_response(q) for q in svc.list_questions(db, corpus_id)]
 
 
@@ -380,7 +405,7 @@ def answer_question(question_id: uuid.UUID, body: AnswerQuestionRequest, db: Ses
 
 
 @router.get("/corpora/{corpus_id}/coverage", response_model=CoverageResponse)
-def get_coverage(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_coverage(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     """Task 5: deterministic parsing statistics aggregated across this
     corpus's documents -- see AuthorityCorpusDocument's own columns and
     text_extraction.extract_text_with_coverage. Never an LLM's estimate
@@ -389,7 +414,9 @@ def get_coverage(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.get("/corpora/{corpus_id}/missing-information", response_model=list[MissingInformationItem])
-def get_missing_information(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_missing_information(
+    corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)
+):
     """Task 4: a deterministic, code-computed backstop for the model's
     own self-reported Gaps/Questions -- every item here is read directly
     from already-persisted rows, never re-asked of an LLM."""
@@ -397,7 +424,7 @@ def get_missing_information(corpus_id: uuid.UUID, db: Session = Depends(get_db))
 
 
 @router.get("/corpora/{corpus_id}/diff", response_model=GraphDiffResponse)
-def get_graph_diff(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_graph_diff(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     """Task 7: this corpus's candidate Authority Graph vs. the Authority
     Graph already in force for the same organisation. A deterministic
     comparison -- the model's job ended at extraction time."""
@@ -443,7 +470,9 @@ def approve_graph(
 
 
 @router.get("/corpora/{corpus_id}/approvals", response_model=list[GraphApprovalResponse])
-def list_approvals(corpus_id: uuid.UUID, db: Session = Depends(get_db)):
+def list_approvals(
+    corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)
+):
     """The immutable approval history for this corpus, newest first."""
     return [
         GraphApprovalResponse(
