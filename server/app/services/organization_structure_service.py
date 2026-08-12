@@ -32,6 +32,34 @@ class StillReferencedError(Exception):
     just translates that into a clear application-level error."""
 
 
+# Milestone 1 (Security & Authorization Hardening): Department and Team
+# have no organization_id column of their own -- organisation is only
+# reachable by walking Team -> Department -> BusinessUnit ->
+# organization_id. These three helpers are the single place that walk,
+# reused by every function below rather than re-joined ad hoc, so a
+# caller in one organisation can never read, rename, or delete a row
+# that resolves to a different one.
+
+
+def _business_unit_organization_id(db: Session, business_unit_id: uuid.UUID) -> uuid.UUID | None:
+    unit = db.get(BusinessUnit, business_unit_id)
+    return unit.organization_id if unit is not None else None
+
+
+def _department_organization_id(db: Session, department_id: uuid.UUID) -> uuid.UUID | None:
+    department = db.get(Department, department_id)
+    if department is None:
+        return None
+    return _business_unit_organization_id(db, department.business_unit_id)
+
+
+def _team_organization_id(db: Session, team_id: uuid.UUID) -> uuid.UUID | None:
+    team = db.get(Team, team_id)
+    if team is None:
+        return None
+    return _department_organization_id(db, team.department_id)
+
+
 # --- Business Units ---------------------------------------------------
 
 def list_business_units(db: Session, organization_id: uuid.UUID) -> list[BusinessUnit]:
@@ -52,9 +80,11 @@ def create_business_unit(db: Session, organization_id: uuid.UUID, name: str) -> 
     return unit
 
 
-def update_business_unit(db: Session, business_unit_id: uuid.UUID, name: str) -> BusinessUnit:
+def update_business_unit(
+    db: Session, business_unit_id: uuid.UUID, organization_id: uuid.UUID, name: str
+) -> BusinessUnit:
     unit = db.get(BusinessUnit, business_unit_id)
-    if unit is None:
+    if unit is None or unit.organization_id != organization_id:
         raise BusinessUnitNotFoundError(str(business_unit_id))
     unit.name = name
     db.commit()
@@ -62,9 +92,9 @@ def update_business_unit(db: Session, business_unit_id: uuid.UUID, name: str) ->
     return unit
 
 
-def delete_business_unit(db: Session, business_unit_id: uuid.UUID) -> None:
+def delete_business_unit(db: Session, business_unit_id: uuid.UUID, organization_id: uuid.UUID) -> None:
     unit = db.get(BusinessUnit, business_unit_id)
-    if unit is None:
+    if unit is None or unit.organization_id != organization_id:
         raise BusinessUnitNotFoundError(str(business_unit_id))
     db.delete(unit)
     try:
@@ -76,15 +106,24 @@ def delete_business_unit(db: Session, business_unit_id: uuid.UUID) -> None:
 
 # --- Departments --------------------------------------------------------
 
-def list_departments(db: Session, business_unit_id: uuid.UUID | None = None) -> list[Department]:
-    stmt = select(Department).order_by(Department.name)
+def list_departments(
+    db: Session, organization_id: uuid.UUID, business_unit_id: uuid.UUID | None = None
+) -> list[Department]:
+    stmt = (
+        select(Department)
+        .join(BusinessUnit, Department.business_unit_id == BusinessUnit.id)
+        .where(BusinessUnit.organization_id == organization_id)
+        .order_by(Department.name)
+    )
     if business_unit_id is not None:
         stmt = stmt.where(Department.business_unit_id == business_unit_id)
     return list(db.scalars(stmt))
 
 
-def create_department(db: Session, business_unit_id: uuid.UUID, name: str) -> Department:
-    if db.get(BusinessUnit, business_unit_id) is None:
+def create_department(
+    db: Session, organization_id: uuid.UUID, business_unit_id: uuid.UUID, name: str
+) -> Department:
+    if _business_unit_organization_id(db, business_unit_id) != organization_id:
         raise BusinessUnitNotFoundError(str(business_unit_id))
     department = Department(business_unit_id=business_unit_id, name=name)
     db.add(department)
@@ -93,20 +132,22 @@ def create_department(db: Session, business_unit_id: uuid.UUID, name: str) -> De
     return department
 
 
-def update_department(db: Session, department_id: uuid.UUID, name: str) -> Department:
-    department = db.get(Department, department_id)
-    if department is None:
+def update_department(
+    db: Session, department_id: uuid.UUID, organization_id: uuid.UUID, name: str
+) -> Department:
+    if _department_organization_id(db, department_id) != organization_id:
         raise DepartmentNotFoundError(str(department_id))
+    department = db.get(Department, department_id)
     department.name = name
     db.commit()
     db.refresh(department)
     return department
 
 
-def delete_department(db: Session, department_id: uuid.UUID) -> None:
-    department = db.get(Department, department_id)
-    if department is None:
+def delete_department(db: Session, department_id: uuid.UUID, organization_id: uuid.UUID) -> None:
+    if _department_organization_id(db, department_id) != organization_id:
         raise DepartmentNotFoundError(str(department_id))
+    department = db.get(Department, department_id)
     db.delete(department)
     try:
         db.commit()
@@ -117,15 +158,23 @@ def delete_department(db: Session, department_id: uuid.UUID) -> None:
 
 # --- Teams ----------------------------------------------------------------
 
-def list_teams(db: Session, department_id: uuid.UUID | None = None) -> list[Team]:
-    stmt = select(Team).order_by(Team.name)
+def list_teams(
+    db: Session, organization_id: uuid.UUID, department_id: uuid.UUID | None = None
+) -> list[Team]:
+    stmt = (
+        select(Team)
+        .join(Department, Team.department_id == Department.id)
+        .join(BusinessUnit, Department.business_unit_id == BusinessUnit.id)
+        .where(BusinessUnit.organization_id == organization_id)
+        .order_by(Team.name)
+    )
     if department_id is not None:
         stmt = stmt.where(Team.department_id == department_id)
     return list(db.scalars(stmt))
 
 
-def create_team(db: Session, department_id: uuid.UUID, name: str) -> Team:
-    if db.get(Department, department_id) is None:
+def create_team(db: Session, organization_id: uuid.UUID, department_id: uuid.UUID, name: str) -> Team:
+    if _department_organization_id(db, department_id) != organization_id:
         raise DepartmentNotFoundError(str(department_id))
     team = Team(department_id=department_id, name=name)
     db.add(team)
@@ -134,20 +183,20 @@ def create_team(db: Session, department_id: uuid.UUID, name: str) -> Team:
     return team
 
 
-def update_team(db: Session, team_id: uuid.UUID, name: str) -> Team:
-    team = db.get(Team, team_id)
-    if team is None:
+def update_team(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID, name: str) -> Team:
+    if _team_organization_id(db, team_id) != organization_id:
         raise TeamNotFoundError(str(team_id))
+    team = db.get(Team, team_id)
     team.name = name
     db.commit()
     db.refresh(team)
     return team
 
 
-def delete_team(db: Session, team_id: uuid.UUID) -> None:
-    team = db.get(Team, team_id)
-    if team is None:
+def delete_team(db: Session, team_id: uuid.UUID, organization_id: uuid.UUID) -> None:
+    if _team_organization_id(db, team_id) != organization_id:
         raise TeamNotFoundError(str(team_id))
+    team = db.get(Team, team_id)
     db.delete(team)
     try:
         db.commit()

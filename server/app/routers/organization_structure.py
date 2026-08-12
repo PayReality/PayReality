@@ -58,10 +58,12 @@ def create_business_unit(
     dependencies=[Depends(require_permission(Permission.ORGANISATION_MANAGE))],
 )
 def update_business_unit(
-    business_unit_id: uuid.UUID, body: UpdateBusinessUnitRequest, db: Session = Depends(get_db)
+    business_unit_id: uuid.UUID, body: UpdateBusinessUnitRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
 ):
     try:
-        return svc.update_business_unit(db, business_unit_id, body.name)
+        return svc.update_business_unit(db, business_unit_id, organization.id, body.name)
     except BusinessUnitNotFoundError:
         raise HTTPException(status_code=404, detail="business_unit_not_found")
 
@@ -70,9 +72,13 @@ def update_business_unit(
     "/{business_unit_id}", status_code=204,
     dependencies=[Depends(require_permission(Permission.ORGANISATION_MANAGE))],
 )
-def delete_business_unit(business_unit_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_business_unit(
+    business_unit_id: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        svc.delete_business_unit(db, business_unit_id)
+        svc.delete_business_unit(db, business_unit_id, organization.id)
     except BusinessUnitNotFoundError:
         raise HTTPException(status_code=404, detail="business_unit_not_found")
     except StillReferencedError:
@@ -86,17 +92,25 @@ def delete_business_unit(business_unit_id: uuid.UUID, db: Session = Depends(get_
     "", response_model=list[DepartmentResponse],
     dependencies=[Depends(require_permission(Permission.SETTINGS_VIEW))],
 )
-def list_departments(business_unit_id: uuid.UUID | None = None, db: Session = Depends(get_db)):
-    return svc.list_departments(db, business_unit_id)
+def list_departments(
+    business_unit_id: uuid.UUID | None = None,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    return svc.list_departments(db, organization.id, business_unit_id)
 
 
 @departments_router.post(
     "", response_model=DepartmentResponse, status_code=201,
     dependencies=[Depends(require_permission(Permission.ORGANISATION_MANAGE))],
 )
-def create_department(body: CreateDepartmentRequest, db: Session = Depends(get_db)):
+def create_department(
+    body: CreateDepartmentRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        return svc.create_department(db, body.business_unit_id, body.name)
+        return svc.create_department(db, organization.id, body.business_unit_id, body.name)
     except BusinessUnitNotFoundError:
         raise HTTPException(status_code=404, detail="business_unit_not_found")
 
@@ -105,9 +119,13 @@ def create_department(body: CreateDepartmentRequest, db: Session = Depends(get_d
     "/{department_id}", response_model=DepartmentResponse,
     dependencies=[Depends(require_permission(Permission.ORGANISATION_MANAGE))],
 )
-def update_department(department_id: uuid.UUID, body: UpdateDepartmentRequest, db: Session = Depends(get_db)):
+def update_department(
+    department_id: uuid.UUID, body: UpdateDepartmentRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        return svc.update_department(db, department_id, body.name)
+        return svc.update_department(db, department_id, organization.id, body.name)
     except DepartmentNotFoundError:
         raise HTTPException(status_code=404, detail="department_not_found")
 
@@ -116,9 +134,13 @@ def update_department(department_id: uuid.UUID, body: UpdateDepartmentRequest, d
     "/{department_id}", status_code=204,
     dependencies=[Depends(require_permission(Permission.ORGANISATION_MANAGE))],
 )
-def delete_department(department_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_department(
+    department_id: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        svc.delete_department(db, department_id)
+        svc.delete_department(db, department_id, organization.id)
     except DepartmentNotFoundError:
         raise HTTPException(status_code=404, detail="department_not_found")
     except StillReferencedError:
@@ -132,17 +154,25 @@ def delete_department(department_id: uuid.UUID, db: Session = Depends(get_db)):
     "", response_model=list[TeamResponse],
     dependencies=[Depends(require_permission(Permission.SETTINGS_VIEW))],
 )
-def list_teams(department_id: uuid.UUID | None = None, db: Session = Depends(get_db)):
-    return svc.list_teams(db, department_id)
+def list_teams(
+    department_id: uuid.UUID | None = None,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    return svc.list_teams(db, organization.id, department_id)
 
 
 @teams_router.post(
     "", response_model=TeamResponse, status_code=201,
     dependencies=[Depends(require_permission(Permission.ORGANISATION_MANAGE))],
 )
-def create_team(body: CreateTeamRequest, db: Session = Depends(get_db)):
+def create_team(
+    body: CreateTeamRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        return svc.create_team(db, body.department_id, body.name)
+        return svc.create_team(db, organization.id, body.department_id, body.name)
     except DepartmentNotFoundError:
         raise HTTPException(status_code=404, detail="department_not_found")
 
@@ -151,9 +181,13 @@ def create_team(body: CreateTeamRequest, db: Session = Depends(get_db)):
     "/{team_id}", response_model=TeamResponse,
     dependencies=[Depends(require_permission(Permission.ORGANISATION_MANAGE))],
 )
-def update_team(team_id: uuid.UUID, body: UpdateTeamRequest, db: Session = Depends(get_db)):
+def update_team(
+    team_id: uuid.UUID, body: UpdateTeamRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        return svc.update_team(db, team_id, body.name)
+        return svc.update_team(db, team_id, organization.id, body.name)
     except TeamNotFoundError:
         raise HTTPException(status_code=404, detail="team_not_found")
 
@@ -162,9 +196,13 @@ def update_team(team_id: uuid.UUID, body: UpdateTeamRequest, db: Session = Depen
     "/{team_id}", status_code=204,
     dependencies=[Depends(require_permission(Permission.ORGANISATION_MANAGE))],
 )
-def delete_team(team_id: uuid.UUID, db: Session = Depends(get_db)):
+def delete_team(
+    team_id: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        svc.delete_team(db, team_id)
+        svc.delete_team(db, team_id, organization.id)
     except TeamNotFoundError:
         raise HTTPException(status_code=404, detail="team_not_found")
     except StillReferencedError:
