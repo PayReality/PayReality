@@ -21,7 +21,7 @@ from app.domain.time_utils import to_utc_iso
 from app.domain.decision import engine as decision_engine
 from app.domain.decision.scope_vocabulary import is_recognized_scope
 from app.domain.evidence.signing import payload_hash, sign_payload
-from app.opa_client import HttpOpaClient
+from app.opa_client import HttpOpaClient, org_data_path
 from app.services import runtime_policy_service, runtime_truth_service
 from app.services.authority_context_service import classify_risk
 
@@ -51,13 +51,27 @@ class ReplayDetectedError(Exception):
 
 
 class _DbPolicyStore:
-    """Adapts the `policies` table to decision_engine.PolicyStore."""
+    """Adapts the `policies` table to decision_engine.PolicyStore.
 
-    def __init__(self, db: Session):
+    Milestone 2 (Multi-Tenant Foundation): bound to a single organization at
+    construction time, not passed to decision_engine.evaluate() itself --
+    the pure PolicyStore Protocol in domain/decision/engine.py still takes
+    no arguments, so this adapter is where organization-scoping happens.
+    organization_id=None is its own valid, consistent scope (matching
+    evidence_service.verify_chain and runtime_policy_service's convention),
+    not an error -- it resolves to the same pre-Milestone-2 legacy row any
+    never-org-scoped Principal or test fixture already expects."""
+
+    def __init__(self, db: Session, organization_id: uuid.UUID | None):
         self.db = db
+        self.organization_id = organization_id
 
     def get_active(self) -> decision_engine.ActivePolicy:
-        policy = self.db.scalar(select(Policy).where(Policy.status == "active"))
+        policy = self.db.scalar(
+            select(Policy).where(
+                Policy.status == "active", Policy.organization_id == self.organization_id
+            )
+        )
         if policy is None:
             raise decision_engine.NoActivePolicyError()
         # Runtime Governance Architecture, Phase 1: bundle_hash was already
@@ -71,13 +85,21 @@ class _DbPolicyStore:
 
 class _EngineOpaClient:
     """Adapts HttpOpaClient to decision_engine.OpaClient: HttpOpaClient
-    already raises the exact exception types the engine expects."""
+    already raises the exact exception types the engine expects.
 
-    def __init__(self, client: HttpOpaClient):
+    Milestone 2: `data_path` is resolved once, at construction time, from
+    the same organization_id bound into _DbPolicyStore -- so a Decision is
+    always evaluated against the active Policy row and the OPA package
+    belonging to the same organization. None means the legacy shared
+    package (opa_client.DATA_PATH), the same convention used everywhere
+    else in this milestone."""
+
+    def __init__(self, client: HttpOpaClient, data_path: str | None = None):
         self._client = client
+        self._data_path = data_path
 
     def query(self, input_doc, timeout_ms):
-        return self._client.query(input_doc, timeout_ms=timeout_ms)
+        return self._client.query(input_doc, timeout_ms=timeout_ms, data_path=self._data_path)
 
 
 def _build_evidence_payload(
@@ -461,6 +483,13 @@ def submit_intent(
     # this point resolves anything further.
     resolved = runtime_truth_service.resolve(db, agent, amount)
 
+    # Milestone 2 (Multi-Tenant Foundation): the same Principal already
+    # resolved above (via Agent.acting_for_principal_id) is the sole source
+    # of which organization this Intent evaluates against -- nothing here
+    # is re-resolved independently of Runtime Truth's own resolution.
+    organization_id = resolved.principal.organization_id if resolved.principal else None
+    opa_data_path = org_data_path(organization_id) if organization_id is not None else None
+
     engine_decision = decision_engine.evaluate(
         intent={"action": action, "amount": amount, "currency": currency},
         context={
@@ -469,8 +498,8 @@ def submit_intent(
             "authority": resolved.authority_context,
         },
         acting_for_principal_id=resolved.principal_name,
-        policy_store=_DbPolicyStore(db),
-        opa_client=_EngineOpaClient(HttpOpaClient()),
+        policy_store=_DbPolicyStore(db, organization_id),
+        opa_client=_EngineOpaClient(HttpOpaClient(), data_path=opa_data_path),
     )
 
     policy_id = uuid.UUID(engine_decision.policy_id) if engine_decision.policy_id else None
