@@ -64,7 +64,13 @@ Editing and dismissing are only allowed while `pending_review` — a promoted or
 
 Same vendor-neutral pattern as every other AI-touching subsystem: `RuntimePolicyExtractionProvider` protocol, a real `claude_provider.py`, a deterministic `fake_provider.py` fallback, `GET /v1/ai-policy-builder/status` reporting which is active. See [16_CURRENT_LIMITATIONS.md](16_CURRENT_LIMITATIONS.md) for the hosted-demo caveat (fake providers active there today).
 
-## 10.8 What's active vs. dead
+## 10.8 Milestone 3 (Enterprise Surface Isolation): the pipeline gained an organization concept for the first time
+
+Before this milestone, `PolicyExtractionUpload`/`PolicyExtractionCandidate` had no organization column at all, and `list_uploads`, `get_upload`, `list_candidates_for_upload`, `list_candidates`, `get_candidate` were reachable with zero authentication (`MULTI_TENANT_ARCHITECTURE_VERIFICATION.md`). §9.4's `CrossOrganizationPromotionError` guard (Milestone 2) only ever fired for the `corpus_id` path — every single-document candidate has `corpus_id=None` by construction, so promotion never actually verified anything for this pipeline specifically.
+
+Fixed: `PolicyExtractionUpload` gained a nullable `organization_id` column, stamped at upload time. `PolicyExtractionCandidate` deliberately does **not** get its own column — a candidate resolves its organization via exactly one of its two parents (`upload_id` → the new column, or `corpus_id` → `authority_corpora.organization_id`), mirroring the existing "resolve through the parent" convention every other corpus-scoped extraction table already uses. `list_candidates` (the general, filter-optional endpoint) is the one that actually closes the leak most directly: it previously returned every organization's candidates unconditionally when called with neither `upload_id` nor `corpus_id`; the fix requires `organization_id` and enforces it via an outer join through both possible parents at once. Every read endpoint now depends on `get_current_organization` (a new `_authorized_upload` router dependency mirrors `_authorized_corpus` for the two upload-keyed ones); `edit_candidate`/`dismiss_candidate`/`promote_candidate` all thread the same check through.
+
+## 10.9 What's active vs. dead
 
 | Component | Status |
 |---|---|

@@ -82,15 +82,22 @@ A small, focused Python package (`payreality/`: `agent.py`, `auth.py`, `client.p
 
 ```python
 from payreality import Agent
-agent = Agent(api_key="...", private_key="...")
+agent = Agent(api_key="...", private_key="...", organization_id="...")
 decision = agent.authorize(principal="Finance Manager", operation="Approve",
                             resource="Vendor Payment", resource_data={"amount": 85000, "vendor": "ABC Ltd"})
 ```
 
 - **Key generation and storage are entirely client-side.** `Agent.__init__` generates a keypair automatically if not given an explicit `private_key`; `register()` is idempotent per key (calling it again with the same private key returns the identity already on file rather than re-registering), and a `CredentialStore` persists the mapping from public key to the server-assigned identity locally.
 - **`_resolve_principal_id`** is a concrete, real example of the operator-key/RBAC layering interaction (§2.6, §14): looking up an existing Principal by name is a plain read, but creating a new one passes `operator_auth=True` — meaning today's SDK, out of the box, needs the shared operator key configured to onboard a brand-new Principal, not just a scoped API key. This is one of the platform's known, named current gaps (see [16_CURRENT_LIMITATIONS.md](16_CURRENT_LIMITATIONS.md)): the SDK's default flow assumes an operator-level credential is available, which is a broader grant than a production integration should typically need for routine agent onboarding.
+- **`organization_id` (Milestone 3, SDK `0.2.0`).** The Operator Key became platform-admin-only in Milestone 2 — it belongs to no single organization, so every operator-authenticated call must now also name one explicitly (`X-PayReality-Organization-Id`). `HttpClient.request`'s `operator_auth` path raises the same clear `AuthenticationError` for a missing `organization_id` it already raised for a missing `api_key`. A real, independent bug was also found and fixed in the same pass: `_resolve_principal_id`'s own `GET /v1/principals` call sent zero credentials of any kind, 401'ing on every real deployment since Milestone 1 gated that endpoint — masking the `organization_id` requirement, since `register()` never got far enough to need it.
 
-## 11.9 What's active vs. partial
+## 11.10 Milestone 3 (Enterprise Surface Isolation): every agent endpoint gained an organization check
+
+`MULTI_TENANT_ARCHITECTURE_VERIFICATION.md`'s pre-Milestone-3 audit confirmed `GET /v1/agents` and `GET /v1/agents/{id}` had no organization check at all. Auditing every agent endpoint per this milestone's own explicit scope found the same gap on `create_agent` (a client could register an Agent acting for a Principal belonging to a *different* organization), every single-agent mutation (`update`/`delete`/`activate`/`suspend`/`retire`/`revoke`/`rotate`/`transfer`, plus certificate/audit-event reads), and all four bulk operations (suspend/activate/retire/rotate by `agent_id` list).
+
+`Agent` has no `organization_id` of its own — it's reachable only via `acting_for_principal_id` → `Principal.organization_id`. Fixed with a new `_authorized_agent` router dependency that resolves that chain once and 404s an agent belonging to a different organization identically to one that doesn't exist (the same convention `_authorized_corpus` established), applied to every single-agent endpoint except `heartbeat` — already correctly self-scoped via its own signature verification, since an agent can only ever act as itself. `list_agents` now filters via an inner join through `Principal` (`acting_for_principal_id` is `NOT NULL`, so the join never drops a legitimate row); `bulk_transition` checks each `agent_id` in a batch before acting, rejecting any belonging to a different organization as `agent_not_found` without ever calling the underlying transition.
+
+## 11.11 What's active vs. partial
 
 | Component | Status |
 |---|---|

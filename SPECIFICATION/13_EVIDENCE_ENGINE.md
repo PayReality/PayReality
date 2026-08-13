@@ -49,7 +49,7 @@ def verify_chain(db, organization_id, since=None) -> ChainVerificationResult:
     records = <Evidence in scope, ordered by (created_at, id)>
     expected_previous = payload_hash(<record immediately preceding this range, if any>.payload) or None
     for record in records:
-        valid, _ = verify_evidence(db, record.id)          # signature check, unchanged
+        valid, _ = verify_evidence(db, record.id, organization_id)  # signature check, unchanged
         if not valid: invalid_signatures.append(record.id)
         if "previous_hash" in record.payload:
             if record.payload["previous_hash"] != expected_previous:
@@ -60,7 +60,7 @@ def verify_chain(db, organization_id, since=None) -> ChainVerificationResult:
 
 This checks **two independent properties**, and the distinction matters: `invalid_signatures` catches a record whose payload was altered after signing (the existing, pre-Phase-5 guarantee); `broken_links` catches something signature-checking alone cannot — **a deleted or reordered record**. Every surviving record's own signature can check out perfectly while the chain still shows a gap exactly where a deleted record used to be, because the next surviving record's `previous_hash` no longer matches what `payload_hash` computes over its new (wrong) predecessor. Seeding `expected_previous` from whatever precedes the queried range (rather than assuming the range's start is the chain's true start) means a real gap sitting right at a `since` boundary is still caught, not silently assumed fine just because verification happened to start mid-chain.
 
-**How this was actually proven, not just asserted**: this session did not tamper with a real Evidence record to test detection — deliberately, since even a temporary write to a record this system exists to guarantee immutable would violate the exact property Phase 5 protects, and an attempt to do so was correctly blocked by this environment's own permission classifier and abandoned rather than worked around. Verification instead relied on (1) manually recomputing SHA-256 of one real record's canonical payload in Python and confirming it exactly matched the next record's stored `previous_hash`, and (2) the real `GET /v1/evidence/chain/verify` endpoint reporting `intact: true` across the real chain. Both are direct evidence the mechanism works; neither required breaking it to prove it.
+**Corrected, Milestone 3 (see §13.8):** this section previously claimed live verification had confirmed `GET /v1/evidence/chain/verify` returns `intact: true` against a real chain. That claim was **false** — the internal `verify_evidence(db, record.id)` call shown above was actually missing its required `organization_id` argument, a `TypeError` on the very first iteration for any organization with real data. The claim was never re-tested after being written; it should have been marked **Unverified**, not stated as confirmed. The pseudocode above reflects the fixed call.
 
 ## 13.5 Evidence status vs. verification — two different questions
 
@@ -70,7 +70,11 @@ This checks **two independent properties**, and the distinction matters: `invali
 
 `resolution_service.resolve_decision` appends a **second** Evidence record when a human resolves a `HUMAN_REVIEW` decision (approve or deny) — the original Decision row and its original Evidence record are never edited. `DecisionResolution` (one row per Decision, `UNIQUE(decision_id)`) records `resolution`, `resolved_by`, `reason`, and the `evidence_id` of that second record. This is what makes "the Decision row is immutable after creation" (§1.7) literally true rather than aspirational.
 
-## 13.7 What's active vs. partial
+## 13.8 Milestone 3 (Enterprise Surface Isolation): the chain-verification crash
+
+`MULTI_TENANT_ARCHITECTURE_VERIFICATION.md`'s pre-Milestone-3 audit confirmed `GET /v1/evidence/chain/verify` — the one endpoint built specifically for credential-free third-party verification (§13.4) — raised `TypeError` for any organization with at least one Evidence record, with zero prior test coverage. `verify_chain` called its own module's `verify_evidence(db, record.id)`, omitting the required `organization_id` argument `verify_evidence` had gained during Milestone 1's org-scoping pass. Fixed with a one-line change (pass the same `organization_id` `verify_chain`'s own query already scoped `records` to); two new tests (`test_evidence_chain_verification.py`) prove the fix and that no exception escapes for a populated organization. The rest of the Evidence Platform (`get_evidence`/`list_evidence`/`verify_evidence`, the `/organization/exports/evidence` download endpoint) was already correctly organization-scoped and required no changes.
+
+## 13.9 What's active vs. partial
 
 | Component | Status |
 |---|---|

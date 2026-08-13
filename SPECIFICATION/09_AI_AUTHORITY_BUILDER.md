@@ -58,7 +58,15 @@ This means the Authority Model (Part 8) and the AI Authority Builder's discovery
 
 Same vendor-neutral pattern used throughout this platform's AI-touching subsystems (extraction, AI Policy Builder): an `AuthorityGraphExtractionProvider` protocol (`.extract(corpus_text) -> AuthorityGraph`), with a real `claude_provider.py` (used when `ANTHROPIC_API_KEY` is configured) and a deterministic `fake_provider.py` fallback otherwise. `GET /v1/ai-authority-builder/status` reports which is active. See [16_CURRENT_LIMITATIONS.md](16_CURRENT_LIMITATIONS.md) for where this matters most: the hosted demo environment's AI providers are currently the fake/simulated ones, a known and named gap, not a hidden one.
 
-## 9.7 What's active vs. dead
+## 9.8 Milestone 3 (Enterprise Surface Isolation): mutating endpoints gained organization checks
+
+`_authorized_corpus` (§9's own gate, Milestone 1) always protected every corpus-scoped *read* correctly. `MULTI_TENANT_ARCHITECTURE_VERIFICATION.md`'s pre-Milestone-3 audit found the gap was entirely in the *mutating* endpoints downstream of discovery: `resolve_principal`, `resolve_relationship`, `activate_relationship`, `answer_question`, `approve_graph`, and the read endpoint `get_principal_candidates` gated solely on `Permission.AUTHORITY_REVIEW` — a capability check that says nothing about *whose* data is being touched. `approve_graph` was the worst instance: it took a `corpus_id` but never verified it belonged to the caller's organization, so any reviewer holding ordinary `AUTHORITY_REVIEW` in any organization could pull another organization's full corpus snapshot and write a falsely-attributed approval record into that organization's own audit trail.
+
+Fixed with three new router-level dependencies, each resolving the target row's own corpus and comparing its `organization_id` against the caller's — `_authorized_authority_principal`, `_authorized_relationship`, `_authorized_question` — mirroring `_authorized_corpus`'s existing "cross-organization access looks like not-found" convention exactly. `approve_graph` now depends on `_authorized_corpus` directly, since it already took `corpus_id`.
+
+**Disclosed, not fixed in this pass:** `AuthorityRelationship.cross_org_approved` (§8.2's fail-closed opt-in for legitimate cross-organization delegation) remains dead schema — defined on the model, never read anywhere in the codebase. `resolve_relationship`/`activate_relationship` still don't check whether the two PRINCIPALS involved in a relationship belong to the same organization as each other, only that the corpus belongs to the caller. Wiring this in is a genuine improvement, tracked as a follow-up, not implemented here (it was beyond this fix's literal "verify the target object belongs to the caller's organization" scope).
+
+## 9.9 What's active vs. dead
 
 | Component | Status |
 |---|---|
