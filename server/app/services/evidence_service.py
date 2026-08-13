@@ -137,7 +137,13 @@ def verify_chain(
         expected_previous = payload_hash(preceding.payload) if preceding is not None else None
 
     for record in records:
-        valid, _ = verify_evidence(db, record.id)
+        # Milestone 3 (Enterprise Surface Isolation): verify_evidence's
+        # organization_id argument was omitted here -- a guaranteed
+        # TypeError for any organization with at least one Evidence
+        # record, confirmed in MULTI_TENANT_ARCHITECTURE_VERIFICATION.md.
+        # `record` was already resolved above by this same organization_id
+        # filter, so this can never raise EvidenceNotFoundError.
+        valid, _ = verify_evidence(db, record.id, organization_id)
         if not valid:
             invalid_signatures.append(record.id)
 
