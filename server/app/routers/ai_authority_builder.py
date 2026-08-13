@@ -293,7 +293,9 @@ def get_corpus(corpus_id: uuid.UUID, corpus: AuthorityCorpus = Depends(_authoriz
 
 
 @router.get("/corpora/{corpus_id}/summary", response_model=GraphSummaryResponse)
-def get_summary(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
+def get_summary(
+    corpus_id: uuid.UUID, corpus: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)
+):
     """Counts only, matching AI_AUTHORITY_BUILDER_ARCHITECTURE.md's own
     example. Runtime Policy candidates are counted via the AI Policy
     Builder's own list_candidates(corpus_id=...), not a duplicated
@@ -301,7 +303,7 @@ def get_summary(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_c
     from app.services import ai_policy_builder_service as policy_svc
 
     return GraphSummaryResponse(
-        policy_count=len(policy_svc.list_candidates(db, corpus_id=corpus_id)),
+        policy_count=len(policy_svc.list_candidates(db, corpus.organization_id, corpus_id=corpus_id)),
         principal_count=len(svc.list_principals(db, corpus_id)),
         resource_count=len(svc.list_resources(db, corpus_id)),
         operation_count=len(svc.list_operations(db, corpus_id)),

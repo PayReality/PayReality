@@ -24,7 +24,12 @@ import uuid
 import pytest
 from fastapi import HTTPException
 
-from app.services import agent_service, evidence_service, organization_structure_service as org_svc
+from app.services import (
+    agent_service,
+    ai_policy_builder_service as policy_svc,
+    evidence_service,
+    organization_structure_service as org_svc,
+)
 from app.services.evidence_service import EvidenceNotFoundError
 from app.services.organization_structure_service import (
     BusinessUnitNotFoundError,
@@ -519,3 +524,119 @@ def test_authorized_agent_accepts_an_agent_whose_principal_matches(monkeypatch):
     monkeypatch.setattr(agents_router.agent_service, "get_agent", lambda db, aid: fake_agent)
 
     assert agents_router._authorized_agent(agent_id, organization=_Org(), db=db) is fake_agent
+
+
+# --- AI Policy Builder single-document pipeline (Milestone 3) ------------
+#
+# MULTI_TENANT_ARCHITECTURE_VERIFICATION.md confirmed PolicyExtractionUpload/
+# PolicyExtractionCandidate had no organization concept at all: five read
+# endpoints were reachable with zero authentication, and the tables had no
+# organization column to check against even if they had been gated.
+
+
+class _FakeUpload:
+    def __init__(self, id, organization_id):
+        self.id = id
+        self.organization_id = organization_id
+
+
+class _FakeCandidate:
+    def __init__(self, id, upload_id=None, corpus_id=None):
+        self.id = id
+        self.upload_id = upload_id
+        self.corpus_id = corpus_id
+
+
+def test_get_upload_rejects_an_upload_from_a_different_organization():
+    upload_id = uuid.uuid4()
+    db = _FakeSession(get_results={str(upload_id): _FakeUpload(upload_id, ORG_B)})
+    with pytest.raises(policy_svc.UploadNotFoundError):
+        policy_svc.get_upload(db, upload_id, ORG_A)
+
+
+def test_get_upload_accepts_an_upload_from_the_matching_organization():
+    upload_id = uuid.uuid4()
+    fake_upload = _FakeUpload(upload_id, ORG_A)
+    db = _FakeSession(get_results={str(upload_id): fake_upload})
+    assert policy_svc.get_upload(db, upload_id, ORG_A) is fake_upload
+
+
+def test_candidate_organization_id_resolves_via_upload():
+    candidate_id, upload_id = uuid.uuid4(), uuid.uuid4()
+    candidate = _FakeCandidate(candidate_id, upload_id=upload_id)
+    db = _FakeSession(get_results={str(upload_id): _FakeUpload(upload_id, ORG_A)})
+    assert policy_svc._candidate_organization_id(db, candidate) == ORG_A
+
+
+def test_candidate_organization_id_resolves_via_corpus():
+    candidate_id, corpus_id = uuid.uuid4(), uuid.uuid4()
+    candidate = _FakeCandidate(candidate_id, corpus_id=corpus_id)
+    db = _FakeSession(get_results={str(corpus_id): _FakeCorpus(corpus_id, ORG_A)})
+    assert policy_svc._candidate_organization_id(db, candidate) == ORG_A
+
+
+def test_candidate_organization_id_is_none_for_a_candidate_with_neither_parent():
+    candidate = _FakeCandidate(uuid.uuid4())
+    assert policy_svc._candidate_organization_id(_FakeSession(), candidate) is None
+
+
+def test_get_candidate_rejects_a_candidate_whose_upload_is_a_different_organization():
+    candidate_id, upload_id = uuid.uuid4(), uuid.uuid4()
+    candidate = _FakeCandidate(candidate_id, upload_id=upload_id)
+    db = _FakeSession(get_results={
+        str(candidate_id): candidate, str(upload_id): _FakeUpload(upload_id, ORG_B),
+    })
+    with pytest.raises(policy_svc.CandidateNotFoundError):
+        policy_svc.get_candidate(db, candidate_id, ORG_A)
+
+
+def test_get_candidate_rejects_a_candidate_whose_corpus_is_a_different_organization():
+    candidate_id, corpus_id = uuid.uuid4(), uuid.uuid4()
+    candidate = _FakeCandidate(candidate_id, corpus_id=corpus_id)
+    db = _FakeSession(get_results={
+        str(candidate_id): candidate, str(corpus_id): _FakeCorpus(corpus_id, ORG_B),
+    })
+    with pytest.raises(policy_svc.CandidateNotFoundError):
+        policy_svc.get_candidate(db, candidate_id, ORG_A)
+
+
+def test_get_candidate_accepts_a_candidate_whose_upload_matches():
+    candidate_id, upload_id = uuid.uuid4(), uuid.uuid4()
+    candidate = _FakeCandidate(candidate_id, upload_id=upload_id)
+    db = _FakeSession(get_results={
+        str(candidate_id): candidate, str(upload_id): _FakeUpload(upload_id, ORG_A),
+    })
+    assert policy_svc.get_candidate(db, candidate_id, ORG_A) is candidate
+
+
+def test_list_candidates_statement_filters_by_organization_id_on_both_join_paths():
+    db = _FakeSession(scalars_results=[[]])
+    policy_svc.list_candidates(db, ORG_A)
+    compiled = str(db.statements[0].compile(compile_kwargs={"literal_binds": True}))
+    assert f"'{ORG_A.hex}'" in compiled
+    assert "policy_extraction_uploads" in compiled
+    assert "authority_corpora" in compiled
+
+
+def test_authorized_upload_rejects_an_upload_from_a_different_organization(monkeypatch):
+    from app.routers import ai_policy_builder
+
+    upload_id = uuid.uuid4()
+    monkeypatch.setattr(
+        ai_policy_builder.svc, "get_upload",
+        lambda db, uid, org_id: (_ for _ in ()).throw(policy_svc.UploadNotFoundError(str(uid))),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        ai_policy_builder._authorized_upload(upload_id, organization=_Org(), db=None)
+    assert exc_info.value.status_code == 404
+
+
+def test_authorized_upload_accepts_an_upload_from_the_matching_organization(monkeypatch):
+    from app.routers import ai_policy_builder
+
+    upload_id = uuid.uuid4()
+    fake_upload = _FakeUpload(upload_id, ORG_A)
+    monkeypatch.setattr(ai_policy_builder.svc, "get_upload", lambda db, uid, org_id: fake_upload)
+
+    assert ai_policy_builder._authorized_upload(upload_id, organization=_Org(), db=None) is fake_upload

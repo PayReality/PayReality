@@ -19,7 +19,7 @@ here, not just a documented intent.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -72,9 +72,15 @@ class CrossOrganizationPromotionError(Exception):
     cross-checked against each other."""
 
 
-def create_upload(db: Session, filename: str, format: str, raw: bytes) -> PolicyExtractionUpload:
+def create_upload(
+    db: Session, filename: str, format: str, raw: bytes, organization_id: uuid.UUID | None
+) -> PolicyExtractionUpload:
+    """Milestone 3 (Enterprise Surface Isolation): organization_id is the
+    uploading caller's own -- confirmed unset before this milestone, the
+    single-document pipeline had no organization concept at all."""
     upload = PolicyExtractionUpload(
-        id=uuid.uuid4(), filename=filename, format=format, content=raw, status="uploaded"
+        id=uuid.uuid4(), filename=filename, format=format, content=raw, status="uploaded",
+        organization_id=organization_id,
     )
     db.add(upload)
     db.commit()
@@ -152,27 +158,68 @@ def run_extraction(
     return upload
 
 
-def list_uploads(db: Session) -> list[PolicyExtractionUpload]:
-    return list(db.scalars(select(PolicyExtractionUpload).order_by(PolicyExtractionUpload.uploaded_at.desc())))
+def list_uploads(db: Session, organization_id: uuid.UUID | None) -> list[PolicyExtractionUpload]:
+    return list(
+        db.scalars(
+            select(PolicyExtractionUpload)
+            .where(PolicyExtractionUpload.organization_id == organization_id)
+            .order_by(PolicyExtractionUpload.uploaded_at.desc())
+        )
+    )
 
 
-def get_upload(db: Session, upload_id: uuid.UUID) -> PolicyExtractionUpload:
+def get_upload(db: Session, upload_id: uuid.UUID, organization_id: uuid.UUID | None) -> PolicyExtractionUpload:
     upload = db.get(PolicyExtractionUpload, upload_id)
-    if upload is None:
+    if upload is None or upload.organization_id != organization_id:
         raise UploadNotFoundError(str(upload_id))
     return upload
 
 
+def _candidate_organization_id(db: Session, row: PolicyExtractionCandidate) -> uuid.UUID | None:
+    """Milestone 3 (Enterprise Surface Isolation): a candidate resolves
+    its organization via exactly one of its two parents -- upload_id
+    (single-document AI Policy Builder) or corpus_id (multi-document AI
+    Authority Builder) -- never both, per the CHECK constraint on this
+    table. Mirrors ai_authority_builder.py's _corpus_owns for the
+    corpus path."""
+    if row.upload_id is not None:
+        upload = db.get(PolicyExtractionUpload, row.upload_id)
+        return upload.organization_id if upload else None
+    if row.corpus_id is not None:
+        corpus = db.get(AuthorityCorpus, row.corpus_id)
+        return corpus.organization_id if corpus else None
+    return None
+
+
 def list_candidates(
     db: Session,
+    organization_id: uuid.UUID | None,
     upload_id: uuid.UUID | None = None,
     corpus_id: uuid.UUID | None = None,
     status: str | None = None,
 ) -> list[PolicyExtractionCandidate]:
     """corpus_id filters to candidates discovered by the AI Authority
     Builder (AI_AUTHORITY_BUILDER_ARCHITECTURE.md); this function has no
-    other knowledge of corpora, it just filters on the column."""
-    stmt = select(PolicyExtractionCandidate).order_by(PolicyExtractionCandidate.created_at.desc())
+    other knowledge of corpora, it just filters on the column.
+
+    Milestone 3 (Enterprise Surface Isolation): organization_id is
+    required and enforced via an outer join through BOTH possible
+    parents -- confirmed exploitable before this: calling this with
+    neither upload_id nor corpus_id returned every organization's
+    candidates unconditionally, regardless of which single filter a
+    caller happened to also pass."""
+    stmt = (
+        select(PolicyExtractionCandidate)
+        .outerjoin(PolicyExtractionUpload, PolicyExtractionCandidate.upload_id == PolicyExtractionUpload.id)
+        .outerjoin(AuthorityCorpus, PolicyExtractionCandidate.corpus_id == AuthorityCorpus.id)
+        .where(
+            or_(
+                PolicyExtractionUpload.organization_id == organization_id,
+                AuthorityCorpus.organization_id == organization_id,
+            )
+        )
+        .order_by(PolicyExtractionCandidate.created_at.desc())
+    )
     if upload_id is not None:
         stmt = stmt.where(PolicyExtractionCandidate.upload_id == upload_id)
     if corpus_id is not None:
@@ -182,18 +229,22 @@ def list_candidates(
     return list(db.scalars(stmt))
 
 
-def get_candidate(db: Session, candidate_id: uuid.UUID) -> PolicyExtractionCandidate:
+def get_candidate(
+    db: Session, candidate_id: uuid.UUID, organization_id: uuid.UUID | None
+) -> PolicyExtractionCandidate:
     candidate = db.get(PolicyExtractionCandidate, candidate_id)
-    if candidate is None:
+    if candidate is None or _candidate_organization_id(db, candidate) != organization_id:
         raise CandidateNotFoundError(str(candidate_id))
     return candidate
 
 
-def edit_candidate(db: Session, candidate_id: uuid.UUID, content: dict) -> PolicyExtractionCandidate:
+def edit_candidate(
+    db: Session, candidate_id: uuid.UUID, organization_id: uuid.UUID | None, content: dict
+) -> PolicyExtractionCandidate:
     """Human review edits (AI_EXTRACTION_PIPELINE.md Stage 5), allowed
     only while pending_review: a promoted or dismissed candidate is a
     closed record of what was decided, not something to keep revising."""
-    row = get_candidate(db, candidate_id)
+    row = get_candidate(db, candidate_id, organization_id)
     if row.status != "pending_review":
         raise CandidateNotPendingReviewError(f"cannot edit a candidate in status '{row.status}'")
     row.content = content
@@ -202,8 +253,10 @@ def edit_candidate(db: Session, candidate_id: uuid.UUID, content: dict) -> Polic
     return row
 
 
-def dismiss_candidate(db: Session, candidate_id: uuid.UUID) -> PolicyExtractionCandidate:
-    row = get_candidate(db, candidate_id)
+def dismiss_candidate(
+    db: Session, candidate_id: uuid.UUID, organization_id: uuid.UUID | None
+) -> PolicyExtractionCandidate:
+    row = get_candidate(db, candidate_id, organization_id)
     if row.status != "pending_review":
         raise CandidateNotPendingReviewError(f"cannot dismiss a candidate in status '{row.status}'")
     row.status = "dismissed"
@@ -372,8 +425,20 @@ def promote_candidate(
     Builder's upload-based path, which has no corpus and therefore no
     org lineage of its own to inherit. If a corpus's own organization
     disagrees with the promoting caller's, this fails closed
-    (CrossOrganizationPromotionError) rather than silently picking one."""
-    row = get_candidate(db, candidate_id)
+    (CrossOrganizationPromotionError) rather than silently picking one.
+
+    Milestone 3 (Enterprise Surface Isolation): get_candidate below now
+    itself verifies the candidate resolves (via its own upload_id or
+    corpus_id parent -- see _candidate_organization_id) to this same
+    organization_id, raising CandidateNotFoundError otherwise -- the
+    single-document upload path gained this check for the first time
+    here. The explicit CrossOrganizationPromotionError check just below
+    is consequently unreachable for the corpus path today (get_candidate
+    already rejects the mismatch first, with the same "cross-
+    organization access looks like not-found" 404 every other endpoint
+    in this codebase uses); left in place as defense in depth rather
+    than removed, since it costs nothing to keep correct."""
+    row = get_candidate(db, candidate_id, organization_id)
     if row.status != "pending_review":
         raise CandidateNotPendingReviewError(f"cannot promote a candidate in status '{row.status}'")
 

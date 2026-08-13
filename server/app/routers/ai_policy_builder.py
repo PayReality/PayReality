@@ -49,6 +49,25 @@ def _upload_to_response(upload: PolicyExtractionUpload) -> UploadResponse:
     )
 
 
+def _authorized_upload(
+    upload_id: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+) -> PolicyExtractionUpload:
+    """Milestone 3 (Enterprise Surface Isolation): mirrors AI Authority
+    Builder's _authorized_corpus -- confirmed this pipeline had no
+    organization check of any kind before this
+    (MULTI_TENANT_ARCHITECTURE_VERIFICATION.md): five read endpoints
+    were reachable with zero authentication, and the underlying tables
+    had no organization column to check against even if they had been
+    gated."""
+    try:
+        upload = svc.get_upload(db, upload_id, organization.id)
+    except UploadNotFoundError:
+        raise HTTPException(status_code=404, detail="upload_not_found")
+    return upload
+
+
 def candidate_to_response(candidate: PolicyExtractionCandidate) -> CandidateResponse:
     return CandidateResponse(
         candidate_id=str(candidate.id),
@@ -79,7 +98,11 @@ def get_status():
     status_code=201,
     dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
 )
-async def upload(file: UploadFile, db: Session = Depends(get_db)):
+async def upload(
+    file: UploadFile,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     """AI_EXTRACTION_PIPELINE.md Stage 1. Extraction (Stages 2-4) runs
     synchronously here, the same choice document_service.py's DoA upload
     already made, for the same reason: no job-queue infrastructure exists
@@ -91,7 +114,7 @@ async def upload(file: UploadFile, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail="unsupported_format")
 
     raw = await file.read()
-    row = svc.create_upload(db, filename=file.filename or "document", format=format, raw=raw)
+    row = svc.create_upload(db, filename=file.filename or "document", format=format, raw=raw, organization_id=organization.id)
 
     try:
         svc.run_extraction(db, row, _provider())
@@ -104,22 +127,22 @@ async def upload(file: UploadFile, db: Session = Depends(get_db)):
 
 
 @router.get("/uploads", response_model=list[UploadResponse])
-def list_uploads(db: Session = Depends(get_db)):
-    return [_upload_to_response(u) for u in svc.list_uploads(db)]
+def list_uploads(organization: Organization = Depends(get_current_organization), db: Session = Depends(get_db)):
+    return [_upload_to_response(u) for u in svc.list_uploads(db, organization.id)]
 
 
 @router.get("/uploads/{upload_id}", response_model=UploadResponse)
-def get_upload(upload_id: uuid.UUID, db: Session = Depends(get_db)):
-    try:
-        row = svc.get_upload(db, upload_id)
-    except UploadNotFoundError:
-        raise HTTPException(status_code=404, detail="upload_not_found")
-    return _upload_to_response(row)
+def get_upload(upload_id: uuid.UUID, upload: PolicyExtractionUpload = Depends(_authorized_upload)):
+    return _upload_to_response(upload)
 
 
 @router.get("/uploads/{upload_id}/candidates", response_model=list[CandidateResponse])
-def list_candidates_for_upload(upload_id: uuid.UUID, db: Session = Depends(get_db)):
-    return [candidate_to_response(c) for c in svc.list_candidates(db, upload_id=upload_id)]
+def list_candidates_for_upload(
+    upload_id: uuid.UUID,
+    upload: PolicyExtractionUpload = Depends(_authorized_upload),
+    db: Session = Depends(get_db),
+):
+    return [candidate_to_response(c) for c in svc.list_candidates(db, upload.organization_id, upload_id=upload_id)]
 
 
 @router.get("/candidates", response_model=list[CandidateResponse])
@@ -127,18 +150,23 @@ def list_candidates(
     status: str | None = None,
     upload_id: uuid.UUID | None = None,
     corpus_id: uuid.UUID | None = None,
+    organization: Organization = Depends(get_current_organization),
     db: Session = Depends(get_db),
 ):
     return [
         candidate_to_response(c)
-        for c in svc.list_candidates(db, upload_id=upload_id, corpus_id=corpus_id, status=status)
+        for c in svc.list_candidates(db, organization.id, upload_id=upload_id, corpus_id=corpus_id, status=status)
     ]
 
 
 @router.get("/candidates/{candidate_id}", response_model=CandidateResponse)
-def get_candidate(candidate_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_candidate(
+    candidate_id: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        row = svc.get_candidate(db, candidate_id)
+        row = svc.get_candidate(db, candidate_id, organization.id)
     except CandidateNotFoundError:
         raise HTTPException(status_code=404, detail="candidate_not_found")
     return candidate_to_response(row)
@@ -149,9 +177,14 @@ def get_candidate(candidate_id: uuid.UUID, db: Session = Depends(get_db)):
     response_model=CandidateResponse,
     dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
 )
-def edit_candidate(candidate_id: uuid.UUID, body: EditCandidateRequest, db: Session = Depends(get_db)):
+def edit_candidate(
+    candidate_id: uuid.UUID,
+    body: EditCandidateRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        row = svc.edit_candidate(db, candidate_id, body.content.model_dump())
+        row = svc.edit_candidate(db, candidate_id, organization.id, body.content.model_dump())
     except CandidateNotFoundError:
         raise HTTPException(status_code=404, detail="candidate_not_found")
     except CandidateNotPendingReviewError as e:
@@ -164,9 +197,13 @@ def edit_candidate(candidate_id: uuid.UUID, body: EditCandidateRequest, db: Sess
     response_model=CandidateResponse,
     dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
 )
-def dismiss_candidate(candidate_id: uuid.UUID, db: Session = Depends(get_db)):
+def dismiss_candidate(
+    candidate_id: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        row = svc.dismiss_candidate(db, candidate_id)
+        row = svc.dismiss_candidate(db, candidate_id, organization.id)
     except CandidateNotFoundError:
         raise HTTPException(status_code=404, detail="candidate_not_found")
     except CandidateNotPendingReviewError as e:
