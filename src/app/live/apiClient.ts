@@ -1,4 +1,5 @@
 import { getOperatorKey } from "./operatorKey";
+import { getOrganizationId } from "./organizationId";
 import { getSessionToken } from "./sessionToken";
 import { DEMO_MODE } from "../demo/config";
 import { resolveMockResponse } from "../demo/mockRouter";
@@ -26,6 +27,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const operatorKey = getOperatorKey();
   if (operatorKey && !headers.has("X-PayReality-Operator-Key")) {
     headers.set("X-PayReality-Operator-Key", operatorKey);
+    // Milestone 3 (Enterprise Surface Isolation): the Operator Key is
+    // platform-admin-only (Milestone 2) and has no organization of its
+    // own -- every org-scoped request it makes must now name one
+    // explicitly. Only attached alongside the Operator Key itself,
+    // since a session-token caller's organization is already resolved
+    // server-side from their own account and never needs this header.
+    const organizationId = getOrganizationId();
+    if (organizationId && !headers.has("X-PayReality-Organization-Id")) {
+      headers.set("X-PayReality-Organization-Id", organizationId);
+    }
   }
   // Phase 10 (RBAC.md): a logged-in human user's session token, sent
   // alongside the Operator Key above. The backend always checks the

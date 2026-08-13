@@ -107,3 +107,42 @@ export interface CreateUserResult {
   user: OrgUser;
   temporary_password: string;
 }
+
+// Milestone 3 (Enterprise Surface Isolation): the Organization Lifecycle.
+export type OrganizationLifecycleStatus = "active" | "deactivated" | "archived";
+
+export interface OrganizationLifecycle {
+  id: string;
+  name: string;
+  status: OrganizationLifecycleStatus;
+  created_at: string;
+  deactivated_at: string | null;
+  deactivated_by: string | null;
+  archived_at: string | null;
+  archived_by: string | null;
+}
+
+export interface CreateOrganizationResult {
+  organization: OrganizationLifecycle;
+  owner: OrgUser;
+  temporary_password: string;
+}
+
+export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
+
+export interface Invitation {
+  id: string;
+  organization_id: string;
+  email: string;
+  role: string;
+  status: InvitationStatus;
+  invited_by: string | null;
+  created_at: string;
+  expires_at: string;
+  accepted_at: string | null;
+}
+
+export interface InviteMemberResult {
+  invitation: Invitation;
+  raw_token: string;
+}

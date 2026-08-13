@@ -4,12 +4,16 @@ import type {
   ApiKey,
   BusinessUnit,
   CreateApiKeyResult,
+  CreateOrganizationResult,
   CreateUserResult,
   Department,
   EnterpriseSystem,
   EnterpriseSystemType,
   HealthStatus,
   IntegrationsStatus,
+  Invitation,
+  InviteMemberResult,
+  OrganizationLifecycle,
   OrganizationSettings,
   OrgUser,
   Team,
@@ -67,4 +71,42 @@ export const usersApi = {
     apiClient.patch<OrgUser>(`/v1/users/${userId}/role`, { role }),
   updateStatus: (userId: string, status: string) =>
     apiClient.patch<OrgUser>(`/v1/users/${userId}/status`, { status }),
+};
+
+// Milestone 3 (Enterprise Surface Isolation): inviting a member into MY
+// OWN organization -- an ordinary per-tenant action (USERS_MANAGE, same
+// as usersApi.create above), distinct from platformOrganizationsApi
+// below. The real email-and-accept flow usersApi.create never was: a
+// one-time token, shown once, delivered however the inviter chooses.
+export const invitationsApi = {
+  list: (status?: string) =>
+    apiClient.get<Invitation[]>(`/v1/organization/invitations${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  invite: (email: string, role: string) =>
+    apiClient.post<InviteMemberResult>("/v1/organization/invitations", { email, role }),
+  revoke: (invitationId: string) =>
+    apiClient.delete<Invitation>(`/v1/organization/invitations/${invitationId}`),
+};
+
+// Milestone 3 (Enterprise Surface Isolation): create/list/deactivate/
+// archive an ARBITRARY organization. Platform-admin only -- every call
+// here requires the Operator Key AND an explicit target organization on
+// the ones that act on one (see OperatorKeyField.tsx), matching the
+// backend's own verify_operator_key gate
+// (routers/organization_lifecycle.py). Confirmed as the first UI ever
+// built for this: before this milestone, an Organization could only be
+// created by a startup-only server hook, with no API or UI at all.
+export const platformOrganizationsApi = {
+  list: () => apiClient.get<OrganizationLifecycle[]>("/v1/organizations"),
+  create: (name: string, ownerEmail: string, ownerName: string) =>
+    apiClient.post<CreateOrganizationResult>("/v1/organizations", {
+      name,
+      owner_email: ownerEmail,
+      owner_name: ownerName,
+    }),
+  deactivate: (organizationId: string) =>
+    apiClient.post<OrganizationLifecycle>(`/v1/organizations/${organizationId}/deactivate`, {}),
+  reactivate: (organizationId: string) =>
+    apiClient.post<OrganizationLifecycle>(`/v1/organizations/${organizationId}/reactivate`, {}),
+  archive: (organizationId: string) =>
+    apiClient.post<OrganizationLifecycle>(`/v1/organizations/${organizationId}/archive`, {}),
 };

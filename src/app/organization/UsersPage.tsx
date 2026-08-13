@@ -1,12 +1,12 @@
 import { useEffect, useId, useState } from "react";
 import { Link } from "react-router";
-import { usersApi } from "./api";
+import { invitationsApi, usersApi } from "./api";
 import { RequirePermission } from "../auth/RequireAuth";
 import { useAuth } from "../auth/AuthContext";
 import { describeApiError } from "../live/format";
 import { ASSIGNABLE_ROLES, ROLE_LABELS } from "../auth/types";
 import { Card } from "../components/ui/card";
-import type { OrgUser } from "./types";
+import type { Invitation, OrgUser } from "./types";
 
 export function UsersPage() {
   const formId = useId();
@@ -20,10 +20,52 @@ export function UsersPage() {
   const [creating, setCreating] = useState(false);
   const [confirmingDisableId, setConfirmingDisableId] = useState<string | null>(null);
 
+  // Milestone 3 (Enterprise Surface Isolation): the real email-and-accept
+  // invite flow "Add a user" above never was -- that path creates the
+  // User directly with a temporary password shown once, no separate
+  // accept step. This is additive, not a replacement for it.
+  const [invitations, setInvitations] = useState<Invitation[] | null>(null);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("auditor");
+  const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [inviting, setInviting] = useState(false);
+
   function load() {
     usersApi.list().then(setUsers).catch((e) => setMessage(describeApiError(e, "Load users")));
+    invitationsApi
+      .list("pending")
+      .then(setInvitations)
+      .catch((e) => setMessage(describeApiError(e, "Load invitations")));
   }
   useEffect(load, []);
+
+  async function inviteMember() {
+    if (!inviteEmail.trim()) {
+      setMessage("An email is required to invite a member.");
+      return;
+    }
+    setInviting(true);
+    setMessage(null);
+    try {
+      const result = await invitationsApi.invite(inviteEmail, inviteRole);
+      setInviteToken(result.raw_token);
+      setInviteEmail("");
+      load();
+    } catch (e) {
+      setMessage(describeApiError(e, "Invite member"));
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  async function revokeInvitation(id: string) {
+    try {
+      await invitationsApi.revoke(id);
+      load();
+    } catch (e) {
+      setMessage(describeApiError(e, "Revoke invitation"));
+    }
+  }
 
   async function createUser() {
     if (!email.trim() || !name.trim()) {
@@ -142,6 +184,78 @@ export function UsersPage() {
             </div>
           )}
           {message && <p role="alert" className="text-xs mt-2" style={{ color: "var(--pr-text-muted)" }}>{message}</p>}
+        </Card>
+
+        <Card style={{ marginBottom: 24 }}>
+          <h2 className="text-sm font-medium mb-1" style={{ color: "var(--pr-text-primary)" }}>Invite a member</h2>
+          <p className="text-xs mb-4" style={{ color: "var(--pr-text-muted)" }}>
+            Sends a one-time acceptance token instead of setting their password directly -- there's no
+            email delivery yet, so share the token with them however you normally would.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+            <div>
+              <label htmlFor={`${formId}-invite-email`} className="block text-xs font-medium mb-1.5" style={{ color: "var(--pr-text-muted)" }}>
+                Email
+              </label>
+              <input
+                id={`${formId}-invite-email`}
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                className="w-full text-sm px-3 py-2 rounded-lg"
+                style={{ backgroundColor: "var(--pr-input-bg)", color: "var(--pr-text-primary)", border: "1px solid var(--pr-overlay-08)" }}
+              />
+            </div>
+            <div>
+              <label htmlFor={`${formId}-invite-role`} className="block text-xs font-medium mb-1.5" style={{ color: "var(--pr-text-muted)" }}>
+                Role
+              </label>
+              <select
+                id={`${formId}-invite-role`}
+                value={inviteRole}
+                onChange={(e) => setInviteRole(e.target.value)}
+                className="w-full text-sm px-3 py-2 rounded-lg"
+                style={{ backgroundColor: "var(--pr-input-bg)", color: "var(--pr-text-primary)", border: "1px solid var(--pr-overlay-08)" }}
+              >
+                {ASSIGNABLE_ROLES.map((r) => (
+                  <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={inviteMember}
+            disabled={inviting}
+            className="text-sm font-medium px-4 py-2 rounded-lg"
+            style={{ backgroundColor: "var(--pr-authority-blue)", color: "white", opacity: inviting ? 0.6 : 1 }}
+          >
+            {inviting ? "Sending..." : "Send invitation"}
+          </button>
+
+          {inviteToken && (
+            <div className="mt-3 p-3 rounded-lg text-xs" style={{ backgroundColor: "rgba(245,158,11,0.1)", color: "var(--pr-warning-amber)" }}>
+              Invitation token (shown once): <code>{inviteToken}</code>
+            </div>
+          )}
+
+          {invitations && invitations.length > 0 && (
+            <div className="mt-5">
+              <h3 className="text-xs font-medium mb-2" style={{ color: "var(--pr-text-muted)" }}>Pending invitations</h3>
+              <ul className="space-y-1.5">
+                {invitations.map((inv) => (
+                  <li key={inv.id} className="flex items-center justify-between text-xs">
+                    <span style={{ color: "var(--pr-text-secondary)" }}>
+                      {inv.email} &middot; {ROLE_LABELS[inv.role as keyof typeof ROLE_LABELS] ?? inv.role}
+                    </span>
+                    <button type="button" onClick={() => revokeInvitation(inv.id)} style={{ color: "var(--pr-critical-red)" }}>
+                      Revoke
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </Card>
 
         <Card padding={0} style={{ overflow: "hidden" }}>

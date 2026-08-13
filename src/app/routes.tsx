@@ -95,6 +95,7 @@ export const router = createBrowserRouter([
 
           { path: "organization", lazy: () => import("./organization/OrganizationSettingsPage").then((m) => ({ Component: m.OrganizationSettingsPage })) },
           { path: "organization/users", lazy: () => import("./organization/UsersPage").then((m) => ({ Component: m.UsersPage })) },
+          { path: "organization/platform", lazy: () => import("./organization/PlatformOrganizationsPage").then((m) => ({ Component: m.PlatformOrganizationsPage })) },
 
           // Policy Studio is the single entry point for all policy work: manual
           // authoring, the AI Authority Builder (multi-document corpus

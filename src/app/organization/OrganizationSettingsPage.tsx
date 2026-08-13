@@ -1021,6 +1021,8 @@ export function OrganizationSettingsPage() {
           <p style={{ color: "var(--pr-text-muted)", fontSize: 13, maxWidth: 640 }}>
             How this organisation is configured, who has access, and whether the platform is healthy.{" "}
             <Link to="/organization/users" style={{ color: "var(--pr-authority-blue)" }}>Manage users and roles →</Link>
+            {" "}
+            <Link to="/organization/platform" style={{ color: "var(--pr-authority-blue)" }}>Platform administration →</Link>
           </p>
         </div>
 
