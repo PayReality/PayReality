@@ -23,10 +23,9 @@ container_apps_min_replicas           = 1
 # must consciously set this, no default exists.
 alert_notification_email = "payreality.ceo@gmail.com"
 
-# Milestone 5 (Azure Production Cutover): redeployed to current HEAD,
-# built and pushed via `az acr build` from server/Dockerfile (embedded
-# OPA included) and tagged with the exact source commit it was built
-# from; see MILESTONE_5_AZURE_PRODUCTION_CUTOVER_SUMMARY.md. Carries
-# every fix through Milestone 3 (Enterprise Surface Isolation), which
-# commit prod-5e1c3ad (Production Bootstrap Phase 4) predated entirely.
-container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-cb8c9b3"
+# Milestone 6 (Production Blocker Resolution): redeployed again to fix
+# the Runtime Policy Simulator's multi-tenant crash and migrate AI
+# Policy Builder onto Azure AI Foundry; see
+# MILESTONE_6_PRODUCTION_BLOCKER_RESOLUTION_SUMMARY.md. Built and pushed
+# via `az acr build`, tagged with the exact source commit as always.
+container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-54c4411"
