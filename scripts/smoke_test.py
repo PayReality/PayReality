@@ -147,6 +147,16 @@ def create_agent(principal_id: str) -> tuple[str, str, nacl.signing.SigningKey]:
     return resp["id"], resp["certificate_id"], signing_key
 
 
+@step("activate the newly registered Agent (registered -> active)")
+def activate_agent(agent_id: str):
+    # A freshly registered Agent's certificate starts "issued", not
+    # "active" (server/app/services/agent_service.py::create_agent).
+    # This explicit activation step, not certificate issuance itself, is
+    # what a signed Intent's certificate check actually requires.
+    status, resp = _request("POST", f"/v1/agents/{agent_id}/activate", b"{}", _operator_headers())
+    assert status == 200, f"status {status}, body {resp}"
+
+
 @step("submit a signed Intent and receive a real Decision")
 def submit_intent(agent_id: str, certificate_id: str, signing_key: nacl.signing.SigningKey) -> tuple[str, str]:
     payload = {
@@ -229,6 +239,7 @@ def main():
     check_ready()
     principal_id = create_principal()
     agent_id, certificate_id, signing_key = create_agent(principal_id)
+    activate_agent(agent_id)
     decision_id, evidence_id = submit_intent(agent_id, certificate_id, signing_key)
     maybe_resolve(decision_id)
     verify_evidence(evidence_id)
