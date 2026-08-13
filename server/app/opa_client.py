@@ -1,7 +1,25 @@
 """httpx-based OPA client: implements the OpaClient protocol used by
 app.domain.decision.engine, and the bundle-activation calls used by the
-Policy Compiler (spec 12.4 Stage 9)."""
+Policy Compiler (spec 12.4 Stage 9).
 
+Milestone 2 (Multi-Tenant Foundation,
+MILESTONE_2_MULTI_TENANT_FOUNDATION_SUMMARY.md Phase B1/B2, Option 2):
+before this milestone, every organization shared exactly one OPA
+package, `payreality.authorization`, uploaded and queried via the
+literal `DATA_PATH` constant below. Every organization now compiles to,
+and is queried against, its own package,
+`payreality.authorization.org_<hex>` -- the three naming helpers below
+are the single place that name is computed, reused by both
+runtime_policy_service.py (compile/deploy/reconcile) and
+intent_service.py (the live decision path), so the two can never
+independently drift on what an organization's package is actually
+called. `DATA_PATH` itself is kept as the pre-Milestone-2 default for
+any caller that hasn't been updated to pass an explicit path -- there
+should be none left after this milestone's remaining commits, but
+`query()` fails loudly (a 404-shaped OPA response, not a silent
+cross-tenant read) rather than guessing if one is ever missed."""
+
+import uuid
 from typing import Any
 
 import httpx
@@ -12,14 +30,40 @@ from app.domain.decision.engine import OPAEvaluationError, OPATimeoutError
 DATA_PATH = "/v1/data/payreality/authorization"
 
 
+def org_package_path(organization_id: uuid.UUID) -> str:
+    """The Rego package name for one organization's compiled bundle.
+    `.hex` (not the dashed string form) because a Rego package path
+    segment must be a valid identifier -- no hyphens -- the same
+    constraint dry_run.py's own package-naming already has to respect."""
+    return f"payreality.authorization.org_{organization_id.hex}"
+
+
+def org_data_path(organization_id: uuid.UUID) -> str:
+    """The `/v1/data/...` path OPA serves that package's rules at --
+    always the package path with dots replaced by slashes, OPA's own
+    fixed convention, the same one dry_run.py/batch_evaluator.py already
+    rely on for their own throwaway packages."""
+    return "/v1/data/" + org_package_path(organization_id).replace(".", "/")
+
+
+def org_policy_id(organization_id: uuid.UUID) -> str:
+    """The OPA REST policy id (`PUT /v1/policies/<id>`) one
+    organization's compiled bundle is uploaded under -- a plain resource
+    id, not a Rego identifier, so hyphens are fine here unlike the
+    package path above."""
+    return f"authorization-org-{organization_id.hex}"
+
+
 class HttpOpaClient:
     def __init__(self, base_url: str | None = None):
         self.base_url = base_url or settings.opa_url
 
-    def query(self, input_doc: dict[str, Any], timeout_ms: int = 200) -> dict[str, Any]:
+    def query(
+        self, input_doc: dict[str, Any], timeout_ms: int = 200, data_path: str | None = None
+    ) -> dict[str, Any]:
         try:
             resp = httpx.post(
-                f"{self.base_url}{DATA_PATH}",
+                f"{self.base_url}{data_path or DATA_PATH}",
                 json={"input": input_doc},
                 timeout=timeout_ms / 1000,
             )
