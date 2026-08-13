@@ -34,6 +34,11 @@ class _FakeRow:
         self.content = to_dict(policy)
 
 
+class _FakePrincipal:
+    def __init__(self, organization_id):
+        self.organization_id = organization_id
+
+
 class _FakeSession:
     def __init__(self, scalars_results=None, scalar_results=None, get_results=None):
         self._scalars_results = list(scalars_results or [])
@@ -150,23 +155,36 @@ def test_missing_principal_skipped_for_non_uuid_principal():
     diff_versions/resolve_mandate_ids already apply to this exact field."""
     candidate = _policy(scope=Scope(principal="Regional Controller", action="x"))
     db = _FakeSession()  # never touched
-    assert _check_missing_principal(db, candidate) == []
+    assert _check_missing_principal(db, candidate, None) == []
 
 
 def test_missing_principal_flagged_when_uuid_does_not_resolve():
     principal_id = str(uuid.uuid4())
     candidate = _policy(scope=Scope(principal=principal_id, action="x"))
     db = _FakeSession(get_results={})
-    violations = _check_missing_principal(db, candidate)
+    violations = _check_missing_principal(db, candidate, None)
     assert len(violations) == 1
     assert violations[0].check == "missing_principal"
 
 
 def test_missing_principal_not_flagged_when_uuid_resolves():
     principal_id = uuid.uuid4()
+    org_id = uuid.uuid4()
     candidate = _policy(scope=Scope(principal=str(principal_id), action="x"))
-    db = _FakeSession(get_results={str(principal_id): object()})
-    assert _check_missing_principal(db, candidate) == []
+    db = _FakeSession(get_results={str(principal_id): _FakePrincipal(organization_id=org_id)})
+    assert _check_missing_principal(db, candidate, org_id) == []
+
+
+def test_missing_principal_flagged_when_uuid_resolves_in_a_different_organization():
+    """Milestone 2 (Multi-Tenant Foundation): a scope.principal id that
+    resolves to a REAL Principal belonging to a different organization
+    must be treated identically to one that doesn't resolve at all."""
+    principal_id = uuid.uuid4()
+    candidate = _policy(scope=Scope(principal=str(principal_id), action="x"))
+    db = _FakeSession(get_results={str(principal_id): _FakePrincipal(organization_id=uuid.uuid4())})
+    violations = _check_missing_principal(db, candidate, uuid.uuid4())
+    assert len(violations) == 1
+    assert violations[0].check == "missing_principal"
 
 
 # --- broken inheritance ------------------------------------------------------
@@ -176,13 +194,13 @@ def test_broken_inheritance_resolved_via_sibling_active_policy_without_touching_
     candidate = _policy(scope=Scope(principal="analyst", action="x"), constraints=Constraints(delegated_by="manager"))
     sibling = _policy(scope=Scope(principal="manager", action="y"))
     db = _FakeSession()  # asserts nothing is ever queried
-    assert _check_broken_inheritance(db, candidate, [candidate, sibling]) == []
+    assert _check_broken_inheritance(db, candidate, [candidate, sibling], None) == []
 
 
 def test_broken_inheritance_flagged_when_delegated_by_resolves_nowhere():
     candidate = _policy(scope=Scope(principal="analyst", action="x"), constraints=Constraints(delegated_by="nobody"))
     db = _FakeSession(scalar_results=[None])
-    violations = _check_broken_inheritance(db, candidate, [candidate])
+    violations = _check_broken_inheritance(db, candidate, [candidate], None)
     assert len(violations) == 1
     assert violations[0].check == "broken_inheritance"
 
@@ -190,7 +208,18 @@ def test_broken_inheritance_flagged_when_delegated_by_resolves_nowhere():
 def test_broken_inheritance_not_flagged_when_no_delegation_declared():
     candidate = _policy(constraints=Constraints(delegated_by=None))
     db = _FakeSession()
-    assert _check_broken_inheritance(db, candidate, [candidate]) == []
+    assert _check_broken_inheritance(db, candidate, [candidate], None) == []
+
+
+def test_broken_inheritance_flagged_when_delegated_by_resolves_in_a_different_organization():
+    """Milestone 2: a free-text delegated_by that resolves to a real
+    Principal belonging to a different organization must be treated
+    identically to one that doesn't resolve at all."""
+    candidate = _policy(scope=Scope(principal="analyst", action="x"), constraints=Constraints(delegated_by="someone else's manager"))
+    db = _FakeSession(scalar_results=[None])  # org-filtered query finds nothing for THIS organization
+    violations = _check_broken_inheritance(db, candidate, [candidate], uuid.uuid4())
+    assert len(violations) == 1
+    assert violations[0].check == "broken_inheritance"
 
 
 # --- run_safety_checks (full composition) -----------------------------------
@@ -201,7 +230,7 @@ def test_run_safety_checks_reports_ok_for_a_clean_candidate():
     candidate = _policy(scope=Scope(principal="Regional Controller", action="vendor_payment"))
     row = _FakeRow(candidate_key, candidate)
     db = _FakeSession(scalars_results=[[]])  # no other active policies
-    result = run_safety_checks(db, candidate_key, row)
+    result = run_safety_checks(db, candidate_key, row, None)
     assert result.ok
     assert result.violations == ()
 
@@ -212,6 +241,6 @@ def test_run_safety_checks_surfaces_duplicate_authority_against_other_active_row
     row = _FakeRow(candidate_key, candidate)
     other_row = _FakeRow(uuid.uuid4(), _policy(scope=Scope(principal="Regional Controller", action="vendor_payment")))
     db = _FakeSession(scalars_results=[[other_row]])
-    result = run_safety_checks(db, candidate_key, row)
+    result = run_safety_checks(db, candidate_key, row, None)
     assert not result.ok
     assert any(v.check == "duplicate_authority" for v in result.violations)

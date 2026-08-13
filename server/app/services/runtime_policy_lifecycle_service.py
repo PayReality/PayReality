@@ -105,7 +105,7 @@ def activate_policy(
     if row.status not in _ACTIVATABLE_STATUSES:
         raise svc.InvalidTransitionError(row.status, "activate")
 
-    safety = run_safety_checks(db, policy_key, row)
+    safety = run_safety_checks(db, policy_key, row, organization_id)
     if not safety.ok:
         _record_blocked(db, policy_key, row.version, actor, safety, organization_id)
         raise ActivationBlockedError(safety.violations)
@@ -160,7 +160,7 @@ def schedule_activation(
     if row.status not in _ACTIVATABLE_STATUSES:
         raise svc.InvalidTransitionError(row.status, "schedule activation")
 
-    safety = run_safety_checks(db, policy_key, row)
+    safety = run_safety_checks(db, policy_key, row, organization_id)
     if not safety.ok:
         _record_blocked(db, policy_key, row.version, actor, safety, organization_id)
         raise ActivationBlockedError(safety.violations)
@@ -411,7 +411,7 @@ def preview_activation_impact(
     activating. Reuses the existing Diff engine exactly as instructed --
     no separate impact-computation logic exists here."""
     candidate = svc.get_latest(db, policy_key, organization_id)
-    safety = run_safety_checks(db, policy_key, candidate)
+    safety = run_safety_checks(db, policy_key, candidate, organization_id)
 
     current_active = db.scalar(
         select(RuntimePolicyRecord).where(
@@ -613,7 +613,7 @@ def get_dashboard(db: Session, organization_id: uuid.UUID | None) -> DashboardSu
     for row in latest_rows:
         if row.status not in ("approved", "compiled"):
             continue
-        safety = run_safety_checks(db, row.policy_key, row)
+        safety = run_safety_checks(db, row.policy_key, row, organization_id)
         if not safety.ok:
             conflict_alerts.append({"policy_key": str(row.policy_key), "version": row.version, "violations": safety.violations})
 

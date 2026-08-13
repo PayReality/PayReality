@@ -78,12 +78,23 @@ def _is_uuid(value: str) -> bool:
         return False
 
 
-def _other_active_runtime_policies(db: Session, exclude_policy_key: uuid.UUID) -> list[RuntimePolicyRecord]:
+def _other_active_runtime_policies(
+    db: Session, exclude_policy_key: uuid.UUID, organization_id: uuid.UUID | None
+) -> list[RuntimePolicyRecord]:
+    """Milestone 2 (Multi-Tenant Foundation): scoped to organization_id --
+    previously loaded every organization's active RuntimePolicyRecord
+    rows unconditionally, the exact "noisy neighbor" problem the ADR in
+    MILESTONE_2_MULTI_TENANT_FOUNDATION_SUMMARY.md names: two
+    organizations coincidentally sharing a scope.principal string would
+    cause a false cross-org duplicate_authority/circular_delegation
+    violation, blocking both organizations' activations for a conflict
+    that was never real."""
     return list(
         db.scalars(
             select(RuntimePolicyRecord).where(
                 RuntimePolicyRecord.status == "active",
                 RuntimePolicyRecord.policy_key != exclude_policy_key,
+                RuntimePolicyRecord.organization_id == organization_id,
             )
         )
     )
@@ -137,8 +148,15 @@ def _known_principal_names(policies: list[RuntimePolicy]) -> set[str]:
 
 
 def _check_broken_inheritance(
-    db: Session, candidate: RuntimePolicy, all_policies: list[RuntimePolicy]
+    db: Session,
+    candidate: RuntimePolicy,
+    all_policies: list[RuntimePolicy],
+    organization_id: uuid.UUID | None,
 ) -> list[SafetyViolation]:
+    """Milestone 2: a delegated_by that resolves to a real Principal row
+    belonging to a DIFFERENT organization is treated the same as not
+    resolving at all -- a policy may only inherit from a principal within
+    its own organization."""
     delegated_by = candidate.constraints.delegated_by
     if not delegated_by:
         return []
@@ -148,10 +166,16 @@ def _check_broken_inheritance(
         return []
 
     if _is_uuid(delegated_by):
-        if db.get(Principal, uuid.UUID(delegated_by)) is not None:
+        principal = db.get(Principal, uuid.UUID(delegated_by))
+        if principal is not None and principal.organization_id == organization_id:
             return []
     else:
-        if db.scalar(select(Principal).where(Principal.name.ilike(delegated_by.strip()))) is not None:
+        principal = db.scalar(
+            select(Principal).where(
+                Principal.name.ilike(delegated_by.strip()), Principal.organization_id == organization_id
+            )
+        )
+        if principal is not None:
             return []
 
     return [
@@ -159,31 +183,39 @@ def _check_broken_inheritance(
             check="broken_inheritance",
             message=(
                 f"This policy delegates from '{delegated_by}', which is not scoped by any other "
-                "active policy and does not resolve to a known Principal -- the delegation chain "
-                "would be broken if this policy activates."
+                "active policy and does not resolve to a known Principal in this organization -- "
+                "the delegation chain would be broken if this policy activates."
             ),
             details={"delegated_by": delegated_by},
         )
     ]
 
 
-def _check_missing_principal(db: Session, candidate: RuntimePolicy) -> list[SafetyViolation]:
+def _check_missing_principal(
+    db: Session, candidate: RuntimePolicy, organization_id: uuid.UUID | None
+) -> list[SafetyViolation]:
     """Only enforceable when scope.principal is a Principal id (the AI
     Authority Builder promotion path) -- a manually-authored RuntimePolicy
     is free to name its principal as plain text (Policy Studio's guided
     wizard predates the Principal model and remains fully supported), and
     there is no way to verify a free-text name against a real entity, the
     same tolerance `diff_versions`/`resolve_mandate_ids` already apply to
-    this exact field."""
+    this exact field.
+
+    Milestone 2: a scope.principal id that resolves to a real Principal
+    belonging to a DIFFERENT organization is treated identically to one
+    that doesn't resolve at all -- a policy may only govern a principal
+    within its own organization."""
     principal = candidate.scope.principal
     if not principal or not _is_uuid(principal):
         return []
-    if db.get(Principal, uuid.UUID(principal)) is not None:
+    row = db.get(Principal, uuid.UUID(principal))
+    if row is not None and row.organization_id == organization_id:
         return []
     return [
         SafetyViolation(
             check="missing_principal",
-            message=f"scope.principal '{principal}' does not resolve to any existing Principal.",
+            message=f"scope.principal '{principal}' does not resolve to any existing Principal in this organization.",
             details={"principal": principal},
         )
     ]
@@ -228,20 +260,29 @@ def _check_invalid_thresholds(candidate: RuntimePolicy) -> list[SafetyViolation]
     return violations
 
 
-def run_safety_checks(db: Session, policy_key: uuid.UUID, candidate_row: RuntimePolicyRecord) -> SafetyCheckResult:
+def run_safety_checks(
+    db: Session, policy_key: uuid.UUID, candidate_row: RuntimePolicyRecord, organization_id: uuid.UUID | None
+) -> SafetyCheckResult:
     """Everything `activate_policy()` must pass before it may call the
     existing `deploy_policy()`. `candidate_row` is the version about to be
-    activated; it is read, never written, by this function."""
+    activated; it is read, never written, by this function.
+
+    Milestone 2 (Multi-Tenant Foundation): `organization_id` is threaded
+    into every DB-backed check below (`_other_active_runtime_policies`,
+    `_check_broken_inheritance`, `_check_missing_principal`) so this
+    always evaluates candidate against its OWN organization's active
+    policies and principals -- never another organization's, closing
+    the "Authority Graph isolation" gap named in the ADR."""
     candidate = from_dict(candidate_row.content)
-    other_rows = _other_active_runtime_policies(db, policy_key)
+    other_rows = _other_active_runtime_policies(db, policy_key, organization_id)
     others = [(row.policy_key, from_dict(row.content)) for row in other_rows]
     all_policies = [candidate] + [p for _, p in others]
 
     violations: list[SafetyViolation] = []
     violations.extend(_check_invalid_thresholds(candidate))
     violations.extend(_check_duplicate_authority(candidate, policy_key, others))
-    violations.extend(_check_broken_inheritance(db, candidate, all_policies))
-    violations.extend(_check_missing_principal(db, candidate))
+    violations.extend(_check_broken_inheritance(db, candidate, all_policies, organization_id))
+    violations.extend(_check_missing_principal(db, candidate, organization_id))
     violations.extend(_check_circular_delegation(all_policies))
 
     return SafetyCheckResult(violations=tuple(violations))
