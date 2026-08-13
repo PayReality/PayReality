@@ -20,14 +20,32 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Agent, Authority, EnterpriseSystem, Mandate, Policy, RuntimePolicyRecord
+from app.domain.compiler_v2.bundle_builder import retarget_package
 from app.domain.compiler_v2.compiler_errors import CompilerDiagnostics
 from app.domain.compiler_v2.compiler_v2 import compile_bundle
 from app.domain.compiler_v2.dry_run import DryRunResult, dry_run as run_dry_run
 from app.domain.runtime_policy.conditions import Operator
 from app.domain.runtime_policy.runtime_policy import RuntimePolicy
 from app.domain.runtime_policy.schema import from_dict, to_dict
-from app.opa_client import HttpOpaClient
+from app.opa_client import HttpOpaClient, org_package_path, org_policy_id
 from app.services.runtime_policy_lifecycle_events import record_lifecycle_event
+
+# Milestone 2 (Multi-Tenant Foundation): the literal, pre-Milestone-2
+# package/policy-id pair every organization used to share unconditionally.
+# `organization_id is None` is kept as its own valid, consistent scope --
+# the same "None is a real scope, not an error" convention
+# evidence_service.verify_chain already established -- so a never-
+# bootstrapped deployment (zero Organizations) and any pre-migration
+# unit test fixture that never sets organization_id at all keep working
+# completely unchanged, uploading to exactly the package they always did.
+_LEGACY_PACKAGE = "payreality.authorization"
+_LEGACY_POLICY_ID = "authorization"
+
+
+def _opa_package_and_policy_id(organization_id: uuid.UUID | None) -> tuple[str, str]:
+    if organization_id is None:
+        return _LEGACY_PACKAGE, _LEGACY_POLICY_ID
+    return org_package_path(organization_id), org_policy_id(organization_id)
 
 _NUMERIC_OPERATORS = {Operator.LTE, Operator.GTE, Operator.LT, Operator.GT}
 
@@ -88,10 +106,15 @@ def _is_unexpected_active_writer(prior_active) -> bool:
     )
 
 
-def _latest_version_row(db: Session, policy_key: uuid.UUID) -> RuntimePolicyRecord | None:
+def _latest_version_row(
+    db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None
+) -> RuntimePolicyRecord | None:
     return db.scalar(
         select(RuntimePolicyRecord)
-        .where(RuntimePolicyRecord.policy_key == policy_key)
+        .where(
+            RuntimePolicyRecord.policy_key == policy_key,
+            RuntimePolicyRecord.organization_id == organization_id,
+        )
         .order_by(RuntimePolicyRecord.version.desc())
         .limit(1)
     )
@@ -101,10 +124,26 @@ def _row_to_policy(row: RuntimePolicyRecord) -> RuntimePolicy:
     return from_dict(row.content)
 
 
-def list_latest_policies(db: Session, status: str | None = None) -> list[RuntimePolicyRecord]:
+def list_latest_policies(
+    db: Session, organization_id: uuid.UUID | None, status: str | None = None
+) -> list[RuntimePolicyRecord]:
     """One row per policy_key: its latest version, matching the Policy
-    List / Review Queue pages (POLICY_STUDIO_WIREFRAMES.md)."""
-    all_rows = list(db.scalars(select(RuntimePolicyRecord).order_by(RuntimePolicyRecord.version.desc())))
+    List / Review Queue pages (POLICY_STUDIO_WIREFRAMES.md).
+
+    Milestone 2 (Multi-Tenant Foundation): `organization_id` is required
+    (pass `None` explicitly for the pre-Milestone-2, no-organization-set
+    legacy scope -- the same "None is its own valid, consistent scope,
+    not an error" convention evidence_service.verify_chain already
+    established) -- there is no "give me every organization's policies"
+    call site anywhere in this codebase, by design; every caller already
+    knows which organization it's acting as."""
+    all_rows = list(
+        db.scalars(
+            select(RuntimePolicyRecord)
+            .where(RuntimePolicyRecord.organization_id == organization_id)
+            .order_by(RuntimePolicyRecord.version.desc())
+        )
+    )
     latest_by_key: dict[uuid.UUID, RuntimePolicyRecord] = {}
     for row in all_rows:
         if row.policy_key not in latest_by_key:
@@ -115,22 +154,28 @@ def list_latest_policies(db: Session, status: str | None = None) -> list[Runtime
     return results
 
 
-def list_policies_for_principal(db: Session, principal_name: str) -> list[RuntimePolicyRecord]:
+def list_policies_for_principal(
+    db: Session, organization_id: uuid.UUID | None, principal_name: str
+) -> list[RuntimePolicyRecord]:
     """Agent Detail Page's "Runtime Policies" section (AGENT_LIFECYCLE.md):
     a policy applies to an agent via its acting-for Principal's name,
     stored as scope.principal inside RuntimePolicyRecord.content (there is
     no direct agent<->policy foreign key, matching this codebase's
     no-ORM-relationship, plain-FK style -- filtered in Python rather than
     a JSONB query, same approach list_latest_policies itself already
-    takes and consistent at today's scale)."""
+    takes and consistent at today's scale). `organization_id` should be
+    the *Principal's own* organization_id (the caller resolves this,
+    e.g. from the Agent's acting_for_principal_id), not necessarily the
+    HTTP caller's -- this function only ever returns policies belonging
+    to that one organization, never mixed across others."""
     return [
-        row for row in list_latest_policies(db)
+        row for row in list_latest_policies(db, organization_id)
         if row.content.get("scope", {}).get("principal") == principal_name
     ]
 
 
-def get_latest(db: Session, policy_key: uuid.UUID) -> RuntimePolicyRecord:
-    row = _latest_version_row(db, policy_key)
+def get_latest(db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None) -> RuntimePolicyRecord:
+    row = _latest_version_row(db, policy_key, organization_id)
     if row is None:
         raise RuntimePolicyNotFoundError(str(policy_key))
     return row
@@ -208,11 +253,16 @@ def resolve_enterprise_system(db: Session, policy_keys: list[str]) -> Enterprise
     return None
 
 
-def list_versions(db: Session, policy_key: uuid.UUID) -> list[RuntimePolicyRecord]:
+def list_versions(
+    db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None
+) -> list[RuntimePolicyRecord]:
     rows = list(
         db.scalars(
             select(RuntimePolicyRecord)
-            .where(RuntimePolicyRecord.policy_key == policy_key)
+            .where(
+                RuntimePolicyRecord.policy_key == policy_key,
+                RuntimePolicyRecord.organization_id == organization_id,
+            )
             .order_by(RuntimePolicyRecord.version.desc())
         )
     )
@@ -221,10 +271,14 @@ def list_versions(db: Session, policy_key: uuid.UUID) -> list[RuntimePolicyRecor
     return rows
 
 
-def get_version(db: Session, policy_key: uuid.UUID, version: int) -> RuntimePolicyRecord:
+def get_version(
+    db: Session, policy_key: uuid.UUID, version: int, organization_id: uuid.UUID | None
+) -> RuntimePolicyRecord:
     row = db.scalar(
         select(RuntimePolicyRecord).where(
-            RuntimePolicyRecord.policy_key == policy_key, RuntimePolicyRecord.version == version
+            RuntimePolicyRecord.policy_key == policy_key,
+            RuntimePolicyRecord.version == version,
+            RuntimePolicyRecord.organization_id == organization_id,
         )
     )
     if row is None:
@@ -232,11 +286,21 @@ def get_version(db: Session, policy_key: uuid.UUID, version: int) -> RuntimePoli
     return row
 
 
-def create_policy(db: Session, policy: RuntimePolicy) -> RuntimePolicyRecord:
+def create_policy(
+    db: Session, policy: RuntimePolicy, organization_id: uuid.UUID | None
+) -> RuntimePolicyRecord:
     """Always version 1, status draft, a fresh policy_key. `policy.id` is
     used as-is for policy_key if it parses as a UUID, otherwise one is
     generated; callers (the router) are expected to have already run
-    runtime_policy.validators.validate() before this is called."""
+    runtime_policy.validators.validate() before this is called.
+
+    Milestone 2 (Multi-Tenant Foundation): `organization_id` is set once,
+    here, and never re-derived or re-specified again for this
+    policy_key's entire version history (edit_policy inherits it from
+    the latest existing row, not from a new caller-supplied value) --
+    the organization a policy belongs to is fixed at creation, the same
+    immutability discipline this table already holds every other field
+    to across versions."""
     try:
         policy_key = uuid.UUID(policy.id)
     except ValueError:
@@ -248,6 +312,7 @@ def create_policy(db: Session, policy: RuntimePolicy) -> RuntimePolicyRecord:
         version=1,
         status="draft",
         content=to_dict(policy),
+        organization_id=organization_id,
     )
     db.add(row)
     db.commit()
@@ -256,11 +321,22 @@ def create_policy(db: Session, policy: RuntimePolicy) -> RuntimePolicyRecord:
     return row
 
 
-def edit_policy(db: Session, policy_key: uuid.UUID, updated_policy: RuntimePolicy) -> RuntimePolicyRecord:
+def edit_policy(
+    db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None, updated_policy: RuntimePolicy
+) -> RuntimePolicyRecord:
     """Always creates a new draft version; never mutates an existing row
     (RUNTIME_POLICY_LANGUAGE.md's immutability, POLICY_STUDIO_WORKFLOW.md's
-    "edit always produces a new draft version")."""
-    latest = get_latest(db, policy_key)
+    "edit always produces a new draft version").
+
+    Milestone 2: `organization_id` identifies which organization's
+    policy_key the caller means (get_latest below raises
+    RuntimePolicyNotFoundError, identical to a policy_key that doesn't
+    exist at all, if it resolves to a different organization) -- the new
+    version then inherits `latest.organization_id` directly, never the
+    passed-in value, so there is no path by which editing a policy could
+    ever reassign it to a different organization than the one that
+    created it."""
+    latest = get_latest(db, policy_key, organization_id)
     if latest.status == "archived":
         raise InvalidTransitionError(latest.status, "edit")
     new_version = latest.version + 1
@@ -270,6 +346,7 @@ def edit_policy(db: Session, policy_key: uuid.UUID, updated_policy: RuntimePolic
         version=new_version,
         status="draft",
         content=to_dict(updated_policy),
+        organization_id=latest.organization_id,
     )
     db.add(row)
     db.commit()
@@ -278,8 +355,8 @@ def edit_policy(db: Session, policy_key: uuid.UUID, updated_policy: RuntimePolic
     return row
 
 
-def submit_for_review(db: Session, policy_key: uuid.UUID) -> RuntimePolicyRecord:
-    row = get_latest(db, policy_key)
+def submit_for_review(db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None) -> RuntimePolicyRecord:
+    row = get_latest(db, policy_key, organization_id)
     if row.status != "draft":
         raise InvalidTransitionError(row.status, "submit for review")
     row.status = "pending_review"
@@ -292,6 +369,7 @@ def submit_for_review(db: Session, policy_key: uuid.UUID) -> RuntimePolicyRecord
 def approve(
     db: Session,
     policy_key: uuid.UUID,
+    organization_id: uuid.UUID | None,
     approver: str,
     approver_user_id: uuid.UUID | None = None,
 ) -> RuntimePolicyRecord:
@@ -300,7 +378,7 @@ def approve(
     is additive, populated only when the caller resolved a real session
     user (see dependencies.get_current_user_if_session); None for the
     Operator Key or a bare API key, both of which remain fully supported."""
-    row = get_latest(db, policy_key)
+    row = get_latest(db, policy_key, organization_id)
     if row.status != "pending_review":
         raise InvalidTransitionError(row.status, "approve")
     content = dict(row.content)
@@ -320,11 +398,12 @@ def approve(
 def reject(
     db: Session,
     policy_key: uuid.UUID,
+    organization_id: uuid.UUID | None,
     reviewer: str,
     reason: str,
     reviewer_user_id: uuid.UUID | None = None,
 ) -> RuntimePolicyRecord:
-    row = get_latest(db, policy_key)
+    row = get_latest(db, policy_key, organization_id)
     if row.status != "pending_review":
         raise InvalidTransitionError(row.status, "reject")
     if not reason or not reason.strip():
@@ -354,55 +433,88 @@ def _bundle_id_for(policy_key: uuid.UUID, version: int) -> str:
 
 
 def reconcile_opa_with_active_policies(db: Session, opa_url: str = "http://localhost:8181") -> bool:
-    """Re-pushes every currently-active RuntimePolicy to OPA's live
-    "authorization" package. Meant to be called once at process startup
-    (app.main.lifespan), because OPA's REST-loaded policies live only in
-    its own process memory: PayReality runs OPA embedded in this same
-    container, on a plan that idle-spins-down and cold-restarts, and
-    nothing else re-uploads the active bundle after a restart. Without
-    this, every real Intent after a restart silently evaluates against
-    an undefined "authorization" package (HttpOpaClient.query returns
-    `{}`, which decision.engine.evaluate reads as outcome="HUMAN_REVIEW",
-    reason="undetermined") -- indistinguishable from a legitimate
-    "nothing matched" result unless you already know to suspect it.
+    """Re-pushes every currently-active RuntimePolicy to OPA. Meant to be
+    called once at process startup (app.main.lifespan), because OPA's
+    REST-loaded policies live only in its own process memory: PayReality
+    runs OPA embedded in this same container, on a plan that
+    idle-spins-down and cold-restarts, and nothing else re-uploads the
+    active bundle after a restart. Without this, every real Intent after
+    a restart silently evaluates against an undefined package
+    (HttpOpaClient.query returns `{}`, which decision.engine.evaluate
+    reads as outcome="HUMAN_REVIEW", reason="undetermined") --
+    indistinguishable from a legitimate "nothing matched" result unless
+    you already know to suspect it.
 
-    Returns False (no-op) when there is nothing active to push: that's
-    the correct, distinct "no_active_policy" state the legacy Policy
-    table's own active-row check already reports.
+    Milestone 2 (Multi-Tenant Foundation): iterates every distinct
+    organization that has at least one active policy and pushes each to
+    its own OPA package (_opa_package_and_policy_id) -- one
+    organization's active set no longer being pushed to the same shared
+    package every other organization also writes to. Returns False
+    (no-op) only when there is nothing active to push for ANY
+    organization -- the correct, distinct "no_active_policy" state the
+    legacy Policy table's own active-row check already reports.
 
     Runtime Governance Architecture, Phase 5
-    (45_PHASE_5_BROKEN_PROMISE_REPORT.md): ordered by policy_key, not
-    left to whatever order Postgres happens to return -- without this,
-    the exact same active-policy set can compile to a different
-    bundle_hash purely from physical row order (query-plan/vacuum
-    dependent, never guaranteed by SQL without ORDER BY), which is
-    precisely what Policy Determinism promises never happens."""
-    active_rows = list(
+    (45_PHASE_5_BROKEN_PROMISE_REPORT.md): each organization's rows are
+    still ordered by policy_key, not left to whatever order Postgres
+    happens to return -- without this, the exact same active-policy set
+    can compile to a different bundle_hash purely from physical row
+    order (query-plan/vacuum dependent, never guaranteed by SQL without
+    ORDER BY), which is precisely what Policy Determinism promises never
+    happens."""
+    organization_ids = list(
         db.scalars(
-            select(RuntimePolicyRecord)
+            select(RuntimePolicyRecord.organization_id)
             .where(RuntimePolicyRecord.status == "active")
-            .order_by(RuntimePolicyRecord.policy_key)
+            .distinct()
         )
     )
-    if not active_rows:
+    if not organization_ids:
         return False
 
-    policies = [_row_to_policy(r) for r in active_rows]
-    result = compile_bundle(policies, bundle_id="startup-reconcile", bundle_version=1)
-    if not result.ok:
-        raise CompilationRequiredError(
-            "active RuntimePolicy set no longer compiles cleanly; cannot reconcile OPA at startup"
+    opa = HttpOpaClient(base_url=opa_url)
+    for organization_id in organization_ids:
+        active_rows = list(
+            db.scalars(
+                select(RuntimePolicyRecord)
+                .where(
+                    RuntimePolicyRecord.status == "active",
+                    RuntimePolicyRecord.organization_id == organization_id,
+                )
+                .order_by(RuntimePolicyRecord.policy_key)
+            )
         )
+        if not active_rows:
+            continue
 
-    HttpOpaClient(base_url=opa_url).upload_policy("authorization", result.bundle.rego_source)
+        policies = [_row_to_policy(r) for r in active_rows]
+        result = compile_bundle(policies, bundle_id="startup-reconcile", bundle_version=1)
+        if not result.ok:
+            raise CompilationRequiredError(
+                f"active RuntimePolicy set for organization {organization_id} no longer "
+                "compiles cleanly; cannot reconcile OPA at startup"
+            )
+
+        package_path, policy_id = _opa_package_and_policy_id(organization_id)
+        rego_source = (
+            result.bundle.rego_source
+            if organization_id is None
+            else retarget_package(result.bundle.rego_source, package_path)
+        )
+        opa.upload_policy(policy_id, rego_source)
     return True
 
 
-def _other_active_policies(db: Session, exclude_policy_key: uuid.UUID) -> list[RuntimePolicy]:
+def _other_active_policies(
+    db: Session, exclude_policy_key: uuid.UUID, organization_id: uuid.UUID | None
+) -> list[RuntimePolicy]:
     """Compiling one policy compiles it together with every other
-    currently-active policy (POLICY_STUDIO_ARCHITECTURE.md): deploying a
-    single-policy edit must not silently drop every other rule already
-    governing real traffic.
+    currently-active policy *in the same organization*
+    (POLICY_STUDIO_ARCHITECTURE.md, extended by Milestone 2's Multi-Tenant
+    Foundation): deploying a single-policy edit must not silently drop
+    every other rule already governing real traffic for that
+    organization -- and, since Milestone 2, must never pull in another
+    organization's active policies either.
 
     Runtime Governance Architecture, Phase 5
     (45_PHASE_5_BROKEN_PROMISE_REPORT.md): ordered by policy_key for the
@@ -415,6 +527,7 @@ def _other_active_policies(db: Session, exclude_policy_key: uuid.UUID) -> list[R
             .where(
                 RuntimePolicyRecord.status == "active",
                 RuntimePolicyRecord.policy_key != exclude_policy_key,
+                RuntimePolicyRecord.organization_id == organization_id,
             )
             .order_by(RuntimePolicyRecord.policy_key)
         )
@@ -434,13 +547,13 @@ class CompileOutcome:
         return self.diagnostics.ok
 
 
-def compile_policy(db: Session, policy_key: uuid.UUID) -> CompileOutcome:
-    row = get_latest(db, policy_key)
+def compile_policy(db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None) -> CompileOutcome:
+    row = get_latest(db, policy_key, organization_id)
     if row.status != "approved":
         raise InvalidTransitionError(row.status, "compile")
 
     this_policy = _row_to_policy(row)
-    bundle_policies = [this_policy] + _other_active_policies(db, policy_key)
+    bundle_policies = [this_policy] + _other_active_policies(db, policy_key, organization_id)
     bundle_id = _bundle_id_for(policy_key, row.version)
 
     result = compile_bundle(bundle_policies, bundle_id=bundle_id, bundle_version=row.version)
@@ -462,14 +575,18 @@ def compile_policy(db: Session, policy_key: uuid.UUID) -> CompileOutcome:
 
 
 def dry_run_policy(
-    db: Session, policy_key: uuid.UUID, sample_input: dict, opa_url: str = "http://localhost:8181"
+    db: Session,
+    policy_key: uuid.UUID,
+    sample_input: dict,
+    organization_id: uuid.UUID | None,
+    opa_url: str = "http://localhost:8181",
 ) -> DryRunResult:
-    row = get_latest(db, policy_key)
+    row = get_latest(db, policy_key, organization_id)
     if row.status not in ("compiled", "active"):
         raise CompilationRequiredError(str(policy_key))
 
     this_policy = _row_to_policy(row)
-    bundle_policies = [this_policy] + _other_active_policies(db, policy_key)
+    bundle_policies = [this_policy] + _other_active_policies(db, policy_key, organization_id)
     result = compile_bundle(
         bundle_policies, bundle_id=_bundle_id_for(policy_key, row.version), bundle_version=row.version
     )
@@ -541,19 +658,23 @@ def _ensure_mandate(db: Session, constraints: dict, policy_row: Policy, now: dat
     return constraints
 
 
-def deploy_policy(db: Session, policy_key: uuid.UUID, opa_url: str = "http://localhost:8181") -> DeployOutcome:
+def deploy_policy(
+    db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None, opa_url: str = "http://localhost:8181"
+) -> DeployOutcome:
     """Real deploy, confirmed with the user before implementing
     (POLICY_STUDIO_ARCHITECTURE.md's "Deploy is real" section): pushes to
-    the same OPA policy id ("authorization") the existing
-    policy_service.activate_policy already uses, and creates a real row
-    in the existing `policies` table, retiring whatever was previously
-    active there exactly as that function already does today."""
-    row = get_latest(db, policy_key)
+    this organization's own OPA package and policy id
+    (_opa_package_and_policy_id, Milestone 2), and creates a real row in
+    the existing `policies` table, retiring whatever was previously
+    active for THIS organization exactly as this function already did
+    for the single, shared, platform-wide active row before Milestone 2
+    (idx_policies_single_active_per_org, not idx_policies_single_active)."""
+    row = get_latest(db, policy_key, organization_id)
     if row.status != "compiled":
         raise InvalidTransitionError(row.status, "deploy")
 
     this_policy = _row_to_policy(row)
-    bundle_policies = [this_policy] + _other_active_policies(db, policy_key)
+    bundle_policies = [this_policy] + _other_active_policies(db, policy_key, organization_id)
     result = compile_bundle(
         bundle_policies, bundle_id=_bundle_id_for(policy_key, row.version), bundle_version=row.version
     )
@@ -565,15 +686,21 @@ def deploy_policy(db: Session, policy_key: uuid.UUID, opa_url: str = "http://loc
             "another policy's active set changed underneath this one, recompile and try again"
         )
 
-    prior_active = db.scalar(select(Policy).where(Policy.status == "active"))
+    prior_active = db.scalar(
+        select(Policy).where(Policy.status == "active", Policy.organization_id == organization_id)
+    )
     if _is_unexpected_active_writer(prior_active):
         raise UnexpectedActiveWriterError(
             f"the currently-active policy (id={prior_active.id}, bundle_uri={prior_active.bundle_uri!r}) "
             "was not written by runtime_policy_service.deploy_policy -- refusing to silently overwrite it"
         )
 
+    package_path, policy_id = _opa_package_and_policy_id(organization_id)
+    rego_source = (
+        result.bundle.rego_source if organization_id is None else retarget_package(result.bundle.rego_source, package_path)
+    )
     opa = HttpOpaClient(base_url=opa_url)
-    opa.upload_policy("authorization", result.bundle.rego_source)
+    opa.upload_policy(policy_id, rego_source)
 
     next_version = (db.scalar(select(Policy.version).order_by(Policy.version.desc()).limit(1)) or 0) + 1
     now = datetime.now(timezone.utc)
@@ -588,6 +715,7 @@ def deploy_policy(db: Session, policy_key: uuid.UUID, opa_url: str = "http://loc
         bundle_uri=f"runtime_policy_studio:{policy_key}:{row.version}",
         compiled_at=now,
         activated_at=now,
+        organization_id=organization_id,
     )
     db.add(policy_row)
     # Flushed (not just added) so policy_row.id exists below: Mandate.
@@ -600,6 +728,7 @@ def deploy_policy(db: Session, policy_key: uuid.UUID, opa_url: str = "http://loc
         select(RuntimePolicyRecord).where(
             RuntimePolicyRecord.policy_key == policy_key,
             RuntimePolicyRecord.status == "active",
+            RuntimePolicyRecord.organization_id == organization_id,
         )
     )
     if prior_active_rp is not None and prior_active_rp.id != row.id:
@@ -712,9 +841,11 @@ def compute_condition_diff(
     return entries, risk_impact, risk_reason
 
 
-def diff_versions(db: Session, policy_key: uuid.UUID, from_version: int, to_version: int) -> PolicyDiff:
-    from_row = get_version(db, policy_key, from_version)
-    to_row = get_version(db, policy_key, to_version)
+def diff_versions(
+    db: Session, policy_key: uuid.UUID, from_version: int, to_version: int, organization_id: uuid.UUID | None
+) -> PolicyDiff:
+    from_row = get_version(db, policy_key, from_version, organization_id)
+    to_row = get_version(db, policy_key, to_version, organization_id)
     from_policy = _row_to_policy(from_row)
     to_policy = _row_to_policy(to_row)
 
@@ -730,7 +861,7 @@ def diff_versions(db: Session, policy_key: uuid.UUID, from_version: int, to_vers
     affected_agents_out = [{"id": str(a.id), "name": a.name} for a in affected_agents]
 
     other_latest = [
-        r for r in list_latest_policies(db) if r.policy_key != policy_key
+        r for r in list_latest_policies(db, organization_id) if r.policy_key != policy_key
     ]
     affected_policies_out = []
     for r in other_latest:

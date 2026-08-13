@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import (
     Authority,
+    AuthorityCorpus,
     AuthorityPrincipal,
     Principal,
     PolicyExtractionCandidate,
@@ -57,6 +58,18 @@ class CandidateValidationError(Exception):
     def __init__(self, result: ValidationResult):
         self.result = result
         super().__init__("candidate failed RuntimePolicy validation: " + "; ".join(e.message for e in result.errors))
+
+
+class CrossOrganizationPromotionError(Exception):
+    """Milestone 2 (Multi-Tenant Foundation, ADR Phase B4): fail-closed,
+    the same posture ai_authority_builder_service.CrossOrganizationMatchError
+    already established for the discovery-resolution side of this
+    lifecycle -- a candidate whose corpus belongs to a different
+    organization than the one promoting it is never silently promoted
+    into that promoter's own organization. This is exactly the "three
+    independent, non-cross-validated paths to organization" gap the ADR
+    named; this is the first place any of the three are actually
+    cross-checked against each other."""
 
 
 def create_upload(db: Session, filename: str, format: str, raw: bytes) -> PolicyExtractionUpload:
@@ -324,7 +337,7 @@ def _create_authority_for_candidate(
 
 
 def promote_candidate(
-    db: Session, candidate_id: uuid.UUID, promoted_by: str | None = None
+    db: Session, candidate_id: uuid.UUID, organization_id: uuid.UUID | None, promoted_by: str | None = None
 ) -> tuple[RuntimePolicyRecord, str | None]:
     """AI_EXTRACTION_PIPELINE.md Stage 6. Builds the RuntimePolicy,
     validates it (domain/runtime_policy/validators.py, imported not
@@ -346,10 +359,34 @@ def promote_candidate(
 
     Stage I.4: returns the resulting `authority_id` alongside the created
     record -- the value was already computed above, this only threads it
-    out to the caller instead of discarding it."""
+    out to the caller instead of discarding it.
+
+    Milestone 2 (Multi-Tenant Foundation, ADR Phase B4): the new
+    RuntimePolicy's organization is the candidate's own corpus's
+    organization when it came from the AI Authority Builder's
+    multi-document pipeline (Authority Intelligence's own established
+    org lineage, threaded through rather than dropped at this exact
+    handoff point -- the concrete break the ADR's dependency analysis
+    found); `organization_id` (the promoting caller's own organization)
+    is used only as a fallback for the single-document AI Policy
+    Builder's upload-based path, which has no corpus and therefore no
+    org lineage of its own to inherit. If a corpus's own organization
+    disagrees with the promoting caller's, this fails closed
+    (CrossOrganizationPromotionError) rather than silently picking one."""
     row = get_candidate(db, candidate_id)
     if row.status != "pending_review":
         raise CandidateNotPendingReviewError(f"cannot promote a candidate in status '{row.status}'")
+
+    policy_organization_id = organization_id
+    if row.corpus_id is not None:
+        corpus = db.get(AuthorityCorpus, row.corpus_id)
+        if corpus is not None and corpus.organization_id is not None:
+            if organization_id is not None and corpus.organization_id != organization_id:
+                raise CrossOrganizationPromotionError(
+                    f"candidate {candidate_id}'s corpus belongs to organization "
+                    f"{corpus.organization_id}, not the promoting caller's {organization_id}"
+                )
+            policy_organization_id = corpus.organization_id
 
     authority_id: str | None = None
     principal = _find_resolved_principal_for_candidate(db, row)
@@ -362,7 +399,7 @@ def promote_candidate(
     if not result.ok:
         raise CandidateValidationError(result)
 
-    created = runtime_policy_service.create_policy(db, policy)
+    created = runtime_policy_service.create_policy(db, policy, policy_organization_id)
 
     row.status = "promoted"
     row.promoted_policy_key = created.policy_key

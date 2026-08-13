@@ -5,9 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import PolicyExtractionCandidate, PolicyExtractionUpload, User
+from app.db.models import Organization, PolicyExtractionCandidate, PolicyExtractionUpload, User
 from app.db.session import get_db
-from app.dependencies import get_current_user_if_session, require_permission
+from app.dependencies import get_current_organization, get_current_user_if_session, require_permission
 from app.domain.ai_policy_builder.claude_provider import ClaudeRuntimePolicyExtractionProvider
 from app.domain.ai_policy_builder.fake_provider import FakeRuntimePolicyExtractionProvider
 from app.domain.ai_policy_builder.text_extraction import UnsupportedFormatError, detect_format
@@ -25,6 +25,7 @@ from app.services.ai_policy_builder_service import (
     CandidateNotFoundError,
     CandidateNotPendingReviewError,
     CandidateValidationError,
+    CrossOrganizationPromotionError,
     UploadNotFoundError,
 )
 
@@ -182,6 +183,7 @@ def promote_candidate(
     candidate_id: uuid.UUID,
     db: Session = Depends(get_db),
     session_user: User | None = Depends(get_current_user_if_session),
+    organization: Organization = Depends(get_current_organization),
 ):
     """AI_EXTRACTION_PIPELINE.md Stage 6: the one integration point with
     Policy Studio. Never deploys, never compiles; the result is a new
@@ -193,12 +195,14 @@ def promote_candidate(
     already established for approvals, extended to this reviewed action."""
     try:
         created, authority_id = svc.promote_candidate(
-            db, candidate_id,
+            db, candidate_id, organization.id,
             promoted_by=session_user.name if session_user else None,
         )
     except CandidateNotFoundError:
         raise HTTPException(status_code=404, detail="candidate_not_found")
     except CandidateNotPendingReviewError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except CrossOrganizationPromotionError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except CandidateValidationError as e:
         raise HTTPException(

@@ -24,27 +24,37 @@ from app.services.runtime_policy_service import _other_active_policies, reconcil
 
 class _RecordingSession:
     """Records the Select statement it was asked to run; never touches a
-    real database. `scalars` returns an empty result, which is enough --
-    this test cares only about the statement's own ORDER BY clause, not
-    about any row it would return."""
+    real database. `scalars` returns queued results in order (empty once
+    exhausted), enough to drive reconcile_opa_with_active_policies past
+    its Milestone 2 per-organization loop without a real database."""
 
-    def __init__(self):
+    def __init__(self, scalars_results=None):
         self.statements = []
+        self._scalars_results = list(scalars_results or [])
 
     def scalars(self, stmt):
         self.statements.append(stmt)
-        return []
+        return self._scalars_results.pop(0) if self._scalars_results else []
 
 
 def test_other_active_policies_query_is_ordered():
     db = _RecordingSession()
-    _other_active_policies(db, exclude_policy_key="00000000-0000-0000-0000-000000000000")
+    _other_active_policies(
+        db, exclude_policy_key="00000000-0000-0000-0000-000000000000", organization_id=None
+    )
     assert len(db.statements) == 1
     assert "ORDER BY" in str(db.statements[0])
 
 
 def test_reconcile_active_policies_query_is_ordered():
-    db = _RecordingSession()
+    """Milestone 2 (Multi-Tenant Foundation): reconcile now issues two
+    queries -- first, which organizations have any active policy at all
+    (no ordering needed, it's a distinct-values scan); second, per
+    organization, that organization's own active rows (this is the one
+    Policy Determinism actually depends on being ordered). Queue one
+    organization id for the first query so the loop actually reaches the
+    second."""
+    db = _RecordingSession(scalars_results=[[None], []])
     reconcile_opa_with_active_policies(db)
-    assert len(db.statements) == 1
-    assert "ORDER BY" in str(db.statements[0])
+    assert len(db.statements) == 2
+    assert "ORDER BY" in str(db.statements[1])

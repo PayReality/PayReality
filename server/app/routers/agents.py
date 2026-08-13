@@ -200,7 +200,9 @@ def _build_agent_detail(db: Session, agent: Agent, certificate, certificates) ->
     principal = db.get(Principal, agent.acting_for_principal_id)
     principal_name = principal.name if principal else "unknown"
 
-    policy_rows = runtime_policy_service.list_policies_for_principal(db, principal_name)
+    policy_rows = runtime_policy_service.list_policies_for_principal(
+        db, principal.organization_id if principal else None, principal_name
+    )
     policies = [
         LinkedPolicySummary(
             policy_key=row.policy_key, name=row.content.get("name", ""), version=row.version, status=row.status
