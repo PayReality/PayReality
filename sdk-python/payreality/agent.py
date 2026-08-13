@@ -2,7 +2,7 @@
 
     from payreality import Agent
 
-    agent = Agent(api_key="...", private_key="...")
+    agent = Agent(api_key="...", private_key="...", organization_id="...")
     decision = agent.authorize(
         principal="Finance Manager",
         operation="Approve",
@@ -26,8 +26,12 @@ from .configuration import Configuration, CredentialStore
 from .exceptions import ApiError, ConfigurationError
 from .models import Decision, RegisteredAgent, Resolution
 
-_SDK_VERSION = "0.1.0"  # kept in sync with pyproject.toml / __init__.__version__ by hand;
+_SDK_VERSION = "0.2.0"  # kept in sync with pyproject.toml / __init__.__version__ by hand;
 # not imported from there to avoid a circular import at package init time.
+# Bumped 0.1.0 -> 0.2.0 for organization_id: a real breaking change under
+# semver -- every operator-key call that previously worked now requires
+# it (PayReality Enterprise v1.0, Milestone 2's platform-admin-only
+# operator key).
 
 
 class Agent:
@@ -35,6 +39,7 @@ class Agent:
         self,
         api_key: str | None = None,
         private_key: str | None = None,
+        organization_id: str | None = None,
         base_url: str = "https://api.aisecurewatch.com",
         timeout: float = 10.0,
         retry_count: int = 3,
@@ -43,6 +48,7 @@ class Agent:
         config_kwargs: dict[str, Any] = dict(
             api_key=api_key,
             private_key=private_key,
+            organization_id=organization_id,
             base_url=base_url,
             timeout=timeout,
             retry_count=retry_count,
@@ -74,7 +80,14 @@ class Agent:
         return self._identity is not None
 
     def _resolve_principal_id(self, name: str) -> tuple[str, str]:
-        principals = self._client.request("GET", "/v1/principals")
+        # Milestone 1 (Security & Authorization Hardening) gated
+        # GET /v1/principals behind an organization/permission check;
+        # this call was never updated to send credentials of any kind,
+        # so it 401'd on every real deployment before this fix, masking
+        # register()'s own organization_id requirement below (confirmed
+        # in a Milestone-3-era SDK audit). operator_auth=True matches
+        # the POST call's own, already-correct convention just below.
+        principals = self._client.request("GET", "/v1/principals", operator_auth=True)
         for p in principals:
             if p["name"] == name:
                 return p["id"], p["name"]

@@ -25,15 +25,26 @@ def test_empty_2xx_body_returns_empty_dict(fake_session):
     assert client.request("POST", "/v1/decisions/x/resolve") == {}
 
 
-def test_operator_auth_attaches_configured_api_key_header(fake_session):
+def test_operator_auth_attaches_configured_api_key_and_organization_id_headers(fake_session):
     fake_session.queue_response(201, {"id": "a-1"})
-    client = _client(fake_session, api_key="secret-op-key")
+    client = _client(fake_session, api_key="secret-op-key", organization_id="org-1")
     client.request("POST", "/v1/agents", json={"name": "x"}, operator_auth=True)
     assert fake_session.calls[0]["headers"]["X-PayReality-Operator-Key"] == "secret-op-key"
+    assert fake_session.calls[0]["headers"]["X-PayReality-Organization-Id"] == "org-1"
 
 
 def test_operator_auth_without_api_key_raises_authentication_error(fake_session):
-    client = _client(fake_session)  # no api_key configured
+    client = _client(fake_session, organization_id="org-1")  # no api_key configured
+    try:
+        client.request("POST", "/v1/agents", json={}, operator_auth=True)
+        assert False, "expected AuthenticationError"
+    except AuthenticationError:
+        pass
+    assert fake_session.calls == []  # never even attempted the network call
+
+
+def test_operator_auth_without_organization_id_raises_authentication_error(fake_session):
+    client = _client(fake_session, api_key="secret-op-key")  # no organization_id configured
     try:
         client.request("POST", "/v1/agents", json={}, operator_auth=True)
         assert False, "expected AuthenticationError"

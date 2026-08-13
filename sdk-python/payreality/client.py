@@ -40,14 +40,24 @@ class HttpClient:
         (the exact bytes that were signed); otherwise `json` is encoded
         normally. `operator_auth=True` attaches the configured api_key
         as the operator-key header this platform's administrative
-        endpoints already require (SDK_SECURITY.md)."""
+        endpoints already require (SDK_SECURITY.md), plus (PayReality
+        Enterprise v1.0, Milestone 2) the target organization the
+        operator key is now required to name explicitly -- it is
+        platform-admin-only and has no organization of its own."""
         request_headers = dict(headers or {})
         if operator_auth:
             if not self._config.api_key:
                 raise AuthenticationError(
                     "This call requires an api_key. Pass Agent(api_key=...) or set PAYREALITY_API_KEY."
                 )
+            if not self._config.organization_id:
+                raise AuthenticationError(
+                    "This call requires an organization_id. Pass Agent(organization_id=...) -- "
+                    "the operator key is platform-admin-only and must name its target organization "
+                    "explicitly on every call."
+                )
             request_headers["X-PayReality-Operator-Key"] = self._config.api_key
+            request_headers["X-PayReality-Organization-Id"] = self._config.organization_id
 
         if signed_body is not None:
             body = signed_body

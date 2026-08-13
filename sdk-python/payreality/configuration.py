@@ -32,10 +32,21 @@ class Configuration:
     credential every administrative action in this platform already
     uses (SDK_SECURITY.md); it is required only for `register()`, not
     for `authorize()`, which authenticates purely via the agent's own
-    signature."""
+    signature.
+
+    `organization_id`: PayReality Enterprise v1.0 (Milestone 2, Multi-
+    Tenant Foundation) made the operator key platform-admin-only -- it
+    no longer belongs to, or defaults to, any single organization. Every
+    operator-key-authenticated call now requires an explicit target
+    organization (`X-PayReality-Organization-Id`); this SDK previously
+    had no concept of "organization" at all (confirmed in
+    MULTI_TENANT_ARCHITECTURE_VERIFICATION.md), so every `register()`
+    call was silently broken against a real multi-tenant deployment
+    until this field existed to carry it."""
 
     api_key: str | None = None
     private_key: str | None = None
+    organization_id: str | None = None
     base_url: str = DEFAULT_BASE_URL
     timeout: float = DEFAULT_TIMEOUT_SECONDS
     retry_count: int = DEFAULT_RETRY_COUNT

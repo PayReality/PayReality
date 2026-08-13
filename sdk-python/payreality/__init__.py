@@ -2,7 +2,7 @@
 
     from payreality import Agent
 
-    agent = Agent(api_key="...", private_key="...")
+    agent = Agent(api_key="...", private_key="...", organization_id="...")
     decision = agent.authorize(
         principal="Finance Manager",
         operation="Approve",
@@ -32,7 +32,7 @@ from .exceptions import (
 )
 from .models import Decision, RegisteredAgent, Resolution
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Agent",

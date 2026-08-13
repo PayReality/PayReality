@@ -50,4 +50,4 @@ def test_heartbeat_defaults_sdk_version_to_this_package(credentials_path, fake_h
     agent.heartbeat()
 
     body = json.loads(fake_http_client.calls[-1]["signed_body"])
-    assert body["sdk_version"] == "payreality-python/0.1.0"
+    assert body["sdk_version"] == "payreality-python/0.2.0"

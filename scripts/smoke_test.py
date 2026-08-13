@@ -13,7 +13,14 @@ Usage:
     pip install pynacl   # only third-party dependency; stdlib does the HTTP
     PAYREALITY_API_URL=https://api.aisecurewatch.com \
     PAYREALITY_OPERATOR_KEY=<the ADMIN_API_KEY set on the deployed service> \
+    PAYREALITY_ORGANIZATION_ID=<the target organization's id> \
     python scripts/smoke_test.py
+
+PayReality Enterprise v1.0 (Milestone 2, Multi-Tenant Foundation) made
+the Operator Key platform-admin-only: it must now name its target
+organization explicitly (X-PayReality-Organization-Id) on every org-
+scoped request -- PAYREALITY_ORGANIZATION_ID is that target. Use
+GET /v1/organizations (also Operator-Key-gated) to discover a valid id.
 
 Exit code 0 means every stage passed. Any failure prints exactly which
 stage failed and why, then exits non-zero. This is meant to be safe to
@@ -33,9 +40,22 @@ import nacl.signing
 
 BASE_URL = os.environ.get("PAYREALITY_API_URL", "http://localhost:8000").rstrip("/")
 OPERATOR_KEY = os.environ.get("PAYREALITY_OPERATOR_KEY", "")
+ORGANIZATION_ID = os.environ.get("PAYREALITY_ORGANIZATION_ID", "")
 
 _passed = []
 _failed = []
+
+
+def _operator_headers(extra: dict | None = None) -> dict:
+    """PayReality Enterprise v1.0 (Milestone 2) made the Operator Key
+    platform-admin-only: it must now name its target organization
+    explicitly on every org-scoped request. Included on every operator-
+    keyed call in this script regardless of whether that specific
+    endpoint happens to require it -- harmless where it isn't needed."""
+    headers = {"X-PayReality-Operator-Key": OPERATOR_KEY, "X-PayReality-Organization-Id": ORGANIZATION_ID}
+    if extra:
+        headers.update(extra)
+    return headers
 
 
 def _parse_body(raw: bytes) -> dict:
@@ -106,9 +126,7 @@ def check_ready():
 @step("create Principal (operator key required)")
 def create_principal() -> str:
     body = json.dumps({"name": "Smoke Test Principal"}).encode()
-    status, resp = _request(
-        "POST", "/v1/principals", body, {"X-PayReality-Operator-Key": OPERATOR_KEY}
-    )
+    status, resp = _request("POST", "/v1/principals", body, _operator_headers())
     assert status == 201, f"status {status}, body {resp}"
     return resp["id"]
 
@@ -124,9 +142,7 @@ def create_agent(principal_id: str) -> tuple[str, str, nacl.signing.SigningKey]:
             "public_key": f"ed25519:base64:{public_key_b64}",
         }
     ).encode()
-    status, resp = _request(
-        "POST", "/v1/agents", body, {"X-PayReality-Operator-Key": OPERATOR_KEY}
-    )
+    status, resp = _request("POST", "/v1/agents", body, _operator_headers())
     assert status == 201, f"status {status}, body {resp}"
     return resp["id"], resp["certificate_id"], signing_key
 
@@ -165,20 +181,19 @@ def maybe_resolve(decision_id: str):
     body = json.dumps(
         {"resolution": "approved", "resolved_by": "smoke-test-script", "reason": "automated smoke test"}
     ).encode()
-    status, resp = _request(
-        "POST",
-        f"/v1/decisions/{decision_id}/resolve",
-        body,
-        {"X-PayReality-Operator-Key": OPERATOR_KEY},
-    )
+    status, resp = _request("POST", f"/v1/decisions/{decision_id}/resolve", body, _operator_headers())
     assert status == 200, f"status {status}, body {resp}"
 
 
 @step("fetch and cryptographically verify the resulting Evidence")
 def verify_evidence(evidence_id: str):
-    status, resp = _request("GET", f"/v1/evidence/{evidence_id}")
+    # Both endpoints require an authenticated, org-scoped caller
+    # (EVIDENCE_VIEW + get_current_organization) -- previously sent with
+    # no headers at all, a pre-existing script bug unrelated to Milestone
+    # 2/3 that would 401 independently of the organization header fix.
+    status, resp = _request("GET", f"/v1/evidence/{evidence_id}", headers=_operator_headers())
     assert status == 200, f"status {status}, body {resp}"
-    status, resp = _request("POST", f"/v1/evidence/{evidence_id}/verify")
+    status, resp = _request("POST", f"/v1/evidence/{evidence_id}/verify", headers=_operator_headers())
     assert status == 200, f"status {status}, body {resp}"
     assert resp["valid"] is True, f"SIGNATURE DID NOT VERIFY: {resp}"
 
@@ -192,7 +207,9 @@ def check_verification_key():
 
 @step("assurance counts: real agents and policies come back")
 def check_assurance():
-    status, agents = _request("GET", "/v1/agents")
+    # GET /v1/agents is now organization-scoped (Milestone 3) --
+    # previously reachable with no authentication at all.
+    status, agents = _request("GET", "/v1/agents", headers=_operator_headers())
     assert status == 200
     status, policies = _request("GET", "/v1/policies")
     assert status == 200
@@ -203,6 +220,11 @@ def main():
     print(f"Running end-to-end smoke test against {BASE_URL}\n")
     if not OPERATOR_KEY:
         print("PAYREALITY_OPERATOR_KEY is not set. Operator-gated steps will fail with 401/422.")
+    if not ORGANIZATION_ID:
+        print(
+            "PAYREALITY_ORGANIZATION_ID is not set. Org-scoped operator-gated steps will fail with "
+            "400 organization_id_required_for_operator_key."
+        )
     check_health()
     check_ready()
     principal_id = create_principal()

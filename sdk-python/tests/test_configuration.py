@@ -9,6 +9,7 @@ def test_configuration_defaults():
     assert config.base_url == "https://api.aisecurewatch.com"
     assert config.timeout == 10.0
     assert config.retry_count == 3
+    assert config.organization_id is None
 
 
 def test_configuration_strips_trailing_slash_from_base_url():

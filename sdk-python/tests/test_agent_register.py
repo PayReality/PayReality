@@ -24,6 +24,13 @@ def test_register_creates_principal_if_it_does_not_exist(credentials_path, fake_
     assert result.status == "active"
     assert agent.is_registered is True
 
+    principal_list_call = fake_http_client.calls[0]
+    assert principal_list_call["path"] == "/v1/principals"
+    # PayReality Enterprise v1.0 (Milestone 1) gated this GET behind an
+    # organization/permission check; this call previously sent no
+    # credentials at all and 401'd on every real deployment.
+    assert principal_list_call["operator_auth"] is True
+
     principal_create_call = fake_http_client.calls[1]
     assert principal_create_call["path"] == "/v1/principals"
     assert principal_create_call["operator_auth"] is True
