@@ -33,6 +33,7 @@ from app.db.models import Organization
 from app.db.session import get_db
 from app.dependencies import get_current_organization, require_permission
 from app.domain.rbac.permissions import Permission
+from app.security import verify_operator_key
 from app.schemas.runtime_policy import AffectedAgentSchema, AffectedPolicySchema, ConditionDiffSchema, DiffResponse
 from app.schemas.runtime_policy_lifecycle import (
     ActivateRequest,
@@ -390,13 +391,30 @@ def search(
 
 @dashboard_router.post(
     "/process-due-schedules", response_model=ProcessSchedulesResponse,
-    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_PUBLISH))],
+    dependencies=[Depends(verify_operator_key)],
 )
 def process_due_schedules(db: Session = Depends(get_db)):
     """Manually (or externally, e.g. a cron job) triggered -- there is no
     background task runner in this platform, so nothing calls this on
     its own. See runtime_policy_lifecycle_service.process_due_schedules's
-    own docstring."""
+    own docstring.
+
+    Milestone 3 (Enterprise Surface Isolation): this executes EVERY
+    organization's due schedules in one pass, by design (each schedule
+    row carries and uses its own organization_id internally -- see that
+    function's docstring). That makes it a genuinely platform-wide
+    operation, which `Permission.RUNTIME_POLICY_PUBLISH` does not
+    correctly gate: it's held by the ordinary per-tenant Role.OWNER/
+    Role.GOVERNANCE_ADMIN roles (confirmed in MULTI_TENANT_ARCHITECTURE_
+    VERIFICATION.md), so any tenant's own admin could previously trigger
+    activation/retirement of every OTHER tenant's due policy changes.
+    Gated on `verify_operator_key` instead -- the pure Operator-Key-only
+    check with no session/role fallback, already used nowhere else in
+    this codebase but exactly the platform-admin-only primitive this
+    endpoint needs (require_permission's operator-key branch doesn't fit:
+    Role.OWNER holds every Permission via _ALL_PERMISSIONS, so no new
+    Permission value could ever be operator-key-exclusive within that
+    system)."""
     results = lsvc.process_due_schedules(db, opa_url=_opa_url())
     return ProcessSchedulesResponse(
         results=[
