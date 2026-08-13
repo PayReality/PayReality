@@ -109,7 +109,7 @@ def add_document(db: Session, corpus: AuthorityCorpus, filename: str, format: st
     # posture on its own two functions).
     try:
         blob_path = authority_intelligence_service.upload_document_to_blob(
-            corpus.id, doc.id, filename, raw
+            corpus.id, doc.id, filename, raw, organization_id=corpus.organization_id
         )
         if blob_path:
             doc.blob_path = blob_path
@@ -126,7 +126,9 @@ def add_document(db: Session, corpus: AuthorityCorpus, filename: str, format: st
         doc.images_skipped = coverage.images_skipped
         db.commit()
         db.refresh(doc)
-        authority_intelligence_service.index_document(corpus.id, doc.id, filename, format, text, blob_path)
+        authority_intelligence_service.index_document(
+            corpus.id, doc.id, filename, format, text, blob_path, organization_id=corpus.organization_id
+        )
     except Exception:
         logging.getLogger("payreality.authority_intelligence").exception(
             "authority_intelligence_ingestion_failed corpus_id=%s document_id=%s", corpus.id, doc.id
@@ -160,7 +162,9 @@ def run_extraction(
         # AI Search when it's configured and has this corpus indexed;
         # otherwise fall back to the original, always-available Postgres
         # read (build_corpus_text, unchanged and still directly tested).
-        corpus_text = authority_intelligence_service.retrieve_corpus_text(corpus.id)
+        corpus_text = authority_intelligence_service.retrieve_corpus_text(
+            corpus.id, organization_id=corpus.organization_id
+        )
         if corpus_text is None:
             corpus_text = build_corpus_text(documents)
         graph: AuthorityGraph = provider.extract(corpus_text)

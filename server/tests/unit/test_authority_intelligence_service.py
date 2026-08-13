@@ -55,14 +55,30 @@ class _FakeBlobServiceClient:
 
 
 def test_upload_document_to_blob_uses_a_deterministic_path_and_the_configured_container():
+    """Milestone 3 (Enterprise Surface Isolation): "unscoped" is the
+    literal organization segment for the "no organization set" legacy
+    scope -- never a real UUID an organization_id could equal, the same
+    "None is its own valid scope" convention every other org-scoping
+    function in this codebase already follows."""
     client = _FakeBlobServiceClient()
     corpus_id, document_id = uuid.uuid4(), uuid.uuid4()
 
     blob_path = svc.upload_document_to_blob(corpus_id, document_id, "memo.pdf", b"bytes", client=client)
 
-    assert blob_path == f"authority-corpora/{corpus_id}/{document_id}-memo.pdf"
+    assert blob_path == f"authority-corpora/unscoped/{corpus_id}/{document_id}-memo.pdf"
     assert client.container.uploaded[0]["name"] == blob_path
     assert client.container.uploaded[0]["data"] == b"bytes"
+
+
+def test_upload_document_to_blob_prefixes_the_path_with_the_given_organization():
+    client = _FakeBlobServiceClient()
+    corpus_id, document_id, organization_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+
+    blob_path = svc.upload_document_to_blob(
+        corpus_id, document_id, "memo.pdf", b"bytes", organization_id=organization_id, client=client
+    )
+
+    assert blob_path == f"authority-corpora/{organization_id}/{corpus_id}/{document_id}-memo.pdf"
 
 
 class _RaisingBlobServiceClient:
@@ -101,6 +117,7 @@ def test_index_document_uploads_the_expected_fields():
         {
             "id": str(document_id),
             "corpus_id": str(corpus_id),
+            "organization_id": "",
             "document_id": str(document_id),
             "filename": "memo.pdf",
             "format": "pdf",
@@ -110,7 +127,19 @@ def test_index_document_uploads_the_expected_fields():
     ]
 
 
-def test_retrieve_corpus_text_filters_by_corpus_id_and_concatenates_with_file_headers():
+def test_index_document_stamps_the_given_organization_id():
+    client = _FakeSearchClient()
+    corpus_id, document_id, organization_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+
+    svc.index_document(
+        corpus_id, document_id, "memo.pdf", "pdf", "extracted text", "some/blob/path",
+        organization_id=organization_id, client=client,
+    )
+
+    assert client.uploaded_documents[0]["organization_id"] == str(organization_id)
+
+
+def test_retrieve_corpus_text_filters_by_corpus_id_and_organization_id_and_concatenates_with_file_headers():
     corpus_id = uuid.uuid4()
     client = _FakeSearchClient(
         search_results=[
@@ -121,11 +150,20 @@ def test_retrieve_corpus_text_filters_by_corpus_id_and_concatenates_with_file_he
 
     text = svc.retrieve_corpus_text(corpus_id, client=client)
 
-    assert client.last_search_filter == f"corpus_id eq '{corpus_id}'"
+    assert client.last_search_filter == f"corpus_id eq '{corpus_id}' and organization_id eq ''"
     assert "=== FILE: doa.txt ===" in text
     assert "=== FILE: matrix.csv ===" in text
     assert "$50,000" in text
     assert text.index("doa.txt") < text.index("matrix.csv")
+
+
+def test_retrieve_corpus_text_filters_by_the_given_organization_id():
+    corpus_id, organization_id = uuid.uuid4(), uuid.uuid4()
+    client = _FakeSearchClient(search_results=[{"filename": "doa.txt", "content": "text"}])
+
+    svc.retrieve_corpus_text(corpus_id, organization_id=organization_id, client=client)
+
+    assert client.last_search_filter == f"corpus_id eq '{corpus_id}' and organization_id eq '{organization_id}'"
 
 
 def test_retrieve_corpus_text_returns_none_not_empty_string_when_nothing_indexed():

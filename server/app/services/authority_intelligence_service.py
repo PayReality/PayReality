@@ -84,6 +84,13 @@ def ensure_search_index(client=None) -> None:
             fields=[
                 SearchField(name="id", type=SearchFieldDataType.String, key=True),
                 SearchField(name="corpus_id", type=SearchFieldDataType.String, filterable=True),
+                # Milestone 3 (Enterprise Surface Isolation): filterable,
+                # required on every query -- confirmed unscoped before
+                # this (MULTI_TENANT_ARCHITECTURE_VERIFICATION.md), and
+                # already self-documented in AUTHORITY_INTELLIGENCE_
+                # PHASE2_VALIDATION_REPORT.md as unsafe for a multi-
+                # tenant rollout, which Milestone 2 made this platform.
+                SearchField(name="organization_id", type=SearchFieldDataType.String, filterable=True),
                 SearchField(name="document_id", type=SearchFieldDataType.String),
                 SearchField(name="filename", type=SearchFieldDataType.String),
                 SearchField(name="format", type=SearchFieldDataType.String),
@@ -98,7 +105,12 @@ def ensure_search_index(client=None) -> None:
 
 
 def upload_document_to_blob(
-    corpus_id: uuid.UUID, document_id: uuid.UUID, filename: str, raw: bytes, client=None
+    corpus_id: uuid.UUID,
+    document_id: uuid.UUID,
+    filename: str,
+    raw: bytes,
+    organization_id: uuid.UUID | None = None,
+    client=None,
 ) -> str | None:
     """Returns the blob path on success, None if Blob Storage isn't
     configured for this environment or the upload fails -- callers must
@@ -106,6 +118,15 @@ def upload_document_to_blob(
     reviewer uploading a document. Documents are still stored in
     Postgres regardless (services/ai_authority_builder_service.py's
     add_document), so a failure here never loses the document.
+
+    Milestone 3 (Enterprise Surface Isolation): the blob path is
+    prefixed with the corpus's own organization -- confirmed to have no
+    organization segment of any kind before this
+    (MULTI_TENANT_ARCHITECTURE_VERIFICATION.md). "unscoped" (never a
+    literal string an organization_id could ever equal, since that's
+    always a real UUID) covers the same "no organization set" legacy
+    scope every other org-scoping convention in this codebase treats as
+    valid, not an error.
 
     `client` is injectable (same convention as every provider in this
     codebase, e.g. ClaudeAuthorityGraphExtractionProvider's own `client`
@@ -115,7 +136,8 @@ def upload_document_to_blob(
     client = client or _blob_service_client()
     if client is None:
         return None
-    blob_path = f"authority-corpora/{corpus_id}/{document_id}-{filename}"
+    org_segment = str(organization_id) if organization_id is not None else "unscoped"
+    blob_path = f"authority-corpora/{org_segment}/{corpus_id}/{document_id}-{filename}"
     try:
         container = client.get_container_client(settings.azure_storage_container_name)
         container.upload_blob(name=blob_path, data=raw, overwrite=True)
@@ -132,6 +154,7 @@ def index_document(
     format: str,
     text: str,
     blob_path: str | None,
+    organization_id: uuid.UUID | None = None,
     client=None,
 ) -> None:
     """Best-effort: pushes one document's already-extracted text
@@ -139,8 +162,16 @@ def index_document(
     unchanged) into the search index. Never raises -- a failed indexing
     call falls back to Postgres-backed retrieval for this document at
     extraction time, exactly as if Azure AI Search were never
-    configured at all. `client` is injectable, see
-    upload_document_to_blob's docstring for why."""
+    configured at all.
+
+    Milestone 3 (Enterprise Surface Isolation): organization_id is
+    stamped onto the indexed document (empty string for the "no
+    organization set" legacy scope, matching the field's own string
+    type -- Azure AI Search has no null-able-UUID-filter concept as
+    clean as this codebase's own `organization_id: uuid.UUID | None`
+    convention, so an empty string plays that role here specifically).
+    `client` is injectable, see upload_document_to_blob's docstring for
+    why."""
     client = client or _search_client()
     if client is None:
         return
@@ -150,6 +181,7 @@ def index_document(
                 {
                     "id": str(document_id),
                     "corpus_id": str(corpus_id),
+                    "organization_id": str(organization_id) if organization_id is not None else "",
                     "document_id": str(document_id),
                     "filename": filename,
                     "format": format,
@@ -162,7 +194,7 @@ def index_document(
         logger.exception("authority_intelligence_index_failed corpus_id=%s document_id=%s", corpus_id, document_id)
 
 
-def retrieve_corpus_text(corpus_id: uuid.UUID, client=None) -> str | None:
+def retrieve_corpus_text(corpus_id: uuid.UUID, organization_id: uuid.UUID | None = None, client=None) -> str | None:
     """Retrieves every indexed document belonging to this corpus and
     concatenates them in the exact `=== FILE: <filename> ===` format
     services/ai_authority_builder_service.py's build_corpus_text()
@@ -179,13 +211,24 @@ def retrieve_corpus_text(corpus_id: uuid.UUID, client=None) -> str | None:
     as reasoning over every document in it as one body of evidence, not
     a relevance-ranked subset -- retrieval here is what makes that
     deterministic and traceable, not what makes it approximate.
-    `client` is injectable, see upload_document_to_blob's docstring for
-    why."""
+
+    Milestone 3 (Enterprise Surface Isolation): the query filter now
+    also requires organization_id to match -- confirmed filtered only
+    by corpus_id before this, with no tenant boundary in the index
+    itself at all (MULTI_TENANT_ARCHITECTURE_VERIFICATION.md). Since
+    corpus_id already belongs to exactly one organization in Postgres,
+    this is defense in depth against the index ever drifting out of
+    sync with that fact, not the only thing standing between two
+    tenants' documents. `client` is injectable, see
+    upload_document_to_blob's docstring for why."""
     client = client or _search_client()
     if client is None:
         return None
+    org_value = str(organization_id) if organization_id is not None else ""
     try:
-        results = client.search(search_text="*", filter=f"corpus_id eq '{corpus_id}'")
+        results = client.search(
+            search_text="*", filter=f"corpus_id eq '{corpus_id}' and organization_id eq '{org_value}'"
+        )
         parts = [f"=== FILE: {r['filename']} ===\n{r['content']}" for r in results]
     except Exception:
         logger.exception("authority_intelligence_retrieval_failed corpus_id=%s", corpus_id)

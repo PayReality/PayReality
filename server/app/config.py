@@ -37,7 +37,15 @@ class Settings(BaseSettings):
     azure_ai_foundry_endpoint: str = ""
     azure_ai_foundry_deployment_name: str = "gpt-5-mini"
     azure_ai_search_endpoint: str = ""
-    azure_ai_search_index_name: str = "authority-intelligence-documents"
+    # Milestone 3 (Enterprise Surface Isolation): "-v2", not the same
+    # name as before -- deliberate, not cosmetic. Azure AI Search
+    # doesn't support adding a field to an existing index in place, so
+    # the only additive way to introduce the new organization_id field
+    # (see authority_intelligence_service.ensure_search_index) is a new
+    # index name, letting that function's existing idempotent
+    # "check if exists, else create" logic create it fresh rather than
+    # silently reusing the old, unscoped schema.
+    azure_ai_search_index_name: str = "authority-intelligence-documents-v2"
     azure_storage_account_url: str = ""
     azure_storage_container_name: str = "uploads"
 
