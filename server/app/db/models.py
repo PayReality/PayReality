@@ -430,6 +430,24 @@ class Organization(Base):
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now()
     )
+    # Milestone 3 (Enterprise Surface Isolation): the Organization
+    # Lifecycle. 'active' is the only status prior to this milestone, so
+    # every pre-existing row backfills to it -- the sole correct value,
+    # since nothing before this could deactivate or archive an
+    # Organization at all. Deactivation and archival are deliberately
+    # sequential (see organization_lifecycle_service.archive_organization):
+    # an Organization must be deactivated before it can be archived, the
+    # same "retire, don't skip states" discipline Agent/RuntimePolicy
+    # lifecycles already hold themselves to.
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    deactivated_at: Mapped[datetime | None]
+    deactivated_by: Mapped[str | None] = mapped_column(Text)
+    archived_at: Mapped[datetime | None]
+    archived_by: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('active','deactivated','archived')", name="ck_organizations_status"),
+    )
 
 
 class User(Base):
@@ -481,6 +499,49 @@ class UserSession(Base):
     revoked_at: Mapped[datetime | None]
 
     __table_args__ = (Index("idx_sessions_user", "user_id"),)
+
+
+class OrganizationInvitation(Base):
+    """Milestone 3 (Enterprise Surface Isolation), Organization Lifecycle:
+    invite a new member into an existing Organization by email, accepted
+    once via a one-time token -- the real email-and-accept flow the prior
+    `POST /v1/users` (still supported, unchanged) never was: that endpoint
+    creates the User directly with a temporary password shown once in the
+    response, no email delivery, no separate accept step.
+
+    `token_hash` follows api_keys.key_hash's exact pattern: SHA-256 of a
+    high-entropy generated secret, not bcrypt -- the raw token is shown
+    to the inviter exactly once (to send however they choose; this
+    platform sends no email itself) and never stored. New table, so
+    organization_id is NOT NULL from the start -- unlike every additive
+    organization_id column elsewhere in this codebase, there are no
+    pre-existing rows here to backfill against."""
+
+    __tablename__ = "organization_invitations"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    invited_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(nullable=False)
+    accepted_at: Mapped[datetime | None]
+    accepted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+
+    __table_args__ = (
+        CheckConstraint(f"role IN ({_ROLE_VALUES})", name="ck_organization_invitations_role"),
+        CheckConstraint(
+            "status IN ('pending','accepted','revoked','expired')",
+            name="ck_organization_invitations_status",
+        ),
+        UniqueConstraint("token_hash", name="uq_organization_invitations_token_hash"),
+        Index("idx_organization_invitations_organization", "organization_id"),
+    )
 
 
 class ApiKey(Base):
@@ -808,6 +869,18 @@ class PolicyExtractionUpload(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False)
     error: Mapped[str | None] = mapped_column(Text)
     uploaded_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Milestone 3 (Enterprise Surface Isolation): nullable and additive,
+    # the same discipline every prior org-scoping column in this codebase
+    # holds itself to. Confirmed unset before this milestone
+    # (MULTI_TENANT_ARCHITECTURE_VERIFICATION.md) -- the single-document
+    # pipeline had no organization concept at all. PolicyExtractionCandidate
+    # deliberately does NOT get its own organization_id: a candidate
+    # resolves its organization via exactly one of upload_id -> this
+    # column, or corpus_id -> authority_corpora.organization_id, mirroring
+    # the existing "resolve through the parent" convention.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id")
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -818,6 +891,7 @@ class PolicyExtractionUpload(Base):
             "status IN ('uploaded','extracted','failed')",
             name="ck_policy_extraction_uploads_status",
         ),
+        Index("idx_policy_extraction_uploads_organization", "organization_id"),
     )
 
 
