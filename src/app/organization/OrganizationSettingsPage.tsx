@@ -985,7 +985,7 @@ function AboutTab() {
         </div>
         <div className="flex justify-between">
           <dt style={{ color: "var(--pr-text-muted)" }}>Deployment</dt>
-          <dd style={{ color: "var(--pr-text-primary)" }}>Render + Vercel</dd>
+          <dd style={{ color: "var(--pr-text-primary)" }}>Render + Vercel (Azure staged, not yet live)</dd>
         </div>
         <div className="flex justify-between">
           <dt style={{ color: "var(--pr-text-muted)" }}>Documentation</dt>

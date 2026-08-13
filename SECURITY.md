@@ -68,7 +68,7 @@ Checked directly as part of this pass, not assumed:
 
 - **HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy**, all added in this pass (`server/app/security.py::observability_middleware`). Previously none were set at all, meaning every response was missing basic clickjacking/MIME-sniffing/referrer-leak protection.
 - **CORS**: a single explicit allowed origin (from `CORS_ORIGIN`), not a wildcard, with an explicit method allowlist (`GET, POST, PATCH`) and header allowlist, tightened in this pass from `allow_methods=["*"], allow_headers=["*"]`.
-- **TLS**: terminated at the hosting platform (Vercel for the frontend already; Render or equivalent for the backend per DEPLOYMENT.md), not something this application handles itself, correctly.
+- **TLS**: terminated at the hosting platform (Vercel for the frontend already; Render for the backend today, with Azure Container Apps verified as the target platform and not yet cut over, per DEPLOYMENT.md and MILESTONE_4_AZURE_PRODUCTION_READINESS_SUMMARY.md), not something this application handles itself, correctly.
 
 ## Error handling and information disclosure
 

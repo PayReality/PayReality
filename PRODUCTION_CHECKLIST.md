@@ -17,12 +17,12 @@ Every item below is either genuinely done (checked, with where to verify it), or
 
 - [x] Read from environment variables only, never hardcoded, never logged (`server/app/config.py`).
 - [x] Boot-time validation refuses to start in production with missing/default secrets (`server/app/main.py::_validate_production_config`).
-- [ ] Dedicated secrets manager (Secrets Manager / Key Vault / HSM-backed signing key). Deferred to the Series-A hosting tier in `DEPLOYMENT.md`; env vars via Render's own secret storage are proportionate for the pilot phase.
+- [ ] Dedicated secrets manager on the live production path. Env vars via Render's own secret storage remain what's actually in front of production traffic today; an Azure Key Vault (RBAC-only, purge protection on) exists and is verified live in both Azure environments per `MILESTONE_4_AZURE_PRODUCTION_READINESS_SUMMARY.md`, but is not yet what production reads from until that document's cutover plan executes.
 
 ## Environment variables
 
 - [x] Every required variable documented in `server/.env.example` and `DEPLOYMENT.md`'s table.
-- [x] `render.yaml` wires all of them for the recommended hosting path, with secrets marked `sync: false` so they're never committed.
+- [x] `render.yaml` wires all of them for today's live hosting path, with secrets marked `sync: false` so they're never committed. Azure's equivalent wiring (Key Vault-backed Container App secrets) is verified separately; see `MILESTONE_4_AZURE_PRODUCTION_READINESS_SUMMARY.md`.
 
 ## Logging
 

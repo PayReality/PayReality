@@ -31,7 +31,8 @@ server/tests/      36 unit tests covering the decision engine, compiler, and sig
 src/app/           React + Vite frontend, one workflow-ordered nav:
                    Overview -> Authority -> Policy -> Runtime Decisions -> Evidence -> Assurance
 docker-compose.yml Postgres + OPA + the API, wired the way a real deploy is wired
-render.yaml         Render Blueprint: the actual production hosting target, see GO_LIVE.md
+render.yaml         Render Blueprint: today's live production host. Azure is the verified
+                    target platform, not yet cut over; see MILESTONE_4_AZURE_PRODUCTION_READINESS_SUMMARY.md
 scripts/            scripts/smoke_test.py: end-to-end pipeline check against any live instance
 openapi.json        Exported OpenAPI schema for every live endpoint
 ```

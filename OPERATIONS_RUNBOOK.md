@@ -2,6 +2,8 @@
 
 Day-2 operations: what to do once the platform is live, as distinct from `GO_LIVE.md`'s one-time bring-up procedure. Assumes the Render deployment described there exists.
 
+**Current as of Render being the live production host.** Every procedure below that names the Render dashboard directly is accurate today, since production traffic is still on Render, confirmed live in `MILESTONE_4_AZURE_PRODUCTION_READINESS_SUMMARY.md`. Once that document's Phase 7 cutover plan actually executes, this runbook needs a matching Azure-native pass (Container App revision management in place of the Deploys tab, Key Vault in place of Render's environment settings, and so on); that pass is not done yet, and this file should not be read as already describing Azure.
+
 ## Health and monitoring
 
 - **Liveness**: `GET /health`, no dependency calls, should always return `200 {"status":"ok"}` if the process is up at all. Point Render's own health check at this.

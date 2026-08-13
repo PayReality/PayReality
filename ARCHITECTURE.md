@@ -89,7 +89,7 @@ React 18 + Vite 6 + react-router 7, no server-side rendering (that's the marketi
 
 ## Deployment architecture
 
-See DEPLOYMENT.md for the full recommendation and rationale. In short: frontend stays on Vercel (already working); backend is containerized (`server/Dockerfile`) for a Docker host (Render). In the current zero-cost pilot deployment, OPA runs embedded in the same container (loopback-only) and the existing free-tier Postgres is reused; once billing exists, the recommended topology reverts to OPA as its own private service and a paid, persistent Postgres.
+See DEPLOYMENT.md for the full recommendation and rationale, and MILESTONE_4_AZURE_PRODUCTION_READINESS_SUMMARY.md for current live status. In short: frontend stays on Vercel (already working); backend is containerized (`server/Dockerfile`), which today runs on Render (the live production host) and, in parallel, on Azure Container Apps (the verified target platform, not yet cut over). In the current Render deployment, OPA runs embedded in the same container (loopback-only) and the existing free-tier Postgres is reused; once billing exists there, or on Azure once cutover happens, the recommended topology reverts to OPA as its own service and a paid, persistent Postgres (already true on Azure's side, per the milestone document above).
 
 ## Known architectural gaps (by design, not oversight)
 

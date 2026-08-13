@@ -2,9 +2,9 @@
 
 ## Honest status, first
 
-The frontend is live on Vercel today. **The backend is not hosted anywhere yet.** It runs correctly locally (36 passing unit tests, manually verified request/response behavior), and it is packaged to deploy (`server/Dockerfile`, `docker-compose.yml`, `render.yaml`, this document), but nobody has provisioned a live database, a live OPA instance, or a live copy of the API on a real host. This document, `GO_LIVE.md`, and `render.yaml` are the runbook and artifacts for doing that; they are not a claim that it's already done. Provisioning real cloud infrastructure requires an account and billing decision that has to be the customer's/founder's, not something to fabricate.
+The frontend is live on Vercel today. **The backend is live on Render today** (see `GO_LIVE.md` for the original bring-up), reachable at `https://api.aisecurewatch.com`, which resolves via CNAME to Render behind Cloudflare.
 
-The intended production API domain is `https://api.aisecurewatch.com`. As of this writing, `aisecurewatch.com`'s DNS is still at its registrar, not delegated to Vercel, so pointing that subdomain at the deployed backend is a manual DNS step done once the backend has a real hostname to point at (see `GO_LIVE.md`).
+A second, Azure-hosted backend has also been built, verified, and provisioned in parallel (`AZURE_MIGRATION/`), and is the designated target production platform. It is not yet cut over: no DNS record or Vercel environment variable currently points at it, and it is not ready to receive real traffic today for reasons that are specific and closing, not open-ended. See `MILESTONE_4_AZURE_PRODUCTION_READINESS_SUMMARY.md` for the full audit, what remains before cutover, and the retirement plan for Render once that happens. Until then, everything below describing Render as the live host remains accurate, and should be read alongside that document rather than instead of it.
 
 ## Hosting recommendation
 
@@ -35,6 +35,8 @@ This is the deliberately simplest deployment that preserves the actual Runtime A
 The original recommendation, unchanged in spirit: FastAPI web service + a private (non-public) OPA service + managed (paid, persistent) Postgres, all on Render's `starter` plan. Revert `server/Dockerfile`/`entrypoint.sh` to call out to `OPA_URL` instead of embedding OPA, and re-add the `payreality-opa` private service. Worth doing once there's a real pilot customer, since the free Postgres's 30-day expiry and the free web service's cold starts stop being acceptable the moment someone outside the company is relying on this.
 
 ### Series A / scale: AWS or Azure
+
+**Update: the Azure half of this section is no longer hypothetical.** A full Azure environment (Container Apps, Postgres Flexible Server, Key Vault, Managed Identity, private networking, monitoring, staging and prod resource groups) has already been built and verified; see `MILESTONE_4_AZURE_PRODUCTION_READINESS_SUMMARY.md` for its current status and what remains before cutover. The description below is kept as the original rationale for choosing this path, not as a statement that it's still a future decision.
 
 Whichever the majority of actual enterprise pilot customers already standardize on (worth asking rather than presuming), this is the point where infrastructure choices should follow the customer's compliance requirements, not the other way around:
 
