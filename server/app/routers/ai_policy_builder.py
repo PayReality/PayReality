@@ -8,6 +8,7 @@ from app.config import settings
 from app.db.models import Organization, PolicyExtractionCandidate, PolicyExtractionUpload, User
 from app.db.session import get_db
 from app.dependencies import get_current_organization, get_current_user_if_session, require_permission
+from app.domain.ai_policy_builder.azure_foundry_provider import AzureFoundryRuntimePolicyExtractionProvider
 from app.domain.ai_policy_builder.claude_provider import ClaudeRuntimePolicyExtractionProvider
 from app.domain.ai_policy_builder.fake_provider import FakeRuntimePolicyExtractionProvider
 from app.domain.ai_policy_builder.text_extraction import UnsupportedFormatError, detect_format
@@ -33,6 +34,14 @@ router = APIRouter(prefix="/v1/ai-policy-builder", tags=["ai-policy-builder"])
 
 
 def _provider():
+    # Milestone 6 (AI_PIPELINE_CONSOLIDATION_REVIEW.md): Azure AI Foundry
+    # first, matching routers/ai_authority_builder.py's own ordering
+    # exactly -- Foundry is this platform's one canonical AI provider now
+    # that both pipelines sit on the same domain/ai_provider seam. Claude
+    # remains as a fallback for a local/dev environment with only
+    # ANTHROPIC_API_KEY set and no Foundry endpoint configured.
+    if settings.azure_ai_foundry_endpoint:
+        return AzureFoundryRuntimePolicyExtractionProvider()
     if settings.anthropic_api_key:
         return ClaudeRuntimePolicyExtractionProvider()
     return FakeRuntimePolicyExtractionProvider()
@@ -86,10 +95,14 @@ def candidate_to_response(candidate: PolicyExtractionCandidate) -> CandidateResp
 
 @router.get("/status", response_model=ProviderStatusResponse)
 def get_status():
-    """Whether this deployment currently has a real Anthropic key
-    configured, so the frontend can be honest with users about whether
-    they're looking at real extraction or illustrative sample output."""
-    return ProviderStatusResponse(ai_enabled=bool(settings.anthropic_api_key))
+    """Whether this deployment currently has a real AI provider
+    configured (Azure AI Foundry or Anthropic), so the frontend can be
+    honest with users about whether they're looking at real extraction
+    or illustrative sample output. Matches _provider()'s own ordering
+    and routers/ai_authority_builder.py's identical status check."""
+    return ProviderStatusResponse(
+        ai_enabled=bool(settings.azure_ai_foundry_endpoint or settings.anthropic_api_key)
+    )
 
 
 @router.post(

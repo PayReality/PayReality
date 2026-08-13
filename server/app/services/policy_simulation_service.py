@@ -152,16 +152,29 @@ def _decision_from_flags(allow: bool, deny: bool, requires_review: bool) -> str:
     return "HUMAN_REVIEW"
 
 
-def _compile_for_simulation(db: Session, policy_key: uuid.UUID):
+def _compile_for_simulation(db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None):
     """The same composition runtime_policy_service.dry_run_policy already
     uses internally (this policy version + every OTHER active policy),
     exposed here because the simulator additionally needs the actual
     list of RuntimePolicy objects for the rule-by-rule explanation --
     dry_run_policy() only returns a DryRunResult, not the policy set it
-    compiled."""
-    row = get_latest(db, policy_key)
+    compiled.
+
+    Milestone 6: `organization_id` threaded through both calls below.
+    Neither this function nor anything upstream of it was ever updated
+    for Milestone 2's Multi-Tenant Foundation -- get_latest and
+    _other_active_policies have required this argument since that
+    milestone, but every call site in this whole module predated it, so
+    every one of them raised TypeError in production the moment this
+    feature was ever actually exercised. get_latest's own organization
+    filter is also what makes this the correct place to enforce "a
+    simulation can only ever run against the caller's own organization's
+    policy," not a separate check -- an unknown or cross-organization
+    policy_key raises RuntimePolicyNotFoundError here exactly as it
+    would for any other organization-scoped lookup in this codebase."""
+    row = get_latest(db, policy_key, organization_id)
     this_policy = _row_to_policy(row)
-    other_policies = _other_active_policies(db, policy_key)
+    other_policies = _other_active_policies(db, policy_key, organization_id)
     all_policies = [this_policy] + other_policies
     result = compile_bundle(
         all_policies, bundle_id=f"simulation-{policy_key.hex}", bundle_version=row.version
@@ -170,14 +183,15 @@ def _compile_for_simulation(db: Session, policy_key: uuid.UUID):
 
 
 def simulate(
-    db: Session, policy_key: uuid.UUID, sim_input: SimulationInput, opa_url: str | None = None
+    db: Session, policy_key: uuid.UUID, sim_input: SimulationInput,
+    organization_id: uuid.UUID | None, opa_url: str | None = None,
 ) -> SimulationResult:
     """The core "dry run of Runtime Authority." Compiles the selected
     policy version together with every other currently-active policy --
     the exact set a real deployment would put into production -- and
     evaluates it via compiler_v2.dry_run's already-existing, already-
     verified isolated-package mechanism. Never writes anything."""
-    row, this_policy, all_policies, compile_result = _compile_for_simulation(db, policy_key)
+    row, this_policy, all_policies, compile_result = _compile_for_simulation(db, policy_key, organization_id)
     if not compile_result.ok:
         raise CompilationRequiredError(
             f"{policy_key} does not currently compile cleanly -- fix the errors before simulating"
@@ -235,11 +249,20 @@ def simulate(
 
 def create_scenario(
     db: Session, policy_key: uuid.UUID, name: str, sim_input: SimulationInput,
-    expected_outcome: str, created_by: str | None = None,
+    expected_outcome: str, organization_id: uuid.UUID | None, created_by: str | None = None,
 ) -> SimulationScenario:
+    """Milestone 6: verifies policy_key belongs to the caller's own
+    organization (get_latest raises RuntimePolicyNotFoundError
+    otherwise) before stamping the new row -- SimulationScenario.
+    organization_id has existed since Milestone 2, but nothing ever
+    populated it, leaving every saved scenario readable/listable by any
+    organization that guessed its UUID (list_scenarios/get_scenario
+    below had the same gap)."""
+    get_latest(db, policy_key, organization_id)
     scenario = SimulationScenario(
         id=uuid.uuid4(), policy_key=policy_key, name=name,
         input=sim_input.to_dict(), expected_outcome=expected_outcome, created_by=created_by,
+        organization_id=organization_id,
     )
     db.add(scenario)
     db.commit()
@@ -247,19 +270,23 @@ def create_scenario(
     return scenario
 
 
-def list_scenarios(db: Session, policy_key: uuid.UUID) -> list[SimulationScenario]:
+def list_scenarios(db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None) -> list[SimulationScenario]:
+    get_latest(db, policy_key, organization_id)
     return list(
         db.scalars(
             select(SimulationScenario)
-            .where(SimulationScenario.policy_key == policy_key)
+            .where(
+                SimulationScenario.policy_key == policy_key,
+                SimulationScenario.organization_id == organization_id,
+            )
             .order_by(SimulationScenario.created_at.desc())
         )
     )
 
 
-def get_scenario(db: Session, scenario_id: uuid.UUID) -> SimulationScenario:
+def get_scenario(db: Session, scenario_id: uuid.UUID, organization_id: uuid.UUID | None) -> SimulationScenario:
     row = db.get(SimulationScenario, scenario_id)
-    if row is None:
+    if row is None or row.organization_id != organization_id:
         raise ScenarioNotFoundError(str(scenario_id))
     return row
 
@@ -274,15 +301,17 @@ class ScenarioRunResult:
     result: SimulationResult
 
 
-def run_scenario(db: Session, scenario_id: uuid.UUID, opa_url: str | None = None) -> ScenarioRunResult:
+def run_scenario(
+    db: Session, scenario_id: uuid.UUID, organization_id: uuid.UUID | None, opa_url: str | None = None
+) -> ScenarioRunResult:
     """Re-runs a saved scenario's INPUT against the policy's current
     state and computes PASS/FAIL live -- the scenario row itself is
     never updated with this outcome, so running the same scenario again
     after a policy edit can legitimately produce a different actual
     result without that being a data inconsistency."""
-    scenario = get_scenario(db, scenario_id)
+    scenario = get_scenario(db, scenario_id, organization_id)
     sim_input = SimulationInput.from_dict(scenario.input)
-    result = simulate(db, scenario.policy_key, sim_input, opa_url=opa_url)
+    result = simulate(db, scenario.policy_key, sim_input, organization_id, opa_url=opa_url)
     return ScenarioRunResult(
         scenario_id=str(scenario.id), scenario_name=scenario.name,
         expected_outcome=scenario.expected_outcome, actual_outcome=result.decision,
@@ -319,7 +348,8 @@ class BatchSimulationResult:
 
 
 def run_batch(
-    db: Session, policy_key: uuid.UUID, rows: list[dict[str, Any]], opa_url: str | None = None
+    db: Session, policy_key: uuid.UUID, rows: list[dict[str, Any]],
+    organization_id: uuid.UUID | None, opa_url: str | None = None,
 ) -> BatchSimulationResult:
     """Task: Batch Simulation -- replay many historical actions against
     the candidate policy version. Compiles and loads the bundle into OPA
@@ -329,7 +359,7 @@ def run_batch(
     is identical (a unique throwaway package, deleted afterward), only
     the amortization differs. Never persists a single row's result;
     only the aggregate counts and a capped sample are ever returned."""
-    _row, _this_policy, _all_policies, compile_result = _compile_for_simulation(db, policy_key)
+    _row, _this_policy, _all_policies, compile_result = _compile_for_simulation(db, policy_key, organization_id)
     if not compile_result.ok:
         raise CompilationRequiredError(f"{policy_key} does not currently compile cleanly")
     bundle = compile_result.bundle

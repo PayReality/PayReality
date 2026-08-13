@@ -41,7 +41,7 @@ Confirmed directly against production for this specification: `policies` holds 5
 | Component | Status |
 |---|---|
 | `domain/compiler/` | **Deleted** |
-| `domain/extraction/` (legacy extraction providers) | **Dead** — zero callers, kept only because nothing currently forces its removal |
+| `domain/extraction/` (legacy extraction providers) | **Deleted** (Milestone 6, AI_PIPELINE_CONSOLIDATION_REVIEW.md). Confirmed zero callers, matching this row's own prior finding; the AI Policy Builder / Authority Builder consolidation review was the forcing function this row already said it was waiting for |
 | `services/policy_service.py`, `document_service.py`, `review_service.py` (surviving functions) | **Active** (read-only) |
 | `routers/policies.py`'s 4 write endpoints | **Retired** — always `410` |
 | `routers/policies.py`'s 3 read endpoints | **Active** |

@@ -1,10 +1,13 @@
 """RuntimePolicyExtractionProvider interface: the AI Policy Builder's own
-vendor-neutrality boundary (AI_POLICY_BUILDER_ARCHITECTURE.md), a
-deliberate sibling of domain/extraction/provider.py's ExtractionProvider,
-not a reuse of it: that protocol produces CandidateAuthority, for the
-separate DoA-document-to-Authority-claim pipeline. This one produces
-CandidateRuntimePolicy, for RuntimePolicy candidates. Conflating the two
-would couple two independent domains for no benefit.
+vendor-neutrality boundary (AI_POLICY_BUILDER_ARCHITECTURE.md). Produces
+CandidateRuntimePolicy, for RuntimePolicy candidates.
+
+Milestone 6 (AI_PIPELINE_CONSOLIDATION_REVIEW.md): domain/extraction/,
+this protocol's original, never-wired-up sibling for a separate
+DoA-document-to-Authority-claim pipeline, was deleted; it had been dead
+(zero callers) since Phase 0, per SPECIFICATION/17_LEGACY_COMPONENTS.md's
+own prior finding. This module was never coupled to it and needs no
+other change as a result.
 """
 
 from dataclasses import dataclass, field

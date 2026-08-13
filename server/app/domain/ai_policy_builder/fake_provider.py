@@ -1,7 +1,6 @@
 """Deterministic fake RuntimePolicyExtractionProvider for tests and for
-running the AI Policy Builder without an ANTHROPIC_API_KEY configured,
-the same role domain/extraction/fake_provider.py already plays for the
-DoA-document pipeline."""
+running the AI Policy Builder without a real AI provider configured
+(neither Azure AI Foundry nor ANTHROPIC_API_KEY)."""
 
 from app.domain.ai_policy_builder.provider import CandidateCondition, CandidateRuntimePolicy
 

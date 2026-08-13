@@ -21,9 +21,9 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import User
+from app.db.models import Organization, User
 from app.db.session import get_db
-from app.dependencies import get_current_user_if_session, require_permission
+from app.dependencies import get_current_organization, get_current_user_if_session, require_permission
 from app.domain.compiler_v2.dry_run import DryRunError
 from app.domain.rbac.permissions import Permission
 from app.schemas.policy_simulation import (
@@ -102,14 +102,17 @@ def _scenario_to_response(row) -> ScenarioResponse:
     "/{policy_key}/simulate", response_model=SimulationResponse,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
 )
-def simulate(policy_key: uuid.UUID, body: SimulationInputRequest, db: Session = Depends(get_db)):
+def simulate(
+    policy_key: uuid.UUID, body: SimulationInputRequest, db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+):
     """Task: Simulation Execution. Runs the exact same OPA evaluation
     Runtime Authority uses in production, isolated from it entirely
     (domain/compiler_v2/dry_run.py's already-verified mechanism) --
     never modifies the selected policy or any other, never persists
     anything."""
     try:
-        result = svc.simulate(db, policy_key, _to_sim_input(body), opa_url=settings.opa_url)
+        result = svc.simulate(db, policy_key, _to_sim_input(body), organization.id, opa_url=settings.opa_url)
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except CompilationRequiredError as e:
@@ -126,16 +129,21 @@ def simulate(policy_key: uuid.UUID, body: SimulationInputRequest, db: Session = 
 def create_scenario(
     policy_key: uuid.UUID, body: CreateScenarioRequest, db: Session = Depends(get_db),
     session_user: User | None = Depends(get_current_user_if_session),
+    organization: Organization = Depends(get_current_organization),
 ):
     """Task: Test Scenarios. Saves only the scenario's INPUT and
     expected outcome -- never a computed actual outcome, which is
     always derived live on every run (see run_scenario below)."""
     if body.expected_outcome not in _VALID_OUTCOMES:
         raise HTTPException(status_code=422, detail=f"expected_outcome must be one of {_VALID_OUTCOMES}")
-    scenario = svc.create_scenario(
-        db, policy_key, name=body.name, sim_input=_to_sim_input(body.input),
-        expected_outcome=body.expected_outcome, created_by=session_user.name if session_user else None,
-    )
+    try:
+        scenario = svc.create_scenario(
+            db, policy_key, name=body.name, sim_input=_to_sim_input(body.input),
+            expected_outcome=body.expected_outcome, organization_id=organization.id,
+            created_by=session_user.name if session_user else None,
+        )
+    except RuntimePolicyNotFoundError:
+        raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     return _scenario_to_response(scenario)
 
 
@@ -143,21 +151,31 @@ def create_scenario(
     "/{policy_key}/scenarios", response_model=list[ScenarioResponse],
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
 )
-def list_scenarios(policy_key: uuid.UUID, db: Session = Depends(get_db)):
-    return [_scenario_to_response(s) for s in svc.list_scenarios(db, policy_key)]
+def list_scenarios(
+    policy_key: uuid.UUID, db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+):
+    try:
+        rows = svc.list_scenarios(db, policy_key, organization.id)
+    except RuntimePolicyNotFoundError:
+        raise HTTPException(status_code=404, detail="runtime_policy_not_found")
+    return [_scenario_to_response(s) for s in rows]
 
 
 @router.post(
     "/scenarios/{scenario_id}/run", response_model=ScenarioRunResponse,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
 )
-def run_scenario(scenario_id: uuid.UUID, db: Session = Depends(get_db)):
+def run_scenario(
+    scenario_id: uuid.UUID, db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+):
     """Task: Test Scenarios, "Actual". Re-runs the saved scenario's
     input against the policy's CURRENT state -- a scenario that passed
     yesterday can legitimately fail today if the policy changed; that
     is the entire point of saving it."""
     try:
-        run_result = svc.run_scenario(db, scenario_id, opa_url=settings.opa_url)
+        run_result = svc.run_scenario(db, scenario_id, organization.id, opa_url=settings.opa_url)
     except ScenarioNotFoundError:
         raise HTTPException(status_code=404, detail="scenario_not_found")
     except RuntimePolicyNotFoundError:
@@ -178,7 +196,10 @@ def run_scenario(scenario_id: uuid.UUID, db: Session = Depends(get_db)):
     "/{policy_key}/batch", response_model=BatchSimulationResponse,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
 )
-async def batch_simulate(policy_key: uuid.UUID, file: UploadFile, db: Session = Depends(get_db)):
+async def batch_simulate(
+    policy_key: uuid.UUID, file: UploadFile, db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+):
     """Task: Batch Simulation. CSV columns: `principal`, `action`
     (both required), `resource`, `amount`, `currency` (all optional) --
     any other column is passed through as flat Runtime Authority
@@ -195,7 +216,7 @@ async def batch_simulate(policy_key: uuid.UUID, file: UploadFile, db: Session = 
         raise HTTPException(status_code=422, detail="batch_file_has_no_rows")
 
     try:
-        result = svc.run_batch(db, policy_key, rows, opa_url=settings.opa_url)
+        result = svc.run_batch(db, policy_key, rows, organization.id, opa_url=settings.opa_url)
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except CompilationRequiredError as e:
