@@ -7,8 +7,9 @@ one-shot (one sample Intent per call); re-uploading and deleting the
 identical Rego thousands of times for a historical-action replay would
 be pure waste, not a meaningful safety difference -- the isolation comes
 from the package name being unique to this run, not from re-uploading
-per query. Reuses dry_run.py's own package-rewrite helper unchanged.
-"""
+per query. Reuses bundle_builder.retarget_package unchanged (Milestone 2,
+Multi-Tenant Foundation: promoted out of dry_run.py's own former private
+copy once it needed a second caller)."""
 
 import uuid
 from contextlib import contextmanager
@@ -16,8 +17,8 @@ from typing import Any, Iterator
 
 import httpx
 
-from app.domain.compiler_v2.bundle_builder import PolicyBundle
-from app.domain.compiler_v2.dry_run import DryRunError, _rewrite_package
+from app.domain.compiler_v2.bundle_builder import PackageRetargetError, PolicyBundle, retarget_package
+from app.domain.compiler_v2.dry_run import DryRunError
 
 
 @contextmanager
@@ -29,7 +30,10 @@ def loaded_bundle(bundle: PolicyBundle, opa_url: str, timeout_ms: int = 2000) ->
     token = f"t{uuid.uuid4().hex}"
     package_path = f"payreality.batch.{token}"
     policy_id = f"batch-{token}"
-    rewritten_rego = _rewrite_package(bundle.rego_source, package_path)
+    try:
+        rewritten_rego = retarget_package(bundle.rego_source, package_path)
+    except PackageRetargetError as e:
+        raise DryRunError(str(e)) from e
     data_path = package_path.replace(".", "/")
 
     try:

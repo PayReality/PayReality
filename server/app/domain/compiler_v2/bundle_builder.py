@@ -19,6 +19,7 @@ compatibility claim rather than just assert it.
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -32,6 +33,42 @@ from app.domain.compiler_v2.rego_generator import (
 )
 
 COMPILER_VERSION = "2.0.0"
+
+_PACKAGE_LINE_PATTERN = re.compile(r"^package\s+\S+", re.MULTILINE)
+
+
+class PackageRetargetError(Exception):
+    """Raised only if `rego_source` has no `package` declaration to
+    rewrite at all -- a genuine programming error (every bundle this
+    module produces always has one, per build_bundle's own
+    `rego_source` assembly), never a normal outcome."""
+
+
+def retarget_package(rego_source: str, package_path: str) -> str:
+    """Rewrites a compiled bundle's `package` declaration to
+    `package_path`, leaving every rule body untouched. Every bundle this
+    module builds hardcodes `package payreality.authorization`
+    (build_bundle, below) -- this is the one, single place that name is
+    ever changed, reused by both dry_run.py's throwaway-package
+    isolation mechanism and, from Milestone 2 (Multi-Tenant Foundation)
+    onward, runtime_policy_service's per-organization OPA packages
+    (`payreality.authorization.org_<hex>`). Extracted here, out of
+    dry_run.py's own private copy, specifically because it now has two
+    genuinely independent callers rather than one -- promoted to public
+    (no leading underscore) for exactly that reason, the same
+    cross-module-reuse convention already established for
+    organization_structure_service's org-resolution helpers.
+
+    Verified directly against a real local OPA server (dry_run.py's own
+    docstring): rewriting the package line and re-uploading under a
+    distinct policy id is OPA's normal policy-loading mechanism, not a
+    special API -- isolation comes entirely from the distinct package
+    name."""
+    replacement = f"package {package_path}"
+    new_source, count = _PACKAGE_LINE_PATTERN.subn(replacement, rego_source, count=1)
+    if count == 0:
+        raise PackageRetargetError("rego source has no package declaration to rewrite")
+    return new_source
 
 
 @dataclass(frozen=True)

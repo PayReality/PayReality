@@ -24,15 +24,12 @@ mechanism that was actually confirmed to work, not the original guess):
    throughout.
 """
 
-import re
 import uuid
 from dataclasses import dataclass
 
 import httpx
 
-from app.domain.compiler_v2.bundle_builder import PolicyBundle
-
-_PACKAGE_LINE_PATTERN = re.compile(r"^package\s+\S+", re.MULTILINE)
+from app.domain.compiler_v2.bundle_builder import PackageRetargetError, PolicyBundle, retarget_package
 
 
 class DryRunError(Exception):
@@ -51,14 +48,6 @@ class DryRunResult:
     deny_reason: str | None
 
 
-def _rewrite_package(rego_source: str, package_path: str) -> str:
-    replacement = f"package {package_path}"
-    new_source, count = _PACKAGE_LINE_PATTERN.subn(replacement, rego_source, count=1)
-    if count == 0:
-        raise DryRunError("bundle Rego source has no package declaration to rewrite")
-    return new_source
-
-
 def dry_run(
     bundle: PolicyBundle,
     sample_input: dict,
@@ -74,7 +63,10 @@ def dry_run(
     token = f"t{uuid.uuid4().hex}"
     package_path = f"payreality.dryrun.{token}"
     policy_id = f"dryrun-{token}"
-    rewritten_rego = _rewrite_package(bundle.rego_source, package_path)
+    try:
+        rewritten_rego = retarget_package(bundle.rego_source, package_path)
+    except PackageRetargetError as e:
+        raise DryRunError(str(e)) from e
     data_path = package_path.replace(".", "/")
 
     try:
