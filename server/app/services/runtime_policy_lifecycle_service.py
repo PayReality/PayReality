@@ -63,10 +63,18 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _record_blocked(db: Session, policy_key: uuid.UUID, version: int, actor: str | None, safety: SafetyCheckResult) -> None:
+def _record_blocked(
+    db: Session,
+    policy_key: uuid.UUID,
+    version: int,
+    actor: str | None,
+    safety: SafetyCheckResult,
+    organization_id: uuid.UUID | None,
+) -> None:
     record_lifecycle_event(
         db, policy_key, version, "activation_blocked", actor=actor,
         payload={"violations": [{"check": v.check, "message": v.message, "details": v.details} for v in safety.violations]},
+        organization_id=organization_id,
     )
 
 
@@ -74,32 +82,45 @@ def _record_blocked(db: Session, policy_key: uuid.UUID, version: int, actor: str
 
 
 def activate_policy(
-    db: Session, policy_key: uuid.UUID, opa_url: str, actor: str, reason: str | None = None
+    db: Session,
+    policy_key: uuid.UUID,
+    organization_id: uuid.UUID | None,
+    opa_url: str,
+    actor: str,
+    reason: str | None = None,
 ) -> RuntimePolicyRecord:
     """Immediate activation. Reuses compile_policy (only if the candidate
     hasn't been compiled yet) and deploy_policy unchanged; adds only the
     safety gate and the richer, actor-aware activation metadata
-    deploy_policy itself has no parameters for."""
-    row = svc.get_latest(db, policy_key)
+    deploy_policy itself has no parameters for.
+
+    Milestone 2 (Multi-Tenant Foundation): `organization_id` is threaded
+    through every call into `svc` below so this always activates the
+    caller's own organization's candidate against its own organization's
+    OPA package -- never another organization's policy of the same
+    policy_key (which cannot exist, since policy_key is fixed to one
+    organization at creation, but is verified here anyway via
+    get_latest's own organization filter)."""
+    row = svc.get_latest(db, policy_key, organization_id)
     if row.status not in _ACTIVATABLE_STATUSES:
         raise svc.InvalidTransitionError(row.status, "activate")
 
     safety = run_safety_checks(db, policy_key, row)
     if not safety.ok:
-        _record_blocked(db, policy_key, row.version, actor, safety)
+        _record_blocked(db, policy_key, row.version, actor, safety, organization_id)
         raise ActivationBlockedError(safety.violations)
 
     if row.status == "approved":
-        outcome = svc.compile_policy(db, policy_key)
+        outcome = svc.compile_policy(db, policy_key, organization_id)
         if not outcome.ok:
             raise svc.CompilationRequiredError(
                 f"{policy_key} v{row.version} failed to compile: "
                 + "; ".join(e.message for e in outcome.diagnostics.errors)
             )
 
-    svc.deploy_policy(db, policy_key, opa_url=opa_url)
+    svc.deploy_policy(db, policy_key, organization_id, opa_url=opa_url)
 
-    row = svc.get_latest(db, policy_key)
+    row = svc.get_latest(db, policy_key, organization_id)
     row.activated_by = actor
     row.activated_at = _now()
     row.activation_reason = reason
@@ -107,7 +128,7 @@ def activate_policy(
     db.refresh(row)
     record_lifecycle_event(
         db, policy_key, row.version, "activated", actor=actor, reason=reason,
-        payload={"bundle_hash": row.bundle_hash},
+        payload={"bundle_hash": row.bundle_hash}, organization_id=organization_id,
     )
     return row
 
@@ -116,26 +137,37 @@ def activate_policy(
 
 
 def schedule_activation(
-    db: Session, policy_key: uuid.UUID, effective_at: datetime, actor: str, reason: str | None = None
+    db: Session,
+    policy_key: uuid.UUID,
+    organization_id: uuid.UUID | None,
+    effective_at: datetime,
+    actor: str,
+    reason: str | None = None,
 ) -> PolicyActivationSchedule:
     """Records a future activation; nothing activates now. Safety checks
     run at schedule time as an early warning, and are re-run at execution
     time by process_due_schedules (state may have drifted between now and
     then -- e.g. another policy could have taken the same authority in
     the interim), so a schedule passing this check is not a guarantee its
-    later execution will."""
-    row = svc.get_latest(db, policy_key)
+    later execution will.
+
+    Milestone 2: `organization_id` is stamped onto the new schedule row
+    (PolicyActivationSchedule.organization_id) so process_due_schedules
+    can later execute it as the correct organization without a live
+    re-lookup, exactly as that column's own docstring in db/models.py
+    already describes."""
+    row = svc.get_latest(db, policy_key, organization_id)
     if row.status not in _ACTIVATABLE_STATUSES:
         raise svc.InvalidTransitionError(row.status, "schedule activation")
 
     safety = run_safety_checks(db, policy_key, row)
     if not safety.ok:
-        _record_blocked(db, policy_key, row.version, actor, safety)
+        _record_blocked(db, policy_key, row.version, actor, safety, organization_id)
         raise ActivationBlockedError(safety.violations)
 
     schedule = PolicyActivationSchedule(
         id=uuid.uuid4(), policy_key=policy_key, version=row.version, action="activate",
-        effective_at=effective_at, reason=reason, created_by=actor,
+        effective_at=effective_at, reason=reason, created_by=actor, organization_id=organization_id,
     )
     db.add(schedule)
     db.commit()
@@ -143,20 +175,26 @@ def schedule_activation(
     record_lifecycle_event(
         db, policy_key, row.version, "scheduled", actor=actor, reason=reason,
         payload={"action": "activate", "effective_at": effective_at.isoformat(), "schedule_id": str(schedule.id)},
+        organization_id=organization_id,
     )
     return schedule
 
 
 def schedule_retirement(
-    db: Session, policy_key: uuid.UUID, effective_at: datetime, actor: str, reason: str | None = None
+    db: Session,
+    policy_key: uuid.UUID,
+    organization_id: uuid.UUID | None,
+    effective_at: datetime,
+    actor: str,
+    reason: str | None = None,
 ) -> PolicyActivationSchedule:
-    row = svc.get_latest(db, policy_key)
+    row = svc.get_latest(db, policy_key, organization_id)
     if row.status != "active":
         raise svc.InvalidTransitionError(row.status, "schedule retirement")
 
     schedule = PolicyActivationSchedule(
         id=uuid.uuid4(), policy_key=policy_key, version=row.version, action="retire",
-        effective_at=effective_at, reason=reason, created_by=actor,
+        effective_at=effective_at, reason=reason, created_by=actor, organization_id=organization_id,
     )
     db.add(schedule)
     db.commit()
@@ -164,13 +202,21 @@ def schedule_retirement(
     record_lifecycle_event(
         db, policy_key, row.version, "scheduled", actor=actor, reason=reason,
         payload={"action": "retire", "effective_at": effective_at.isoformat(), "schedule_id": str(schedule.id)},
+        organization_id=organization_id,
     )
     return schedule
 
 
-def cancel_schedule(db: Session, schedule_id: uuid.UUID, actor: str, reason: str | None = None) -> PolicyActivationSchedule:
+def cancel_schedule(
+    db: Session, schedule_id: uuid.UUID, organization_id: uuid.UUID | None, actor: str, reason: str | None = None
+) -> PolicyActivationSchedule:
+    """Milestone 2: a schedule belonging to a different organization is
+    treated identically to one that doesn't exist at all -- the same
+    "cross-organization access looks like not-found" discipline
+    Milestone 1 established for business units/departments/teams --
+    rather than leaking its existence via a different error."""
     schedule = db.get(PolicyActivationSchedule, schedule_id)
-    if schedule is None:
+    if schedule is None or schedule.organization_id != organization_id:
         raise ScheduleNotFoundError(str(schedule_id))
     if schedule.status != "pending":
         raise svc.InvalidTransitionError(schedule.status, "cancel")
@@ -179,7 +225,7 @@ def cancel_schedule(db: Session, schedule_id: uuid.UUID, actor: str, reason: str
     db.refresh(schedule)
     record_lifecycle_event(
         db, schedule.policy_key, schedule.version, "schedule_cancelled", actor=actor, reason=reason,
-        payload={"schedule_id": str(schedule.id), "action": schedule.action},
+        payload={"schedule_id": str(schedule.id), "action": schedule.action}, organization_id=organization_id,
     )
     return schedule
 
@@ -217,9 +263,13 @@ def process_due_schedules(
         actor = schedule.created_by or "scheduled-execution"
         try:
             if schedule.action == "activate":
-                activate_policy(db, schedule.policy_key, opa_url, actor=actor, reason=schedule.reason)
+                activate_policy(
+                    db, schedule.policy_key, schedule.organization_id, opa_url, actor=actor, reason=schedule.reason
+                )
             else:
-                retire_policy(db, schedule.policy_key, opa_url, actor=actor, reason=schedule.reason)
+                retire_policy(
+                    db, schedule.policy_key, schedule.organization_id, opa_url, actor=actor, reason=schedule.reason
+                )
             schedule.status = "executed"
             schedule.executed_at = _now()
             db.commit()
@@ -236,14 +286,18 @@ def process_due_schedules(
 # --- Retirement (no superseding version) --------------------------------
 
 
-def retire_policy(db: Session, policy_key: uuid.UUID, opa_url: str, actor: str, reason: str | None = None) -> RuntimePolicyRecord:
+def retire_policy(
+    db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None, opa_url: str, actor: str, reason: str | None = None
+) -> RuntimePolicyRecord:
     """The one transition `runtime_policy_service` has no equivalent for:
     deploy_policy only ever retires the PRIOR version of the SAME
     policy_key when a NEW version of that key activates. This retires the
     current active version with no replacement, then reuses
-    reconcile_opa_with_active_policies (unchanged) to push the remaining
-    active set to OPA -- never re-implementing bundle compilation here."""
-    row = svc.get_latest(db, policy_key)
+    reconcile_opa_with_active_policies (unchanged -- it already iterates
+    every organization's own active set and own OPA package) to push the
+    remaining active set to OPA -- never re-implementing bundle
+    compilation here."""
+    row = svc.get_latest(db, policy_key, organization_id)
     if row.status != "active":
         raise svc.InvalidTransitionError(row.status, "retire")
 
@@ -251,28 +305,32 @@ def retire_policy(db: Session, policy_key: uuid.UUID, opa_url: str, actor: str, 
     db.commit()
     db.refresh(row)
     svc.reconcile_opa_with_active_policies(db, opa_url=opa_url)
-    record_lifecycle_event(db, policy_key, row.version, "retired", actor=actor, reason=reason)
+    record_lifecycle_event(db, policy_key, row.version, "retired", actor=actor, reason=reason, organization_id=organization_id)
     return row
 
 
-def deprecate_policy(db: Session, policy_key: uuid.UUID, actor: str, reason: str | None = None) -> RuntimePolicyRecord:
+def deprecate_policy(
+    db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None, actor: str, reason: str | None = None
+) -> RuntimePolicyRecord:
     """A label on the ACTIVE row, never a status change -- see
     PolicyStatus.ARCHIVED's docstring for why: a deprecated-but-not-yet-
     retired policy must keep being enforced until its scheduled
     retirement actually runs."""
-    row = svc.get_latest(db, policy_key)
+    row = svc.get_latest(db, policy_key, organization_id)
     if row.status != "active":
         raise svc.InvalidTransitionError(row.status, "deprecate")
     row.deprecated_at = _now()
     row.deprecation_reason = reason
     db.commit()
     db.refresh(row)
-    record_lifecycle_event(db, policy_key, row.version, "deprecated", actor=actor, reason=reason)
+    record_lifecycle_event(db, policy_key, row.version, "deprecated", actor=actor, reason=reason, organization_id=organization_id)
     return row
 
 
-def archive_policy(db: Session, policy_key: uuid.UUID, actor: str, reason: str | None = None) -> RuntimePolicyRecord:
-    row = svc.get_latest(db, policy_key)
+def archive_policy(
+    db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None, actor: str, reason: str | None = None
+) -> RuntimePolicyRecord:
+    row = svc.get_latest(db, policy_key, organization_id)
     if row.status == "active":
         raise svc.InvalidTransitionError(row.status, "archive (retire it first)")
     if row.status == "archived":
@@ -280,7 +338,7 @@ def archive_policy(db: Session, policy_key: uuid.UUID, actor: str, reason: str |
     row.status = "archived"
     db.commit()
     db.refresh(row)
-    record_lifecycle_event(db, policy_key, row.version, "archived", actor=actor, reason=reason)
+    record_lifecycle_event(db, policy_key, row.version, "archived", actor=actor, reason=reason, organization_id=organization_id)
     return row
 
 
@@ -288,7 +346,12 @@ def archive_policy(db: Session, policy_key: uuid.UUID, actor: str, reason: str |
 
 
 def rollback_policy(
-    db: Session, policy_key: uuid.UUID, target_version: int, actor: str, reason: str | None = None
+    db: Session,
+    policy_key: uuid.UUID,
+    organization_id: uuid.UUID | None,
+    target_version: int,
+    actor: str,
+    reason: str | None = None,
 ) -> RuntimePolicyRecord:
     """Reverting to any previous ACTIVE version, per RUNTIME_POLICY_
     LIFECYCLE.md section 4: creates a new DRAFT version whose content is
@@ -298,11 +361,11 @@ def rollback_policy(
     literally here: the new version must still go through submit /
     approve / compile / activate like any other change, reusing that
     existing pipeline rather than a shortcut that bypasses approval."""
-    target_row = svc.get_version(db, policy_key, target_version)
+    target_row = svc.get_version(db, policy_key, target_version, organization_id)
     if target_row.activated_at is None and target_row.status not in ("active",):
         raise svc.InvalidTransitionError(target_row.status, "rollback to a version that was never activated")
 
-    latest = svc.get_latest(db, policy_key)
+    latest = svc.get_latest(db, policy_key, organization_id)
     if latest.status == "archived":
         raise svc.InvalidTransitionError(latest.status, "rollback")
 
@@ -315,13 +378,13 @@ def rollback_policy(
     reverted_policy = dataclasses.replace(
         target_policy, version=latest.version + 1, status=PolicyStatus.DRAFT, audit=audit
     )
-    new_row = svc.edit_policy(db, policy_key, reverted_policy)
+    new_row = svc.edit_policy(db, policy_key, organization_id, reverted_policy)
     new_row.rollback_of_version = target_version
     db.commit()
     db.refresh(new_row)
     record_lifecycle_event(
         db, policy_key, new_row.version, "rolled_back", actor=actor, reason=reason,
-        payload={"target_version": target_version},
+        payload={"target_version": target_version}, organization_id=organization_id,
     )
     return new_row
 
@@ -338,24 +401,28 @@ class ActivationImpactPreview:
     safety: SafetyCheckResult
 
 
-def preview_activation_impact(db: Session, policy_key: uuid.UUID) -> ActivationImpactPreview:
+def preview_activation_impact(
+    db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None
+) -> ActivationImpactPreview:
     """Before activation: how this candidate differs from whatever is
     currently active (reusing svc.diff_versions/compute_condition_diff
     unchanged), plus the same safety checks activation itself will run,
     so a reviewer sees potential conflicts before committing to
     activating. Reuses the existing Diff engine exactly as instructed --
     no separate impact-computation logic exists here."""
-    candidate = svc.get_latest(db, policy_key)
+    candidate = svc.get_latest(db, policy_key, organization_id)
     safety = run_safety_checks(db, policy_key, candidate)
 
     current_active = db.scalar(
         select(RuntimePolicyRecord).where(
-            RuntimePolicyRecord.policy_key == policy_key, RuntimePolicyRecord.status == "active"
+            RuntimePolicyRecord.policy_key == policy_key,
+            RuntimePolicyRecord.status == "active",
+            RuntimePolicyRecord.organization_id == organization_id,
         )
     )
     diff = None
     if current_active is not None and current_active.version != candidate.version:
-        diff = svc.diff_versions(db, policy_key, current_active.version, candidate.version)
+        diff = svc.diff_versions(db, policy_key, current_active.version, candidate.version, organization_id)
 
     return ActivationImpactPreview(
         policy_key=policy_key,
@@ -369,7 +436,23 @@ def preview_activation_impact(db: Session, policy_key: uuid.UUID) -> ActivationI
 # --- Timeline, effective status, search, dashboard ------------------------
 
 
-def get_timeline(db: Session, policy_key: uuid.UUID) -> list[RuntimePolicyLifecycleEvent]:
+def get_timeline(
+    db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None
+) -> list[RuntimePolicyLifecycleEvent]:
+    """Milestone 2: verifies policy_key belongs to organization_id before
+    returning anything (svc.get_latest raises RuntimePolicyNotFoundError
+    otherwise -- identical to a policy_key that doesn't exist at all, the
+    same "cross-organization access looks like not-found" discipline
+    Milestone 1 established). Events themselves are then looked up by
+    policy_key alone, not re-filtered by organization_id: policy_key is
+    fixed to exactly one organization for its entire lifetime (see
+    create_policy), and lifecycle events written by
+    runtime_policy_service.py's own CRUD functions (created/edited/
+    approved/rejected/compiled) do not yet stamp organization_id on the
+    event row itself (see MILESTONE_2_MULTI_TENANT_FOUNDATION_SUMMARY.md's
+    Remaining Risks) -- filtering here would silently hide most of a
+    policy's real history."""
+    svc.get_latest(db, policy_key, organization_id)
     return list(
         db.scalars(
             select(RuntimePolicyLifecycleEvent)
@@ -380,9 +463,12 @@ def get_timeline(db: Session, policy_key: uuid.UUID) -> list[RuntimePolicyLifecy
 
 
 def list_schedules(
-    db: Session, policy_key: uuid.UUID | None = None, status: str | None = None
+    db: Session,
+    organization_id: uuid.UUID | None,
+    policy_key: uuid.UUID | None = None,
+    status: str | None = None,
 ) -> list[PolicyActivationSchedule]:
-    stmt = select(PolicyActivationSchedule)
+    stmt = select(PolicyActivationSchedule).where(PolicyActivationSchedule.organization_id == organization_id)
     if policy_key is not None:
         stmt = stmt.where(PolicyActivationSchedule.policy_key == policy_key)
     if status is not None:
@@ -420,7 +506,9 @@ class PolicySearchFilters:
     created_before: datetime | None = None
 
 
-def search_policies(db: Session, filters: PolicySearchFilters) -> list[RuntimePolicyRecord]:
+def search_policies(
+    db: Session, organization_id: uuid.UUID | None, filters: PolicySearchFilters
+) -> list[RuntimePolicyRecord]:
     """In-Python filtering over every version's JSONB `content`, not a
     real database-level search -- `content` is stored as a single JSONB
     blob keyed by RuntimePolicy's own shape, and this codebase has no
@@ -429,8 +517,17 @@ def search_policies(db: Session, filters: PolicySearchFilters) -> list[RuntimePo
     the one field it filters on). Fine at this platform's current scale;
     a real search index is future work if/when it isn't, and this is
     disclosed as a known limitation, not claimed as a scalable solution.
-    """
-    rows = list(db.scalars(select(RuntimePolicyRecord).order_by(RuntimePolicyRecord.policy_key, RuntimePolicyRecord.version)))
+
+    Milestone 2 (Multi-Tenant Foundation): scoped to organization_id --
+    previously loaded every organization's policy versions unconditionally,
+    a cross-tenant data leak this milestone closes."""
+    rows = list(
+        db.scalars(
+            select(RuntimePolicyRecord)
+            .where(RuntimePolicyRecord.organization_id == organization_id)
+            .order_by(RuntimePolicyRecord.policy_key, RuntimePolicyRecord.version)
+        )
+    )
     if filters.version is not None:
         rows = [r for r in rows if r.version == filters.version]
 
@@ -480,8 +577,13 @@ class DashboardSummary:
     conflict_alerts: list = field(default_factory=list)
 
 
-def get_dashboard(db: Session) -> DashboardSummary:
-    latest_rows = svc.list_latest_policies(db)
+def get_dashboard(db: Session, organization_id: uuid.UUID | None) -> DashboardSummary:
+    """Milestone 2 (Multi-Tenant Foundation): every query below is now
+    scoped to organization_id -- list_latest_policies, list_schedules,
+    and the rollback_history scan previously read every organization's
+    rows unconditionally, a cross-tenant data leak this milestone
+    closes."""
+    latest_rows = svc.list_latest_policies(db, organization_id)
 
     counts_by_state: dict[str, int] = {}
     for row in latest_rows:
@@ -490,7 +592,7 @@ def get_dashboard(db: Session) -> DashboardSummary:
 
     pending_approvals = [r for r in latest_rows if r.status == "pending_review"]
 
-    pending_schedules = list_schedules(db, status="pending")
+    pending_schedules = list_schedules(db, organization_id, status="pending")
     upcoming_activations = [s for s in pending_schedules if s.action == "activate"]
     upcoming_retirement_schedules = [s for s in pending_schedules if s.action == "retire"]
     upcoming_expirations = [r for r in latest_rows if r.status == "active" and r.effective_until is not None]
@@ -502,7 +604,9 @@ def get_dashboard(db: Session) -> DashboardSummary:
 
     deprecated_policies = [r for r in latest_rows if r.status == "active" and r.deprecated_at is not None]
 
-    all_rows = list(db.scalars(select(RuntimePolicyRecord)))
+    all_rows = list(
+        db.scalars(select(RuntimePolicyRecord).where(RuntimePolicyRecord.organization_id == organization_id))
+    )
     rollback_history = [r for r in all_rows if r.rollback_of_version is not None]
 
     conflict_alerts = []

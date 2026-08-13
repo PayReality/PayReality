@@ -44,7 +44,10 @@ class _FakeRow:
 
 
 class _FakeSchedule:
-    def __init__(self, id, policy_key, action, status="pending", created_by=None, reason=None, effective_at=None):
+    def __init__(
+        self, id, policy_key, action, status="pending", created_by=None, reason=None, effective_at=None,
+        organization_id=None,
+    ):
         self.id = id
         self.policy_key = policy_key
         self.version = 1
@@ -55,6 +58,7 @@ class _FakeSchedule:
         self.effective_at = effective_at or datetime(2026, 1, 1, tzinfo=timezone.utc)
         self.executed_at = None
         self.execution_error = None
+        self.organization_id = organization_id
 
 
 class _FakeSession:
@@ -108,14 +112,14 @@ def test_effective_status_is_plain_retired_with_no_newer_sibling():
 def test_search_filters_by_principal_case_insensitively():
     rows = [_FakeRow(uuid.uuid4(), 1, "active", _content(principal="Regional Controller"))]
     db = _FakeSession(scalars_results=[rows])
-    result = search_policies(db, PolicySearchFilters(principal="regional"))
+    result = search_policies(db, None, PolicySearchFilters(principal="regional"))
     assert len(result) == 1
 
 
 def test_search_excludes_non_matching_principal():
     rows = [_FakeRow(uuid.uuid4(), 1, "active", _content(principal="Regional Controller"))]
     db = _FakeSession(scalars_results=[rows])
-    result = search_policies(db, PolicySearchFilters(principal="nobody"))
+    result = search_policies(db, None, PolicySearchFilters(principal="nobody"))
     assert result == []
 
 
@@ -123,7 +127,7 @@ def test_search_filters_by_version():
     key = uuid.uuid4()
     rows = [_FakeRow(key, 1, "draft", _content()), _FakeRow(key, 2, "active", _content())]
     db = _FakeSession(scalars_results=[rows])
-    result = search_policies(db, PolicySearchFilters(version=2))
+    result = search_policies(db, None, PolicySearchFilters(version=2))
     assert [r.version for r in result] == [2]
 
 
@@ -134,7 +138,7 @@ def test_search_filters_by_state_using_effective_status(monkeypatch):
     row = _FakeRow(uuid.uuid4(), 1, "retired", _content())
     db = _FakeSession(scalars_results=[[row]])
     monkeypatch.setattr(lsvc, "effective_status", lambda db, r: "superseded")
-    result = search_policies(db, PolicySearchFilters(state="superseded"))
+    result = search_policies(db, None, PolicySearchFilters(state="superseded"))
     assert result == [row]
 
 
@@ -145,7 +149,10 @@ def test_process_due_schedules_executes_activate_action(monkeypatch):
     schedule = _FakeSchedule(uuid.uuid4(), uuid.uuid4(), action="activate", created_by="alice")
     db = _FakeSession(scalars_results=[[schedule]])
     called = {}
-    monkeypatch.setattr(lsvc, "activate_policy", lambda db, key, opa_url, actor, reason: called.setdefault("activate", (key, actor, reason)))
+    monkeypatch.setattr(
+        lsvc, "activate_policy",
+        lambda db, key, organization_id, opa_url, actor, reason: called.setdefault("activate", (key, actor, reason)),
+    )
     results = lsvc.process_due_schedules(db, opa_url="http://opa", now=datetime(2026, 1, 2, tzinfo=timezone.utc))
     assert called["activate"] == (schedule.policy_key, "alice", None)
     assert schedule.status == "executed"
@@ -156,7 +163,10 @@ def test_process_due_schedules_executes_retire_action(monkeypatch):
     schedule = _FakeSchedule(uuid.uuid4(), uuid.uuid4(), action="retire", created_by="bob")
     db = _FakeSession(scalars_results=[[schedule]])
     called = {}
-    monkeypatch.setattr(lsvc, "retire_policy", lambda db, key, opa_url, actor, reason: called.setdefault("retire", (key, actor)))
+    monkeypatch.setattr(
+        lsvc, "retire_policy",
+        lambda db, key, organization_id, opa_url, actor, reason: called.setdefault("retire", (key, actor)),
+    )
     lsvc.process_due_schedules(db, opa_url="http://opa", now=datetime(2026, 1, 2, tzinfo=timezone.utc))
     assert called["retire"] == (schedule.policy_key, "bob")
     assert schedule.status == "executed"
@@ -167,11 +177,11 @@ def test_process_due_schedules_marks_failure_without_aborting_the_batch(monkeypa
     bad_schedule = _FakeSchedule(uuid.uuid4(), uuid.uuid4(), action="retire", created_by="bob")
     db = _FakeSession(scalars_results=[[bad_schedule, ok_schedule]])
 
-    def _fake_retire(db, key, opa_url, actor, reason):
+    def _fake_retire(db, key, organization_id, opa_url, actor, reason):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(lsvc, "retire_policy", _fake_retire)
-    monkeypatch.setattr(lsvc, "activate_policy", lambda db, key, opa_url, actor, reason: None)
+    monkeypatch.setattr(lsvc, "activate_policy", lambda db, key, organization_id, opa_url, actor, reason: None)
     results = lsvc.process_due_schedules(db, opa_url="http://opa", now=datetime(2026, 1, 2, tzinfo=timezone.utc))
 
     by_id = {r.schedule_id: r for r in results}

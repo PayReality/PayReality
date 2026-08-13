@@ -29,8 +29,9 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.db.models import Organization
 from app.db.session import get_db
-from app.dependencies import require_permission
+from app.dependencies import get_current_organization, require_permission
 from app.domain.rbac.permissions import Permission
 from app.schemas.runtime_policy import AffectedAgentSchema, AffectedPolicySchema, ConditionDiffSchema, DiffResponse
 from app.schemas.runtime_policy_lifecycle import (
@@ -132,9 +133,16 @@ def _row_to_summary(row, db: Session) -> PolicyLifecycleSummary:
     "/{policy_key}/lifecycle/activate", response_model=PolicyLifecycleSummary,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_PUBLISH))],
 )
-def activate(policy_key: uuid.UUID, body: ActivateRequest, db: Session = Depends(get_db)):
+def activate(
+    policy_key: uuid.UUID,
+    body: ActivateRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        row = lsvc.activate_policy(db, policy_key, opa_url=_opa_url(), actor=body.actor, reason=body.reason)
+        row = lsvc.activate_policy(
+            db, policy_key, organization.id, opa_url=_opa_url(), actor=body.actor, reason=body.reason
+        )
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except InvalidTransitionError as e:
@@ -152,9 +160,16 @@ def activate(policy_key: uuid.UUID, body: ActivateRequest, db: Session = Depends
     "/{policy_key}/lifecycle/schedule-activation", response_model=ScheduleSchema,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_PUBLISH))],
 )
-def schedule_activation(policy_key: uuid.UUID, body: ScheduleActivateRequest, db: Session = Depends(get_db)):
+def schedule_activation(
+    policy_key: uuid.UUID,
+    body: ScheduleActivateRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        schedule = lsvc.schedule_activation(db, policy_key, body.effective_at, actor=body.actor, reason=body.reason)
+        schedule = lsvc.schedule_activation(
+            db, policy_key, organization.id, body.effective_at, actor=body.actor, reason=body.reason
+        )
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except InvalidTransitionError as e:
@@ -170,9 +185,16 @@ def schedule_activation(policy_key: uuid.UUID, body: ScheduleActivateRequest, db
     "/{policy_key}/lifecycle/schedule-retirement", response_model=ScheduleSchema,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_PUBLISH))],
 )
-def schedule_retirement(policy_key: uuid.UUID, body: ScheduleRetireRequest, db: Session = Depends(get_db)):
+def schedule_retirement(
+    policy_key: uuid.UUID,
+    body: ScheduleRetireRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        schedule = lsvc.schedule_retirement(db, policy_key, body.effective_at, actor=body.actor, reason=body.reason)
+        schedule = lsvc.schedule_retirement(
+            db, policy_key, organization.id, body.effective_at, actor=body.actor, reason=body.reason
+        )
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except InvalidTransitionError as e:
@@ -184,9 +206,16 @@ def schedule_retirement(policy_key: uuid.UUID, body: ScheduleRetireRequest, db: 
     "/{policy_key}/lifecycle/retire", response_model=PolicyLifecycleSummary,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_PUBLISH))],
 )
-def retire(policy_key: uuid.UUID, body: ActorReasonRequest, db: Session = Depends(get_db)):
+def retire(
+    policy_key: uuid.UUID,
+    body: ActorReasonRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        row = lsvc.retire_policy(db, policy_key, opa_url=_opa_url(), actor=body.actor, reason=body.reason)
+        row = lsvc.retire_policy(
+            db, policy_key, organization.id, opa_url=_opa_url(), actor=body.actor, reason=body.reason
+        )
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except InvalidTransitionError as e:
@@ -198,9 +227,14 @@ def retire(policy_key: uuid.UUID, body: ActorReasonRequest, db: Session = Depend
     "/{policy_key}/lifecycle/deprecate", response_model=PolicyLifecycleSummary,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_PUBLISH))],
 )
-def deprecate(policy_key: uuid.UUID, body: ActorReasonRequest, db: Session = Depends(get_db)):
+def deprecate(
+    policy_key: uuid.UUID,
+    body: ActorReasonRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        row = lsvc.deprecate_policy(db, policy_key, actor=body.actor, reason=body.reason)
+        row = lsvc.deprecate_policy(db, policy_key, organization.id, actor=body.actor, reason=body.reason)
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except InvalidTransitionError as e:
@@ -212,9 +246,14 @@ def deprecate(policy_key: uuid.UUID, body: ActorReasonRequest, db: Session = Dep
     "/{policy_key}/lifecycle/archive", response_model=PolicyLifecycleSummary,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_PUBLISH))],
 )
-def archive(policy_key: uuid.UUID, body: ActorReasonRequest, db: Session = Depends(get_db)):
+def archive(
+    policy_key: uuid.UUID,
+    body: ActorReasonRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        row = lsvc.archive_policy(db, policy_key, actor=body.actor, reason=body.reason)
+        row = lsvc.archive_policy(db, policy_key, organization.id, actor=body.actor, reason=body.reason)
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except InvalidTransitionError as e:
@@ -226,9 +265,16 @@ def archive(policy_key: uuid.UUID, body: ActorReasonRequest, db: Session = Depen
     "/{policy_key}/lifecycle/rollback", response_model=PolicyLifecycleSummary,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_PUBLISH))],
 )
-def rollback(policy_key: uuid.UUID, body: RollbackRequest, db: Session = Depends(get_db)):
+def rollback(
+    policy_key: uuid.UUID,
+    body: RollbackRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        row = lsvc.rollback_policy(db, policy_key, body.target_version, actor=body.actor, reason=body.reason)
+        row = lsvc.rollback_policy(
+            db, policy_key, organization.id, body.target_version, actor=body.actor, reason=body.reason
+        )
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except InvalidTransitionError as e:
@@ -240,9 +286,15 @@ def rollback(policy_key: uuid.UUID, body: RollbackRequest, db: Session = Depends
     "/{policy_key}/lifecycle/schedules/{schedule_id}/cancel", response_model=ScheduleSchema,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_PUBLISH))],
 )
-def cancel_schedule(policy_key: uuid.UUID, schedule_id: uuid.UUID, body: ActorReasonRequest, db: Session = Depends(get_db)):
+def cancel_schedule(
+    policy_key: uuid.UUID,
+    schedule_id: uuid.UUID,
+    body: ActorReasonRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        schedule = lsvc.cancel_schedule(db, schedule_id, actor=body.actor, reason=body.reason)
+        schedule = lsvc.cancel_schedule(db, schedule_id, organization.id, actor=body.actor, reason=body.reason)
     except lsvc.ScheduleNotFoundError:
         raise HTTPException(status_code=404, detail="schedule_not_found")
     except InvalidTransitionError as e:
@@ -254,9 +306,13 @@ def cancel_schedule(policy_key: uuid.UUID, schedule_id: uuid.UUID, body: ActorRe
 
 
 @router.get("/{policy_key}/lifecycle/activation-preview", response_model=ActivationImpactPreviewResponse)
-def activation_preview(policy_key: uuid.UUID, db: Session = Depends(get_db)):
+def activation_preview(
+    policy_key: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        preview = lsvc.preview_activation_impact(db, policy_key)
+        preview = lsvc.preview_activation_impact(db, policy_key, organization.id)
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     return ActivationImpactPreviewResponse(
@@ -268,14 +324,26 @@ def activation_preview(policy_key: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.get("/{policy_key}/lifecycle/timeline", response_model=TimelineResponse)
-def timeline(policy_key: uuid.UUID, db: Session = Depends(get_db)):
-    events = lsvc.get_timeline(db, policy_key)
+def timeline(
+    policy_key: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    try:
+        events = lsvc.get_timeline(db, policy_key, organization.id)
+    except RuntimePolicyNotFoundError:
+        raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     return TimelineResponse(policy_key=str(policy_key), events=[_event_to_schema(e) for e in events])
 
 
 @router.get("/{policy_key}/lifecycle/schedules", response_model=list[ScheduleSchema])
-def get_schedules(policy_key: uuid.UUID, status: str | None = None, db: Session = Depends(get_db)):
-    schedules = lsvc.list_schedules(db, policy_key=policy_key, status=status)
+def get_schedules(
+    policy_key: uuid.UUID,
+    status: str | None = None,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    schedules = lsvc.list_schedules(db, organization.id, policy_key=policy_key, status=status)
     return [_schedule_to_schema(s) for s in schedules]
 
 
@@ -283,8 +351,8 @@ def get_schedules(policy_key: uuid.UUID, status: str | None = None, db: Session 
 
 
 @dashboard_router.get("/dashboard", response_model=DashboardResponse)
-def dashboard(db: Session = Depends(get_db)):
-    summary = lsvc.get_dashboard(db)
+def dashboard(organization: Organization = Depends(get_current_organization), db: Session = Depends(get_db)):
+    summary = lsvc.get_dashboard(db, organization.id)
     return DashboardResponse(
         counts_by_state=summary.counts_by_state,
         pending_approvals=[_row_to_summary(r, db) for r in summary.pending_approvals],
@@ -309,13 +377,14 @@ def search(
     principal: str | None = None, resource: str | None = None, action: str | None = None,
     state: str | None = None, version: int | None = None, reviewer: str | None = None,
     created_after: datetime | None = None, created_before: datetime | None = None,
+    organization: Organization = Depends(get_current_organization),
     db: Session = Depends(get_db),
 ):
     filters = lsvc.PolicySearchFilters(
         principal=principal, resource=resource, action=action, state=state, version=version,
         reviewer=reviewer, created_after=created_after, created_before=created_before,
     )
-    rows = lsvc.search_policies(db, filters)
+    rows = lsvc.search_policies(db, organization.id, filters)
     return SearchResponse(results=[_row_to_summary(r, db) for r in rows])
 
 

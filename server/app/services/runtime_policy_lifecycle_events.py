@@ -35,11 +35,22 @@ def record_lifecycle_event(
     actor: str | None = None,
     reason: str | None = None,
     payload: dict | None = None,
+    organization_id: uuid.UUID | None = None,
 ) -> None:
     """Appends one immutable row. Never raises -- logs and continues on
     any failure, so a database hiccup on the audit write can never
     prevent (or appear to roll back) the actual create/edit/approve/
-    compile/activate/etc. transition that already succeeded."""
+    compile/activate/etc. transition that already succeeded.
+
+    Milestone 2 (Multi-Tenant Foundation): `organization_id` is optional
+    and defaults to None so every pre-existing call site (all of them
+    inside runtime_policy_service.py's own create_policy/edit_policy/
+    submit_for_review/approve/reject/compile_policy) keeps working
+    unchanged -- those are left stamping organization_id=None as a
+    disclosed, narrow gap (see MILESTONE_2_MULTI_TENANT_FOUNDATION_
+    SUMMARY.md's Remaining Risks), not silently dropped. New callers in
+    runtime_policy_lifecycle_service.py pass the real value they already
+    have on hand."""
     try:
         event_payload = payload or {}
         event_hash = payload_hash(
@@ -53,6 +64,7 @@ def record_lifecycle_event(
             RuntimePolicyLifecycleEvent(
                 id=uuid.uuid4(), policy_key=policy_key, version=version, event_type=event_type,
                 actor=actor, reason=reason, payload=event_payload, event_hash=event_hash,
+                organization_id=organization_id,
             )
         )
         db.commit()
