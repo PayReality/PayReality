@@ -26,22 +26,28 @@ logger = logging.getLogger("payreality.organization")
 
 
 def ensure_owner_bootstrapped(db: Session) -> None:
-    organization = db.scalar(select(Organization).order_by(Organization.created_at).limit(1))
-    if organization is None:
-        organization = Organization(name=settings.organization_name)
-        db.add(organization)
-        db.flush()
-        logger.info("organisation_bootstrapped name=%s", organization.name)
-
-    existing_owner = db.scalar(
-        select(User).where(
-            User.organization_id == organization.id,
-            User.role == Role.OWNER.value,
-        )
-    )
-    if existing_owner is not None:
-        db.commit()
+    """Milestone 3 (Enterprise Surface Isolation): runs its create-org-
+    and-owner logic only when ZERO organizations exist anywhere -- never
+    "whichever organization happens to be oldest," a distinction that
+    matters now that organization_lifecycle_service.create_organization
+    is a real, repeatable way to bring a second (or Nth) organization
+    into existence, always with its own Owner created atomically in the
+    same transaction. Once any organization exists, this hook has
+    nothing left to do, on this or any later boot -- it never inspects,
+    and never assumes anything about, "the first" organization
+    specifically. Confirmed as the one remaining "first organization"
+    assumption in the codebase by this milestone's own repository audit
+    (MULTI_TENANT_ARCHITECTURE_VERIFICATION.md already flagged and fixed
+    the other one, dependencies.get_current_organization's Operator Key
+    default, in Milestone 2)."""
+    any_organization_exists = db.scalar(select(Organization.id).limit(1)) is not None
+    if any_organization_exists:
         return
+
+    organization = Organization(name=settings.organization_name)
+    db.add(organization)
+    db.flush()
+    logger.info("organisation_bootstrapped name=%s", organization.name)
 
     # The password is deliberately never surfaced anywhere, including the
     # logs: it's a random, unrecoverable placeholder, not a credential
