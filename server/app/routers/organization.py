@@ -19,7 +19,10 @@ from app.schemas.organization import (
     OrganizationSettingsResponse,
     UpdateOrganizationSettingsRequest,
 )
+from app.schemas.organization_lifecycle import InvitationResponse, InviteMemberRequest, InviteMemberResponse
 from app.services import auth_service, evidence_service, organization_service
+from app.services import organization_lifecycle_service as lifecycle_svc
+from app.services.organization_lifecycle_service import EmailAlreadyRegisteredError, InvitationNotFoundError, InvitationNotPendingError
 
 router = APIRouter(prefix="/v1/organization", tags=["organization"])
 
@@ -157,3 +160,71 @@ def revoke_api_key(
         api_key.revoked_at = datetime.now(timezone.utc)
         db.commit()
     return None
+
+
+# --- Organization Lifecycle: inviting members into MY OWN organization ---
+#
+# Milestone 3 (Enterprise Surface Isolation): distinct from
+# routers/organization_lifecycle.py's platform-admin-only create/list/
+# deactivate/archive of an ARBITRARY organization -- inviting a member is
+# an ordinary per-tenant action, scoped to the caller's own organization
+# via get_current_organization, gated by the same USERS_MANAGE permission
+# POST /v1/users already uses. The real email-and-accept flow that
+# endpoint never was: it creates the User directly with a temporary
+# password shown once, no separate accept step.
+
+
+@router.post(
+    "/invitations",
+    response_model=InviteMemberResponse,
+    status_code=201,
+    dependencies=[Depends(require_permission(Permission.USERS_MANAGE))],
+)
+def invite_member(
+    body: InviteMemberRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    try:
+        Role(body.role)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid_role")
+    try:
+        invitation, raw_token = lifecycle_svc.invite_member(db, organization.id, body.email, body.role)
+    except EmailAlreadyRegisteredError:
+        raise HTTPException(status_code=409, detail="email_already_exists")
+    return InviteMemberResponse(invitation=InvitationResponse.from_model(invitation), raw_token=raw_token)
+
+
+@router.get(
+    "/invitations",
+    response_model=list[InvitationResponse],
+    dependencies=[Depends(require_permission(Permission.USERS_MANAGE))],
+)
+def list_invitations(
+    status: str | None = None,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    return [
+        InvitationResponse.from_model(i) for i in lifecycle_svc.list_invitations(db, organization.id, status=status)
+    ]
+
+
+@router.delete(
+    "/invitations/{invitation_id}",
+    response_model=InvitationResponse,
+    dependencies=[Depends(require_permission(Permission.USERS_MANAGE))],
+)
+def revoke_invitation(
+    invitation_id: UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    try:
+        invitation = lifecycle_svc.revoke_invitation(db, invitation_id, organization.id)
+    except InvitationNotFoundError:
+        raise HTTPException(status_code=404, detail="invitation_not_found")
+    except InvitationNotPendingError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return InvitationResponse.from_model(invitation)

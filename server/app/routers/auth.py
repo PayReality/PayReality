@@ -7,7 +7,15 @@ from app.db.session import get_db
 from app.dependencies import get_current_organization, get_current_user, require_permission
 from app.domain.rbac.permissions import Permission, Role, permissions_for_role
 from app.schemas.auth import CurrentUserResponse, LoginRequest, LoginResponse, SetupOwnerRequest
-from app.services import auth_service
+from app.schemas.organization_lifecycle import AcceptInvitationRequest, AcceptInvitationResponse
+from app.schemas.users import UserResponse
+from app.services import auth_service, organization_lifecycle_service as lifecycle_svc
+from app.services.organization_lifecycle_service import (
+    EmailAlreadyRegisteredError,
+    InvitationExpiredError,
+    InvitationNotFoundError,
+    InvitationNotPendingError,
+)
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
@@ -94,3 +102,23 @@ def setup_owner(
     db.commit()
     db.refresh(owner)
     return CurrentUserResponse.from_model(owner, _permissions_for(owner))
+
+
+@router.post("/accept-invitation", response_model=AcceptInvitationResponse, status_code=201)
+def accept_invitation(body: AcceptInvitationRequest, db: Session = Depends(get_db)):
+    """Milestone 3 (Enterprise Surface Isolation), Organization Lifecycle:
+    unauthenticated by necessity, the same reason /login is -- a brand
+    new member holds only the one-time token an inviter sent them, not
+    a session or API key yet. Membership Validation happens here: token
+    existence, pending status, and expiry are all checked before a User
+    row is ever created (see organization_lifecycle_service.
+    accept_invitation)."""
+    if len(body.password) < 8:
+        raise HTTPException(status_code=422, detail="password_too_short")
+    try:
+        user = lifecycle_svc.accept_invitation(db, body.token, body.name, body.password)
+    except InvitationNotFoundError:
+        raise HTTPException(status_code=404, detail="invitation_not_found")
+    except (InvitationNotPendingError, InvitationExpiredError, EmailAlreadyRegisteredError) as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return AcceptInvitationResponse(user=UserResponse.from_model(user))

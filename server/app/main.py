@@ -17,6 +17,7 @@ from app.routers import (
     evidence,
     intents,
     organization as organization_router,
+    organization_lifecycle,
     organization_structure,
     policies,
     policy_simulation,
@@ -282,6 +283,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router.router)
     app.include_router(users_router.router)
     app.include_router(organization_router.router)
+    app.include_router(organization_lifecycle.router)
     app.include_router(enterprise_systems.router)
     app.include_router(organization_structure.business_units_router)
     app.include_router(organization_structure.departments_router)
