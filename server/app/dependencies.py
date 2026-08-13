@@ -2,7 +2,6 @@ import hmac
 import uuid
 
 from fastapi import Depends, Header, HTTPException, Request
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -130,24 +129,48 @@ def get_current_user(
 
 def get_current_organization(
     x_payreality_operator_key: str | None = Header(None),
+    x_payreality_organization_id: str | None = Header(None),
     authorization: str | None = Header(None),
     db: Session = Depends(get_db),
 ) -> Organization:
     """Resolves "the organisation this request is acting on behalf of":
-    the operator key's holder (full bypass, same as `require_permission`)
-    is treated as acting for the platform's one bootstrapped Organisation;
-    a session or API key resolves to its own Organisation directly.
-    Assumes single-tenant deployment (one Organisation), matching
-    Phase 10's actual scope -- the schema doesn't prevent more, but
-    nothing routes multi-tenant traffic today."""
+    a session or API key resolves to its own Organisation directly, the
+    same as before Milestone 2.
+
+    Milestone 2 (Multi-Tenant Foundation): the Operator Key is now
+    platform-admin-only -- it belongs to no single Organisation, and is
+    no longer treated as implicitly acting for "whichever Organisation
+    was created first" (a default that only ever made sense for a
+    genuinely single-tenant deployment: with more than one Organisation,
+    every operator-key request would silently keep acting on the OLDEST
+    one regardless of which the caller actually meant, which is exactly
+    the kind of cross-tenant ambiguity this milestone exists to remove).
+    A request authenticated with the Operator Key must now name its
+    target Organisation explicitly via X-PayReality-Organization-Id --
+    there is no default, and none is inferred.
+
+    Disclosed, known consequence (see MILESTONE_2_MULTI_TENANT_
+    FOUNDATION_SUMMARY.md's Remaining Risks): the frontend's
+    OperatorKeyField/apiClient.ts flow, the Python SDK's admin-key path,
+    and scripts/smoke_test.py all currently call org-scoped endpoints
+    with the Operator Key and no target-org header -- all three will
+    start receiving organization_id_required_for_operator_key (400)
+    until updated, deliberately left as follow-up work outside this
+    milestone's backend-architecture scope."""
     if x_payreality_operator_key is not None:
         if not settings.admin_api_key or not hmac.compare_digest(
             x_payreality_operator_key, settings.admin_api_key
         ):
             raise HTTPException(status_code=401, detail="invalid_operator_key")
-        organization = db.scalar(select(Organization).order_by(Organization.created_at).limit(1))
+        if x_payreality_organization_id is None:
+            raise HTTPException(status_code=400, detail="organization_id_required_for_operator_key")
+        try:
+            organization_id = uuid.UUID(x_payreality_organization_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid_organization_id")
+        organization = db.get(Organization, organization_id)
         if organization is None:
-            raise HTTPException(status_code=503, detail="organization_not_bootstrapped")
+            raise HTTPException(status_code=404, detail="organization_not_found")
         return organization
 
     token = _bearer_token(authorization)

@@ -181,6 +181,10 @@ def create_app() -> FastAPI:
             "X-PayReality-Key-Id",
             "X-PayReality-Signature",
             "X-PayReality-Operator-Key",
+            # Milestone 2 (Multi-Tenant Foundation): required alongside the
+            # Operator Key on every org-scoped request -- see
+            # dependencies.get_current_organization's own docstring.
+            "X-PayReality-Organization-Id",
         ],
     )
 
