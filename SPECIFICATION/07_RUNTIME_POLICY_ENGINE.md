@@ -115,7 +115,18 @@ Rather than modify the Decision Engine to read `RuntimePolicyRecord` instead, `r
 
 **Practically**: `policies` is not a dead table with stale rows sitting in it — confirmed directly against production, it holds a live, growing history (5 rows as of this writing: 4 `retired`, 1 `active`, all created by `deploy_policy`, none by the retired legacy pipeline). Anyone reading `db/models.py::Policy` cold and assuming "legacy, empty, ignorable" (a reasonable assumption given `Mandate`/`Constraint`/`Document`/`Authority` right next to it genuinely are exactly that) would be wrong about this one table specifically. This is corrected here, in [05_DATABASE.md](05_DATABASE.md) §5.1/§5.5, and in [12_DECISION_ENGINE.md](12_DECISION_ENGINE.md) §12.3 — the three places this specification enumerates the table's status.
 
-## 7.12 What's active vs. partial
+## 7.12 Milestone 2 (Multi-Tenant Foundation): per-organization packages
+
+Everything in §7.1–§7.11 above describes `compile_bundle`/`build_bundle` themselves, which are **unchanged** by Milestone 2 — they still always emit the literal `package payreality.authorization` regardless of which organization the policy set belongs to. Per-organization packaging happens entirely at the layer *above* the compiler, at upload time, in `runtime_policy_service.py`:
+
+- `opa_client.org_package_path(organization_id)` names each organization's package `payreality.authorization.org_<hex>`; `org_policy_id`/`org_data_path` derive the matching OPA policy id and `/v1/data/...` query path.
+- `bundle_builder.retarget_package(rego_source, package_path)` rewrites a compiled bundle's `package` line to that name before upload — the exact rewrite mechanism `dry_run.py` already used for its own throwaway dry-run packages (§7.8), now promoted to a public function and reused rather than duplicated.
+- `organization_id=None` is its own valid, consistent scope, not an error: it maps to the literal `payreality.authorization` package and `authorization` policy id every deployment used before this milestone, so a never-bootstrapped platform or a pre-migration fixture keeps working completely unchanged.
+- §7.9's "full-set recompilation, not incremental" and §7.11's "legacy `policies` table" are now **per-organization**: `_other_active_policies`/`reconcile_opa_with_active_policies` filter by `organization_id`, and the `policies` table's single-active-row constraint (`idx_policies_single_active_per_org`) is keyed on `(organization_id, status)` rather than `status` alone — one organization's active set is recompiled and pushed independently of every other organization's.
+
+This closes the "noisy neighbor" risk a single shared package carried: two organizations coincidentally using the same `scope.principal` string could previously produce a false cross-organization conflict (§7.7's conflict detection groups by `(principal, action)` alone) blocking both organizations' deploys. Under per-organization packages and per-organization active-set queries, that scenario cannot occur. See `MILESTONE_2_MULTI_TENANT_FOUNDATION_SUMMARY.md` for the full Architecture Decision Record, including the alternative (a single shared package with an organization-tagged rule set) considered and rejected.
+
+## 7.13 What's active vs. partial
 
 | Component | Status |
 |---|---|

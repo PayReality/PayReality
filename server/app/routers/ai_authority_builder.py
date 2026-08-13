@@ -451,8 +451,11 @@ def approve_graph(
     this corpus's Authority Graph has been reviewed -- it does not
     itself promote, resolve, or activate anything (that stays exactly
     resolve_principal/resolve_relationship/activate_relationship/
-    ai_policy_builder's promote_candidate, all unmodified). Gated by the
-    same Permission.AUTHORITY_REVIEW every other reviewer action here
+    ai_policy_builder's promote_candidate -- the last of these gained an
+    organization_id parameter and a cross-organization check in
+    Milestone 2, Multi-Tenant Foundation, but this endpoint calls none
+    of them directly and is otherwise unaffected). Gated by the same
+    Permission.AUTHORITY_REVIEW every other reviewer action here
     already requires -- no new permission introduced."""
     try:
         approval = svc.approve_graph(
