@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import User
+from app.db.models import Organization, User
 from app.db.session import get_db
-from app.dependencies import get_current_user_if_session, require_permission
+from app.dependencies import get_current_organization, get_current_user_if_session, require_permission
 from app.domain.compiler_v2.compiler_v2 import FINANCIAL_VOCABULARY
 from app.domain.runtime_policy.conditions import Condition, ConditionSet, Operator
 from app.domain.runtime_policy.constraints import Constraints, RiskLevel
@@ -140,32 +140,49 @@ def get_vocabulary():
 
 
 @router.get("", response_model=list[RuntimePolicyResponse])
-def list_policies(status: str | None = None, db: Session = Depends(get_db)):
-    return [_record_to_response(r) for r in svc.list_latest_policies(db, status=status)]
+def list_policies(
+    status: str | None = None,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    return [_record_to_response(r) for r in svc.list_latest_policies(db, organization.id, status=status)]
 
 
 @router.get("/{policy_key}", response_model=RuntimePolicyResponse)
-def get_policy(policy_key: uuid.UUID, db: Session = Depends(get_db)):
+def get_policy(
+    policy_key: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        row = svc.get_latest(db, policy_key)
+        row = svc.get_latest(db, policy_key, organization.id)
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     return _record_to_response(row)
 
 
 @router.get("/{policy_key}/versions", response_model=list[RuntimePolicyResponse])
-def get_versions(policy_key: uuid.UUID, db: Session = Depends(get_db)):
+def get_versions(
+    policy_key: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        rows = svc.list_versions(db, policy_key)
+        rows = svc.list_versions(db, policy_key, organization.id)
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     return [_record_to_response(r) for r in rows]
 
 
 @router.get("/{policy_key}/versions/{version}", response_model=RuntimePolicyResponse)
-def get_version(policy_key: uuid.UUID, version: int, db: Session = Depends(get_db)):
+def get_version(
+    policy_key: uuid.UUID,
+    version: int,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        row = svc.get_version(db, policy_key, version)
+        row = svc.get_version(db, policy_key, version, organization.id)
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_version_not_found")
     return _record_to_response(row)
@@ -175,12 +192,16 @@ def get_version(policy_key: uuid.UUID, version: int, db: Session = Depends(get_d
     "", response_model=RuntimePolicyResponse, status_code=201,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_CREATE))],
 )
-def create_policy(body: RuntimePolicyRequest, db: Session = Depends(get_db)):
+def create_policy(
+    body: RuntimePolicyRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     audit = AuditTrail(created=datetime.now(timezone.utc))
     policy = _build_runtime_policy(
         body, policy_id=str(uuid.uuid4()), version=1, status=PolicyStatus.DRAFT, audit=audit
     )
-    row = svc.create_policy(db, policy)
+    row = svc.create_policy(db, policy, organization.id)
     return _record_to_response(row)
 
 
@@ -188,9 +209,14 @@ def create_policy(body: RuntimePolicyRequest, db: Session = Depends(get_db)):
     "/{policy_key}", response_model=RuntimePolicyResponse,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_EDIT))],
 )
-def edit_policy(policy_key: uuid.UUID, body: RuntimePolicyRequest, db: Session = Depends(get_db)):
+def edit_policy(
+    policy_key: uuid.UUID,
+    body: RuntimePolicyRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        latest = svc.get_latest(db, policy_key)
+        latest = svc.get_latest(db, policy_key, organization.id)
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
 
@@ -207,7 +233,7 @@ def edit_policy(policy_key: uuid.UUID, body: RuntimePolicyRequest, db: Session =
         preserve_authority_id=prior_constraints.get("authority_id"),
         preserve_mandate_id=prior_constraints.get("mandate_id"),
     )
-    row = svc.edit_policy(db, policy_key, policy)
+    row = svc.edit_policy(db, policy_key, organization.id, policy)
     return _record_to_response(row)
 
 
@@ -216,9 +242,13 @@ def edit_policy(policy_key: uuid.UUID, body: RuntimePolicyRequest, db: Session =
     response_model=RuntimePolicyResponse,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_EDIT))],
 )
-def submit_for_review(policy_key: uuid.UUID, db: Session = Depends(get_db)):
+def submit_for_review(
+    policy_key: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        row = svc.submit_for_review(db, policy_key)
+        row = svc.submit_for_review(db, policy_key, organization.id)
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except InvalidTransitionError as e:
@@ -234,12 +264,13 @@ def submit_for_review(policy_key: uuid.UUID, db: Session = Depends(get_db)):
 def approve_policy(
     policy_key: uuid.UUID,
     body: ApproveRequest,
+    organization: Organization = Depends(get_current_organization),
     db: Session = Depends(get_db),
     session_user: User | None = Depends(get_current_user_if_session),
 ):
     try:
         row = svc.approve(
-            db, policy_key, approver=body.approver,
+            db, policy_key, organization.id, approver=body.approver,
             approver_user_id=session_user.id if session_user else None,
         )
     except RuntimePolicyNotFoundError:
@@ -257,12 +288,13 @@ def approve_policy(
 def reject_policy(
     policy_key: uuid.UUID,
     body: RejectRequest,
+    organization: Organization = Depends(get_current_organization),
     db: Session = Depends(get_db),
     session_user: User | None = Depends(get_current_user_if_session),
 ):
     try:
         row = svc.reject(
-            db, policy_key, reviewer=body.reviewer, reason=body.reason,
+            db, policy_key, organization.id, reviewer=body.reviewer, reason=body.reason,
             reviewer_user_id=session_user.id if session_user else None,
         )
     except RuntimePolicyNotFoundError:
@@ -278,9 +310,13 @@ def reject_policy(
     "/{policy_key}/compile", response_model=CompileResponse,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_EDIT))],
 )
-def compile_policy(policy_key: uuid.UUID, db: Session = Depends(get_db)):
+def compile_policy(
+    policy_key: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        outcome = svc.compile_policy(db, policy_key)
+        outcome = svc.compile_policy(db, policy_key, organization.id)
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except InvalidTransitionError as e:
@@ -297,14 +333,19 @@ def compile_policy(policy_key: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.post("/{policy_key}/dry-run", response_model=DryRunResponse)
-def dry_run_policy(policy_key: uuid.UUID, body: DryRunRequest, db: Session = Depends(get_db)):
+def dry_run_policy(
+    policy_key: uuid.UUID,
+    body: DryRunRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        row = svc.get_latest(db, policy_key)
+        row = svc.get_latest(db, policy_key, organization.id)
         sample_input = {
             "intent": {"action": body.action, "resource": body.resource, **body.context},
             "agent": {"acting_for_principal_id": body.principal},
         }
-        result = svc.dry_run_policy(db, policy_key, sample_input, opa_url=_opa_url())
+        result = svc.dry_run_policy(db, policy_key, sample_input, organization.id, opa_url=_opa_url())
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except CompilationRequiredError as e:
@@ -341,9 +382,13 @@ def dry_run_policy(policy_key: uuid.UUID, body: DryRunRequest, db: Session = Dep
     "/{policy_key}/deploy", response_model=DeployResponse,
     dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_PUBLISH))],
 )
-def deploy_policy(policy_key: uuid.UUID, db: Session = Depends(get_db)):
+def deploy_policy(
+    policy_key: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        outcome = svc.deploy_policy(db, policy_key, opa_url=_opa_url())
+        outcome = svc.deploy_policy(db, policy_key, organization.id, opa_url=_opa_url())
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except InvalidTransitionError as e:
@@ -361,9 +406,15 @@ def deploy_policy(policy_key: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.get("/{policy_key}/diff", response_model=DiffResponse)
-def diff_versions(policy_key: uuid.UUID, from_version: int, to_version: int, db: Session = Depends(get_db)):
+def diff_versions(
+    policy_key: uuid.UUID,
+    from_version: int,
+    to_version: int,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
-        result = svc.diff_versions(db, policy_key, from_version, to_version)
+        result = svc.diff_versions(db, policy_key, from_version, to_version, organization.id)
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_version_not_found")
     return DiffResponse(
