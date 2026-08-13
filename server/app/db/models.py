@@ -198,14 +198,29 @@ class Authority(Base):
 class Policy(Base):
     """The compiled OPA bundle row -- NOT the same object as RuntimePolicy
     (below, table `runtime_policy_records`, Policy Studio's authoring
-    domain object). This table holds exactly one 'active' row at a time
-    (see the partial unique index below) and is read on every single
-    Intent evaluation via intent_service._DbPolicyStore.get_active(); a
-    RuntimePolicy is compiled into one of these at deploy time
+    domain object). This table holds exactly one 'active' row per
+    organization at a time (see the partial unique index below) and is
+    read on every single Intent evaluation via
+    intent_service._DbPolicyStore.get_active(); a RuntimePolicy is
+    compiled into one of these at deploy time
     (runtime_policy_service.deploy_policy). The two names colliding is a
     known, deliberately-deferred naming issue (Stage K): this table sits
     on the hottest path in the system, so renaming it is a bigger-blast-
-    radius change than its cosmetic payoff justifies today."""
+    radius change than its cosmetic payoff justifies today.
+
+    Milestone 2 (Multi-Tenant Foundation, MILESTONE_2_MULTI_TENANT_FOUNDATION_SUMMARY.md
+    Phase B1/B2, Option 2): `organization_id` is nullable specifically so
+    this migration is safe against every existing single-tenant
+    deployment (backfilled to that deployment's one real Organization,
+    never left to a judgment call) -- the partial unique index was
+    widened from "exactly one active Policy platform-wide" to "exactly
+    one active Policy per organization," which are mathematically
+    identical constraints for any deployment with exactly one
+    organization, and only diverge once a second one is onboarded. Each
+    organization now compiles to, and is read from, its own OPA package
+    (runtime_policy_service._org_package_path) -- never the single
+    shared `payreality.authorization` package every organization used
+    to share unconditionally."""
 
     __tablename__ = "policies"
 
@@ -217,6 +232,9 @@ class Policy(Base):
     compiled_at: Mapped[datetime | None]
     activated_at: Mapped[datetime | None]
     retired_at: Mapped[datetime | None]
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id")
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -224,13 +242,19 @@ class Policy(Base):
             name="ck_policies_status",
         ),
         UniqueConstraint("version", name="uq_policies_version"),
-        # Partial unique index enforcing "exactly one active Policy" (spec 12.4 Stage 9 / 20.2).
+        # Milestone 2: widened from a single-column partial unique index
+        # ("exactly one active Policy platform-wide") to a two-column one
+        # ("exactly one active Policy per organization") -- see the class
+        # docstring for why this is a safe, lossless widening for every
+        # deployment that exists today.
         Index(
-            "idx_policies_single_active",
+            "idx_policies_single_active_per_org",
+            "organization_id",
             "status",
             unique=True,
             postgresql_where="status = 'active'",
         ),
+        Index("idx_policies_organization", "organization_id"),
     )
 
 
@@ -738,6 +762,18 @@ class RuntimePolicyRecord(Base):
     # timeline can say "this version is a rollback to v{N}" without
     # guessing from content diffs.
     rollback_of_version: Mapped[int | None]
+    # Milestone 2 (Multi-Tenant Foundation): nullable and additive, same
+    # discipline as every column above -- backfilled to the deployment's
+    # one real Organization for any pre-existing row
+    # (MILESTONE_2_MULTI_TENANT_FOUNDATION_SUMMARY.md Phase B5). Set at
+    # creation time (create_policy) and threaded, never re-derived, onto
+    # every later version of the same policy_key (edit_policy) and onto
+    # every RuntimePolicyLifecycleEvent/PolicyActivationSchedule that
+    # references it -- the org a policy belongs to never changes across
+    # its own version history.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id")
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -749,6 +785,7 @@ class RuntimePolicyRecord(Base):
         ),
         Index("idx_runtime_policy_records_policy_key", "policy_key"),
         Index("idx_runtime_policy_records_status", "status"),
+        Index("idx_runtime_policy_records_organization", "organization_id"),
     )
 
 
@@ -1229,6 +1266,14 @@ class SimulationScenario(Base):
     expected_outcome: Mapped[str] = mapped_column(Text, nullable=False)
     created_by: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Milestone 2 (Multi-Tenant Foundation): nullable and additive, same
+    # discipline as RuntimePolicyRecord.organization_id above. A scenario
+    # is always run against a specific policy_key's specific org, never
+    # cross-org, so this is set once at creation from the referenced
+    # policy's own organization_id, never re-derived.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id")
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -1236,6 +1281,7 @@ class SimulationScenario(Base):
             name="ck_simulation_scenarios_expected_outcome",
         ),
         Index("idx_simulation_scenarios_policy_key", "policy_key"),
+        Index("idx_simulation_scenarios_organization", "organization_id"),
     )
 
 
@@ -1274,6 +1320,16 @@ class RuntimePolicyLifecycleEvent(Base):
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     event_hash: Mapped[str] = mapped_column(Text, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Milestone 2 (Multi-Tenant Foundation): nullable and additive, same
+    # discipline as every other column here. Threaded from the
+    # referenced RuntimePolicyRecord at the moment each event is
+    # recorded (record_lifecycle_event), never re-derived later -- an
+    # audit trail's own organization attribution must never depend on a
+    # live lookup that could disagree with what was true when the event
+    # actually happened.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id")
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -1283,6 +1339,7 @@ class RuntimePolicyLifecycleEvent(Base):
             name="ck_runtime_policy_lifecycle_events_event_type",
         ),
         Index("idx_runtime_policy_lifecycle_events_policy_key", "policy_key"),
+        Index("idx_runtime_policy_lifecycle_events_organization", "organization_id"),
     )
 
 
@@ -1311,6 +1368,14 @@ class PolicyActivationSchedule(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     executed_at: Mapped[datetime | None]
     execution_error: Mapped[str | None] = mapped_column(Text)
+    # Milestone 2 (Multi-Tenant Foundation): nullable and additive, same
+    # discipline as every other column here. Threaded from the
+    # referenced RuntimePolicyRecord at schedule-creation time so
+    # process_due_schedules can execute a due schedule as the correct
+    # organization without a live re-lookup.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id")
+    )
 
     __table_args__ = (
         CheckConstraint("action IN ('activate','retire')", name="ck_policy_activation_schedules_action"),
@@ -1320,4 +1385,5 @@ class PolicyActivationSchedule(Base):
         ),
         Index("idx_policy_activation_schedules_policy_key", "policy_key"),
         Index("idx_policy_activation_schedules_status", "status"),
+        Index("idx_policy_activation_schedules_organization", "organization_id"),
     )
