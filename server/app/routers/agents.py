@@ -4,9 +4,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.db.models import Agent, Certificate, Principal
+from app.db.models import Agent, Certificate, Organization, Principal
 from app.db.session import get_db
-from app.dependencies import require_permission, verify_agent_signature
+from app.dependencies import get_current_organization, require_permission, verify_agent_signature
 from app.domain.rbac.permissions import Permission
 from app.schemas.agent import (
     AgentDetailResponse,
@@ -76,16 +76,47 @@ def _invalid_transition_response(e: InvalidTransitionError) -> HTTPException:
     )
 
 
+def _authorized_agent(
+    agent_id: UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+) -> Agent:
+    """Milestone 3 (Enterprise Surface Isolation): the single gate every
+    single-agent endpoint below depends on -- confirmed unauthenticated
+    and unscoped before this in MULTI_TENANT_ARCHITECTURE_VERIFICATION.md
+    (GET /v1/agents/{id} and, transitively, every sibling endpoint keyed
+    by the same agent_id: certificates, audit events, activate/suspend/
+    retire/revoke/rotate/transfer). Agent has no organization_id of its
+    own -- reachable only via acting_for_principal_id -> Principal.
+    organization_id -- so this resolves that chain once and 404s an
+    agent belonging to a different organization identically to one that
+    doesn't exist, the same convention _authorized_corpus already
+    established for AI Authority Builder."""
+    try:
+        agent = agent_service.get_agent(db, agent_id)
+    except AgentNotFoundError:
+        raise HTTPException(status_code=404, detail="agent_not_found")
+    principal = db.get(Principal, agent.acting_for_principal_id)
+    if principal is None or principal.organization_id != organization.id:
+        raise HTTPException(status_code=404, detail="agent_not_found")
+    return agent
+
+
 @router.post(
     "", response_model=AgentResponse, status_code=201,
     dependencies=[Depends(require_permission(Permission.AGENT_REGISTER))],
 )
-def create_agent(body: CreateAgentRequest, db: Session = Depends(get_db)):
+def create_agent(
+    body: CreateAgentRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     try:
         agent, certificate = agent_service.create_agent(
             db,
             name=body.name,
             acting_for_principal_id=body.acting_for_principal_id,
+            organization_id=organization.id,
             public_key=body.public_key,
             owner=body.owner,
             description=body.description,
@@ -104,6 +135,7 @@ def list_agents(
     q: str | None = None,
     limit: int = 100,
     offset: int = 0,
+    organization: Organization = Depends(get_current_organization),
     db: Session = Depends(get_db),
 ):
     """Agent Directory (AGENT_DIRECTORY.md): search/filter via query
@@ -114,7 +146,7 @@ def list_agents(
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
     pairs, total = agent_service.list_agents(
-        db, status=status, environment=environment, owner=owner,
+        db, organization.id, status=status, environment=environment, owner=owner,
         principal_id=principal_id, q=q, limit=limit, offset=offset,
     )
     return AgentListResponse(
@@ -141,9 +173,15 @@ def _bulk_response(results: list[dict]) -> BulkActionResponse:
     "/bulk/suspend", response_model=BulkActionResponse,
     dependencies=[Depends(require_permission(Permission.AGENT_SUSPEND))],
 )
-def bulk_suspend(body: BulkAgentActionRequest, db: Session = Depends(get_db)):
+def bulk_suspend(
+    body: BulkAgentActionRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     return _bulk_response(
-        agent_service.bulk_transition(db, body.agent_ids, "suspend", reason=body.reason, actor=body.actor)
+        agent_service.bulk_transition(
+            db, body.agent_ids, "suspend", organization.id, reason=body.reason, actor=body.actor
+        )
     )
 
 
@@ -151,9 +189,13 @@ def bulk_suspend(body: BulkAgentActionRequest, db: Session = Depends(get_db)):
     "/bulk/activate", response_model=BulkActionResponse,
     dependencies=[Depends(require_permission(Permission.AGENT_ACTIVATE))],
 )
-def bulk_activate(body: BulkAgentActionRequest, db: Session = Depends(get_db)):
+def bulk_activate(
+    body: BulkAgentActionRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     return _bulk_response(
-        agent_service.bulk_transition(db, body.agent_ids, "activate", actor=body.actor)
+        agent_service.bulk_transition(db, body.agent_ids, "activate", organization.id, actor=body.actor)
     )
 
 
@@ -161,9 +203,15 @@ def bulk_activate(body: BulkAgentActionRequest, db: Session = Depends(get_db)):
     "/bulk/retire", response_model=BulkActionResponse,
     dependencies=[Depends(require_permission(Permission.AGENT_RETIRE))],
 )
-def bulk_retire(body: BulkAgentActionRequest, db: Session = Depends(get_db)):
+def bulk_retire(
+    body: BulkAgentActionRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     return _bulk_response(
-        agent_service.bulk_transition(db, body.agent_ids, "retire", reason=body.reason, actor=body.actor)
+        agent_service.bulk_transition(
+            db, body.agent_ids, "retire", organization.id, reason=body.reason, actor=body.actor
+        )
     )
 
 
@@ -171,7 +219,11 @@ def bulk_retire(body: BulkAgentActionRequest, db: Session = Depends(get_db)):
     "/bulk/rotate", response_model=BulkActionResponse,
     dependencies=[Depends(require_permission(Permission.AGENT_ROTATE))],
 )
-def bulk_rotate(body: BulkAgentActionRequest, db: Session = Depends(get_db)):
+def bulk_rotate(
+    body: BulkAgentActionRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     """Honest bulk rotation (CERTIFICATE_ROTATION.md): PayReality never
     holds an agent's private key, so an operator-triggered bulk action
     cannot generate new key pairs on 10,000 agents' behalf. This flags
@@ -180,17 +232,12 @@ def bulk_rotate(body: BulkAgentActionRequest, db: Session = Depends(get_db)):
     freshly generated public key from that agent's own side (SDK
     agent.rotate_keys())."""
     return _bulk_response(
-        agent_service.bulk_transition(db, body.agent_ids, "request_rotation", actor=body.actor)
+        agent_service.bulk_transition(db, body.agent_ids, "request_rotation", organization.id, actor=body.actor)
     )
 
 
 @router.get("/{agent_id}", response_model=AgentDetailResponse)
-def get_agent_detail(agent_id: UUID, db: Session = Depends(get_db)):
-    try:
-        agent = agent_service.get_agent(db, agent_id)
-    except AgentNotFoundError:
-        raise HTTPException(status_code=404, detail="agent_not_found")
-
+def get_agent_detail(agent_id: UUID, agent: Agent = Depends(_authorized_agent), db: Session = Depends(get_db)):
     certificate = agent_service.get_active_certificate_for_agent(db, agent_id)
     certificates = agent_service.list_certificates(db, agent_id)
     return _build_agent_detail(db, agent, certificate, certificates)
@@ -234,7 +281,12 @@ def _build_agent_detail(db: Session, agent: Agent, certificate, certificates) ->
     "/{agent_id}", response_model=AgentResponse,
     dependencies=[Depends(require_permission(Permission.AGENT_MANAGE))],
 )
-def update_agent(agent_id: UUID, body: UpdateAgentRequest, db: Session = Depends(get_db)):
+def update_agent(
+    agent_id: UUID,
+    body: UpdateAgentRequest,
+    _: Agent = Depends(_authorized_agent),
+    db: Session = Depends(get_db),
+):
     try:
         agent = agent_service.update_agent_metadata(db, agent_id, **body.model_dump(exclude_unset=True))
     except AgentNotFoundError:
@@ -247,7 +299,7 @@ def update_agent(agent_id: UUID, body: UpdateAgentRequest, db: Session = Depends
     "/{agent_id}", response_model=AgentResponse,
     dependencies=[Depends(require_permission(Permission.AGENT_RETIRE))],
 )
-def delete_agent(agent_id: UUID, db: Session = Depends(get_db)):
+def delete_agent(agent_id: UUID, _: Agent = Depends(_authorized_agent), db: Session = Depends(get_db)):
     """Not a real delete: AGENT_LIFECYCLE.md's own design philosophy is
     "Nothing is deleted. Everything is auditable," which a hard DELETE
     directly contradicts. This alias retires the agent instead (same
@@ -265,12 +317,14 @@ def delete_agent(agent_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.get("/{agent_id}/certificates", response_model=list[CertificateResponse])
-def list_certificates(agent_id: UUID, db: Session = Depends(get_db)):
+def list_certificates(agent_id: UUID, _: Agent = Depends(_authorized_agent), db: Session = Depends(get_db)):
     return [CertificateResponse.model_validate(c) for c in agent_service.list_certificates(db, agent_id)]
 
 
 @router.get("/{agent_id}/audit", response_model=list[AuditEventResponse])
-def list_audit_events(agent_id: UUID, limit: int = 50, db: Session = Depends(get_db)):
+def list_audit_events(
+    agent_id: UUID, limit: int = 50, _: Agent = Depends(_authorized_agent), db: Session = Depends(get_db)
+):
     return [
         AuditEventResponse.model_validate(a)
         for a in agent_service.list_audit_events(db, agent_id, limit=min(max(limit, 1), 200))
@@ -278,7 +332,9 @@ def list_audit_events(agent_id: UUID, limit: int = 50, db: Session = Depends(get
 
 
 @router.post("/{agent_id}/audit/{event_id}/verify", response_model=VerifyAuditEventResponse)
-def verify_audit_event(agent_id: UUID, event_id: UUID, db: Session = Depends(get_db)):
+def verify_audit_event(
+    agent_id: UUID, event_id: UUID, _: Agent = Depends(_authorized_agent), db: Session = Depends(get_db)
+):
     try:
         event = agent_service.get_audit_event(db, event_id)
     except AuditEventNotFoundError:
@@ -296,7 +352,12 @@ def verify_audit_event(agent_id: UUID, event_id: UUID, db: Session = Depends(get
     "/{agent_id}/activate", response_model=AgentResponse,
     dependencies=[Depends(require_permission(Permission.AGENT_ACTIVATE))],
 )
-def activate_agent(agent_id: UUID, body: LifecycleActionRequest = LifecycleActionRequest(), db: Session = Depends(get_db)):
+def activate_agent(
+    agent_id: UUID,
+    body: LifecycleActionRequest = LifecycleActionRequest(),
+    _: Agent = Depends(_authorized_agent),
+    db: Session = Depends(get_db),
+):
     try:
         agent = agent_service.activate_agent(db, agent_id, actor=body.actor)
     except AgentNotFoundError:
@@ -311,7 +372,12 @@ def activate_agent(agent_id: UUID, body: LifecycleActionRequest = LifecycleActio
     "/{agent_id}/suspend", response_model=AgentResponse,
     dependencies=[Depends(require_permission(Permission.AGENT_SUSPEND))],
 )
-def suspend_agent(agent_id: UUID, body: LifecycleActionRequest = LifecycleActionRequest(), db: Session = Depends(get_db)):
+def suspend_agent(
+    agent_id: UUID,
+    body: LifecycleActionRequest = LifecycleActionRequest(),
+    _: Agent = Depends(_authorized_agent),
+    db: Session = Depends(get_db),
+):
     try:
         agent = agent_service.suspend_agent(db, agent_id, reason=body.reason, actor=body.actor)
     except AgentNotFoundError:
@@ -326,7 +392,12 @@ def suspend_agent(agent_id: UUID, body: LifecycleActionRequest = LifecycleAction
     "/{agent_id}/retire", response_model=AgentResponse,
     dependencies=[Depends(require_permission(Permission.AGENT_RETIRE))],
 )
-def retire_agent(agent_id: UUID, body: LifecycleActionRequest = LifecycleActionRequest(), db: Session = Depends(get_db)):
+def retire_agent(
+    agent_id: UUID,
+    body: LifecycleActionRequest = LifecycleActionRequest(),
+    _: Agent = Depends(_authorized_agent),
+    db: Session = Depends(get_db),
+):
     try:
         agent = agent_service.retire_agent(db, agent_id, reason=body.reason, actor=body.actor)
     except AgentNotFoundError:
@@ -341,7 +412,12 @@ def retire_agent(agent_id: UUID, body: LifecycleActionRequest = LifecycleActionR
     "/{agent_id}/revoke", response_model=AgentResponse,
     dependencies=[Depends(require_permission(Permission.AGENT_REVOKE))],
 )
-def revoke_agent(agent_id: UUID, body: LifecycleActionRequest = LifecycleActionRequest(), db: Session = Depends(get_db)):
+def revoke_agent(
+    agent_id: UUID,
+    body: LifecycleActionRequest = LifecycleActionRequest(),
+    _: Agent = Depends(_authorized_agent),
+    db: Session = Depends(get_db),
+):
     """Not in the spec's literal API list (only suspend/activate/retire/
     rotate/heartbeat/transfer are named there), added because "Revoked"
     is a required terminal state in the same spec's own state-machine
@@ -360,7 +436,12 @@ def revoke_agent(agent_id: UUID, body: LifecycleActionRequest = LifecycleActionR
     "/{agent_id}/rotate", response_model=CertificateResponse,
     dependencies=[Depends(require_permission(Permission.AGENT_ROTATE))],
 )
-def rotate_certificate(agent_id: UUID, body: RotateCertificateRequest, db: Session = Depends(get_db)):
+def rotate_certificate(
+    agent_id: UUID,
+    body: RotateCertificateRequest,
+    _: Agent = Depends(_authorized_agent),
+    db: Session = Depends(get_db),
+):
     try:
         certificate = agent_service.rotate_certificate(db, agent_id, body.new_public_key, actor=body.actor)
     except AgentNotFoundError:
@@ -376,7 +457,12 @@ def rotate_certificate(agent_id: UUID, body: RotateCertificateRequest, db: Sessi
     "/{agent_id}/transfer", response_model=AgentResponse,
     dependencies=[Depends(require_permission(Permission.AGENT_MANAGE))],
 )
-def transfer_owner(agent_id: UUID, body: TransferOwnerRequest, db: Session = Depends(get_db)):
+def transfer_owner(
+    agent_id: UUID,
+    body: TransferOwnerRequest,
+    _: Agent = Depends(_authorized_agent),
+    db: Session = Depends(get_db),
+):
     try:
         agent = agent_service.transfer_owner(
             db, agent_id, body.new_owner, new_business_unit=body.new_business_unit, actor=body.actor

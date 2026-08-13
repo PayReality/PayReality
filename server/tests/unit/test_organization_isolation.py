@@ -425,3 +425,97 @@ def test_answer_question_endpoint_requires_authorization():
 
     sig = inspect.signature(ai_authority_builder.answer_question)
     assert sig.parameters["_"].default.dependency is ai_authority_builder._authorized_question
+
+
+# --- Agent Platform (Milestone 3, Enterprise Surface Isolation) -----------
+#
+# MULTI_TENANT_ARCHITECTURE_VERIFICATION.md confirmed GET /v1/agents and
+# GET /v1/agents/{id} had no organization check at all; auditing every
+# agent endpoint (this milestone's own explicit scope) found the same gap
+# on create_agent, every single-agent mutation (update/delete/activate/
+# suspend/retire/revoke/rotate/transfer/certificates/audit), and the bulk
+# operations. Agent has no organization_id of its own -- reachable only
+# via acting_for_principal_id -> Principal.organization_id.
+
+
+class _FakeAgent:
+    def __init__(self, id, acting_for_principal_id):
+        self.id = id
+        self.acting_for_principal_id = acting_for_principal_id
+
+
+class _FakePrincipal:
+    def __init__(self, id, organization_id):
+        self.id = id
+        self.organization_id = organization_id
+
+
+def test_create_agent_rejects_a_principal_from_a_different_organization():
+    principal_id = uuid.uuid4()
+    db = _FakeSession(get_results={str(principal_id): _FakePrincipal(principal_id, ORG_B)})
+    with pytest.raises(agent_service.PrincipalNotFoundError):
+        agent_service.create_agent(
+            db, name="A", acting_for_principal_id=principal_id, organization_id=ORG_A, public_key="k"
+        )
+
+
+def test_create_agent_rejects_a_nonexistent_principal():
+    with pytest.raises(agent_service.PrincipalNotFoundError):
+        agent_service.create_agent(
+            db=_FakeSession(), name="A", acting_for_principal_id=uuid.uuid4(),
+            organization_id=ORG_A, public_key="k",
+        )
+
+
+def test_list_agents_statement_filters_by_organization_id():
+    db = _FakeSession(scalar_results=[0], scalars_results=[[]])
+    agent_service.list_agents(db, ORG_A)
+    compiled = str(db.statements[0].compile(compile_kwargs={"literal_binds": True}))
+    assert f"'{ORG_A.hex}'" in compiled
+
+
+def test_agent_organization_id_resolves_via_principal():
+    agent_id, principal_id = uuid.uuid4(), uuid.uuid4()
+    db = _FakeSession(get_results={
+        str(agent_id): _FakeAgent(agent_id, principal_id), str(principal_id): _FakePrincipal(principal_id, ORG_A),
+    })
+    assert agent_service._agent_organization_id(db, agent_id) == ORG_A
+
+
+def test_agent_organization_id_returns_none_for_a_missing_agent():
+    assert agent_service._agent_organization_id(_FakeSession(), uuid.uuid4()) is None
+
+
+def test_bulk_transition_rejects_an_agent_from_a_different_organization():
+    agent_id, principal_id = uuid.uuid4(), uuid.uuid4()
+    db = _FakeSession(get_results={
+        str(agent_id): _FakeAgent(agent_id, principal_id), str(principal_id): _FakePrincipal(principal_id, ORG_B),
+    })
+    results = agent_service.bulk_transition(db, [agent_id], "suspend", ORG_A)
+    assert results == [
+        {"agent_id": str(agent_id), "ok": False, "error": str(agent_service.AgentNotFoundError(str(agent_id)))}
+    ]
+
+
+def test_authorized_agent_rejects_an_agent_whose_principal_is_a_different_organization(monkeypatch):
+    from app.routers import agents as agents_router
+
+    agent_id, principal_id = uuid.uuid4(), uuid.uuid4()
+    fake_agent = _FakeAgent(agent_id, principal_id)
+    db = _FakeSession(get_results={str(principal_id): _FakePrincipal(principal_id, ORG_B)})
+    monkeypatch.setattr(agents_router.agent_service, "get_agent", lambda db, aid: fake_agent)
+
+    with pytest.raises(HTTPException) as exc_info:
+        agents_router._authorized_agent(agent_id, organization=_Org(), db=db)
+    assert exc_info.value.status_code == 404
+
+
+def test_authorized_agent_accepts_an_agent_whose_principal_matches(monkeypatch):
+    from app.routers import agents as agents_router
+
+    agent_id, principal_id = uuid.uuid4(), uuid.uuid4()
+    fake_agent = _FakeAgent(agent_id, principal_id)
+    db = _FakeSession(get_results={str(principal_id): _FakePrincipal(principal_id, ORG_A)})
+    monkeypatch.setattr(agents_router.agent_service, "get_agent", lambda db, aid: fake_agent)
+
+    assert agents_router._authorized_agent(agent_id, organization=_Org(), db=db) is fake_agent

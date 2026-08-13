@@ -152,6 +152,7 @@ def create_agent(
     db: Session,
     name: str,
     acting_for_principal_id: uuid.UUID,
+    organization_id: uuid.UUID | None,
     public_key: str,
     owner: str | None = None,
     description: str | None = None,
@@ -164,9 +165,18 @@ def create_agent(
     a deliberate behavior change from Phase 1: existing agents already in
     the database (created 'active' with an 'active' certificate) are
     completely unaffected, since this only changes what happens for agents
-    created from now on."""
+    created from now on.
+
+    Milestone 3 (Enterprise Surface Isolation): `organization_id` is the
+    caller's own, resolved via get_current_organization -- a client could
+    otherwise register an Agent acting for a Principal belonging to a
+    DIFFERENT organization, confirmed as unchecked before this. A
+    Principal that exists but belongs to another organization is treated
+    identically to one that doesn't exist at all, the same "cross-
+    organization access looks like not-found" convention this codebase
+    already established for every other cross-organization reference."""
     principal = db.get(Principal, acting_for_principal_id)
-    if principal is None:
+    if principal is None or principal.organization_id != organization_id:
         raise PrincipalNotFoundError(str(acting_for_principal_id))
 
     agent = Agent(
@@ -227,6 +237,7 @@ def list_agents_with_active_certificate(db: Session) -> list[tuple[Agent, Certif
 
 def list_agents(
     db: Session,
+    organization_id: uuid.UUID | None,
     status: str | None = None,
     environment: str | None = None,
     owner: str | None = None,
@@ -239,8 +250,18 @@ def list_agents(
     pagination, since "manage 10,000+ agents" only holds up if the list
     endpoint doesn't return all of them at once. Sort is always by
     created_at desc (newest first) -- no column-level sort param yet, see
-    AGENT_DIRECTORY.md's known limitations."""
-    stmt = select(Agent)
+    AGENT_DIRECTORY.md's known limitations.
+
+    Milestone 3 (Enterprise Surface Isolation): scoped to organization_id
+    via an inner join through Principal -- confirmed unscoped before
+    this (any caller could enumerate every organization's agents).
+    Agent.acting_for_principal_id is NOT NULL, so the join never
+    silently excludes a legitimate row."""
+    stmt = (
+        select(Agent)
+        .join(Principal, Agent.acting_for_principal_id == Principal.id)
+        .where(Principal.organization_id == organization_id)
+    )
     if status:
         stmt = stmt.where(Agent.status == status)
     if environment:
@@ -561,10 +582,26 @@ def verify_audit_event(db: Session, event_id: uuid.UUID) -> tuple[bool, str]:
     return valid, event.key_id
 
 
+def _agent_organization_id(db: Session, agent_id: uuid.UUID) -> uuid.UUID | None:
+    """Milestone 3 (Enterprise Surface Isolation): Agent has no
+    organization_id of its own -- reachable only via acting_for_
+    principal_id -> Principal.organization_id, the same path
+    _authorized_agent (routers/agents.py) resolves for single-agent
+    endpoints. Returns None (never matches a real organization_id) for
+    a missing agent, matching the "cross-organization access looks like
+    not-found" convention rather than raising here."""
+    agent = db.get(Agent, agent_id)
+    if agent is None:
+        return None
+    principal = db.get(Principal, agent.acting_for_principal_id)
+    return principal.organization_id if principal else None
+
+
 def bulk_transition(
     db: Session,
     agent_ids: list[uuid.UUID],
     action: str,
+    organization_id: uuid.UUID | None,
     reason: str | None = None,
     actor: str | None = None,
 ) -> list[dict]:
@@ -574,7 +611,13 @@ def bulk_transition(
     sequential transactions, not a single set-based UPDATE; fine for the
     batch sizes an operator drives from the Directory UI, not a substitute
     for a real bulk-data migration tool at true 10,000+-agent scale (see
-    AGENT_DIRECTORY.md)."""
+    AGENT_DIRECTORY.md).
+
+    Milestone 3: `organization_id` is the caller's own. Any agent_id in
+    the batch belonging to a DIFFERENT organization is rejected as
+    "agent_not_found" -- confirmed unchecked before this, which would
+    otherwise let one organization's own bulk action suspend, activate,
+    retire, or request rotation for another organization's agents by id."""
     action_fn = {
         "suspend": lambda aid: suspend_agent(db, aid, reason=reason, actor=actor),
         "activate": lambda aid: activate_agent(db, aid, actor=actor),
@@ -586,6 +629,11 @@ def bulk_transition(
 
     results = []
     for agent_id in agent_ids:
+        if _agent_organization_id(db, agent_id) != organization_id:
+            results.append(
+                {"agent_id": str(agent_id), "ok": False, "error": str(AgentNotFoundError(str(agent_id)))}
+            )
+            continue
         try:
             action_fn(agent_id)
             results.append({"agent_id": str(agent_id), "ok": True, "error": None})
