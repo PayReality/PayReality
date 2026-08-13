@@ -96,6 +96,24 @@ class _FakeCorpus:
         self.organization_id = organization_id
 
 
+class _FakeAuthorityPrincipal:
+    def __init__(self, id, corpus_id):
+        self.id = id
+        self.corpus_id = corpus_id
+
+
+class _FakeAuthorityRelationship:
+    def __init__(self, id, corpus_id):
+        self.id = id
+        self.corpus_id = corpus_id
+
+
+class _FakeAuthorityQuestion:
+    def __init__(self, id, corpus_id):
+        self.id = id
+        self.corpus_id = corpus_id
+
+
 # --- Evidence -----------------------------------------------------------
 
 
@@ -268,3 +286,142 @@ def test_authorized_corpus_accepts_a_corpus_from_the_matching_organization(monke
         id = ORG_A
 
     assert ai_authority_builder._authorized_corpus(corpus_id, organization=_Org(), db=None) is fake_corpus
+
+
+# Milestone 3 (Enterprise Surface Isolation): get_principal_candidates,
+# resolve_principal, resolve_relationship, activate_relationship, and
+# answer_question previously had NO organization check of any kind --
+# confirmed in MULTI_TENANT_ARCHITECTURE_VERIFICATION.md. Each now
+# depends on a new gate (_authorized_authority_principal/
+# _authorized_relationship/_authorized_question) resolving the target
+# row's OWN corpus and comparing its organization_id to the caller's,
+# the same "cross-organization access looks like not-found" discipline
+# _authorized_corpus already established.
+
+
+class _Org:
+    id = ORG_A
+
+
+def test_authorized_authority_principal_rejects_a_discovery_whose_corpus_is_a_different_organization():
+    from app.routers import ai_authority_builder
+
+    authority_principal_id, corpus_id = uuid.uuid4(), uuid.uuid4()
+    discovery = _FakeAuthorityPrincipal(authority_principal_id, corpus_id)
+    db = _FakeSession(get_results={
+        str(authority_principal_id): discovery, str(corpus_id): _FakeCorpus(corpus_id, ORG_B),
+    })
+    with pytest.raises(HTTPException) as exc_info:
+        ai_authority_builder._authorized_authority_principal(authority_principal_id, organization=_Org(), db=db)
+    assert exc_info.value.status_code == 404
+
+
+def test_authorized_authority_principal_accepts_a_discovery_whose_corpus_matches():
+    from app.routers import ai_authority_builder
+
+    authority_principal_id, corpus_id = uuid.uuid4(), uuid.uuid4()
+    discovery = _FakeAuthorityPrincipal(authority_principal_id, corpus_id)
+    db = _FakeSession(get_results={
+        str(authority_principal_id): discovery, str(corpus_id): _FakeCorpus(corpus_id, ORG_A),
+    })
+    result = ai_authority_builder._authorized_authority_principal(authority_principal_id, organization=_Org(), db=db)
+    assert result is discovery
+
+
+def test_authorized_authority_principal_404s_when_the_discovery_does_not_exist():
+    from app.routers import ai_authority_builder
+
+    with pytest.raises(HTTPException) as exc_info:
+        ai_authority_builder._authorized_authority_principal(uuid.uuid4(), organization=_Org(), db=_FakeSession())
+    assert exc_info.value.status_code == 404
+
+
+def test_authorized_relationship_rejects_a_relationship_whose_corpus_is_a_different_organization():
+    from app.routers import ai_authority_builder
+
+    relationship_id, corpus_id = uuid.uuid4(), uuid.uuid4()
+    relationship = _FakeAuthorityRelationship(relationship_id, corpus_id)
+    db = _FakeSession(get_results={
+        str(relationship_id): relationship, str(corpus_id): _FakeCorpus(corpus_id, ORG_B),
+    })
+    with pytest.raises(HTTPException) as exc_info:
+        ai_authority_builder._authorized_relationship(relationship_id, organization=_Org(), db=db)
+    assert exc_info.value.status_code == 404
+
+
+def test_authorized_relationship_accepts_a_relationship_whose_corpus_matches():
+    from app.routers import ai_authority_builder
+
+    relationship_id, corpus_id = uuid.uuid4(), uuid.uuid4()
+    relationship = _FakeAuthorityRelationship(relationship_id, corpus_id)
+    db = _FakeSession(get_results={
+        str(relationship_id): relationship, str(corpus_id): _FakeCorpus(corpus_id, ORG_A),
+    })
+    assert ai_authority_builder._authorized_relationship(relationship_id, organization=_Org(), db=db) is relationship
+
+
+def test_authorized_question_rejects_a_question_whose_corpus_is_a_different_organization():
+    from app.routers import ai_authority_builder
+
+    question_id, corpus_id = uuid.uuid4(), uuid.uuid4()
+    question = _FakeAuthorityQuestion(question_id, corpus_id)
+    db = _FakeSession(get_results={
+        str(question_id): question, str(corpus_id): _FakeCorpus(corpus_id, ORG_B),
+    })
+    with pytest.raises(HTTPException) as exc_info:
+        ai_authority_builder._authorized_question(question_id, organization=_Org(), db=db)
+    assert exc_info.value.status_code == 404
+
+
+def test_authorized_question_accepts_a_question_whose_corpus_matches():
+    from app.routers import ai_authority_builder
+
+    question_id, corpus_id = uuid.uuid4(), uuid.uuid4()
+    question = _FakeAuthorityQuestion(question_id, corpus_id)
+    db = _FakeSession(get_results={
+        str(question_id): question, str(corpus_id): _FakeCorpus(corpus_id, ORG_A),
+    })
+    assert ai_authority_builder._authorized_question(question_id, organization=_Org(), db=db) is question
+
+
+def test_approve_graph_endpoint_now_depends_on_authorized_corpus():
+    """approve_graph took a corpus_id but no organization dependency at
+    all -- the worst finding in MULTI_TENANT_ARCHITECTURE_VERIFICATION.md
+    (a full cross-org graph snapshot plus a forged audit record). Asserts
+    the fix is actually wired onto the endpoint's own signature, not just
+    that _authorized_corpus itself works (already covered above)."""
+    import inspect
+
+    from app.routers import ai_authority_builder
+
+    sig = inspect.signature(ai_authority_builder.approve_graph)
+    assert sig.parameters["corpus"].default.dependency is ai_authority_builder._authorized_corpus
+
+
+def test_get_principal_candidates_and_resolve_principal_endpoints_require_authorization():
+    import inspect
+
+    from app.routers import ai_authority_builder
+
+    for fn in (ai_authority_builder.get_principal_candidates, ai_authority_builder.resolve_principal):
+        sig = inspect.signature(fn)
+        assert sig.parameters["_"].default.dependency is ai_authority_builder._authorized_authority_principal
+
+
+def test_resolve_and_activate_relationship_endpoints_require_authorization():
+    import inspect
+
+    from app.routers import ai_authority_builder
+
+    for fn in (ai_authority_builder.resolve_relationship, ai_authority_builder.activate_relationship):
+        sig = inspect.signature(fn)
+        assert sig.parameters["_"].default.dependency is ai_authority_builder._authorized_relationship
+
+
+def test_answer_question_endpoint_requires_authorization():
+    import inspect
+
+    from app.routers import ai_authority_builder
+
+    sig = inspect.signature(ai_authority_builder.answer_question)
+    assert sig.parameters["_"].default.dependency is ai_authority_builder._authorized_question

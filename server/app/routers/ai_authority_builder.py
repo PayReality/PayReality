@@ -225,6 +225,57 @@ def _authorized_corpus(
     return corpus
 
 
+def _corpus_owns(db: Session, corpus_id: uuid.UUID, organization_id: uuid.UUID) -> bool:
+    corpus = db.get(AuthorityCorpus, corpus_id)
+    return corpus is not None and corpus.organization_id == organization_id
+
+
+def _authorized_authority_principal(
+    authority_principal_id: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+) -> AuthorityPrincipal:
+    """Milestone 3 (Enterprise Surface Isolation): the same "target
+    object must belong to the caller's organization" gate _authorized_
+    corpus already applies to corpus reads, extended to this discovery's
+    OWN corpus -- `get_principal_candidates`/`resolve_principal` took no
+    organization at all before this, verified and confirmed still true
+    in MULTI_TENANT_ARCHITECTURE_VERIFICATION.md. A discovery whose
+    corpus belongs to a different organization 404s identically to one
+    that doesn't exist, matching _authorized_corpus's own convention."""
+    discovery = db.get(AuthorityPrincipal, authority_principal_id)
+    if discovery is None or not _corpus_owns(db, discovery.corpus_id, organization.id):
+        raise HTTPException(status_code=404, detail="authority_principal_not_found")
+    return discovery
+
+
+def _authorized_relationship(
+    relationship_id: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+) -> AuthorityRelationship:
+    """Milestone 3: same gate as _authorized_authority_principal, for
+    resolve_relationship/activate_relationship -- confirmed to have had
+    no organization check of any kind before this."""
+    relationship = db.get(AuthorityRelationship, relationship_id)
+    if relationship is None or not _corpus_owns(db, relationship.corpus_id, organization.id):
+        raise HTTPException(status_code=404, detail="relationship_not_found")
+    return relationship
+
+
+def _authorized_question(
+    question_id: uuid.UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+) -> AuthorityQuestion:
+    """Milestone 3: same gate, for answer_question -- confirmed to have
+    had no organization check of any kind before this."""
+    question = db.get(AuthorityQuestion, question_id)
+    if question is None or not _corpus_owns(db, question.corpus_id, organization.id):
+        raise HTTPException(status_code=404, detail="question_not_found")
+    return question
+
+
 @router.get("/corpora", response_model=list[CorpusResponse])
 def list_corpora(
     organization: Organization = Depends(get_current_organization), db: Session = Depends(get_db)
@@ -270,7 +321,11 @@ def get_principals(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorize
     "/principals/{authority_principal_id}/candidates",
     response_model=list[PrincipalCandidateResponse],
 )
-def get_principal_candidates(authority_principal_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_principal_candidates(
+    authority_principal_id: uuid.UUID,
+    _: AuthorityPrincipal = Depends(_authorized_authority_principal),
+    db: Session = Depends(get_db),
+):
     """Stage E's reviewer workflow, step one: suggest, never apply.
     Empty list is a completely valid, common answer -- it means no
     existing Principal in this organisation matches by name, and the
@@ -294,7 +349,10 @@ def get_principal_candidates(authority_principal_id: uuid.UUID, db: Session = De
     dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
 )
 def resolve_principal(
-    authority_principal_id: uuid.UUID, body: ResolvePrincipalRequest, db: Session = Depends(get_db)
+    authority_principal_id: uuid.UUID,
+    body: ResolvePrincipalRequest,
+    _: AuthorityPrincipal = Depends(_authorized_authority_principal),
+    db: Session = Depends(get_db),
 ):
     """Stage E's reviewer workflow, step two: the only code path allowed
     to populate resolved_principal_id. Gated the same way promoting a
@@ -341,7 +399,11 @@ def get_relationships(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_author
     response_model=RelationshipResponse,
     dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
 )
-def resolve_relationship(relationship_id: uuid.UUID, db: Session = Depends(get_db)):
+def resolve_relationship(
+    relationship_id: uuid.UUID,
+    _: AuthorityRelationship = Depends(_authorized_relationship),
+    db: Session = Depends(get_db),
+):
     """Stage F, step one: mechanically derive from_principal_id/
     to_principal_id from Principals already resolved in Stage E. Safe to
     call more than once as more of a corpus's people get resolved."""
@@ -359,7 +421,11 @@ def resolve_relationship(relationship_id: uuid.UUID, db: Session = Depends(get_d
     response_model=RelationshipResponse,
     dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
 )
-def activate_relationship(relationship_id: uuid.UUID, db: Session = Depends(get_db)):
+def activate_relationship(
+    relationship_id: uuid.UUID,
+    _: AuthorityRelationship = Depends(_authorized_relationship),
+    db: Session = Depends(get_db),
+):
     """Stage F, step two: the explicit decision that a resolved
     delegation should actually govern live enforcement. Only after this
     does authority_context_service start returning this edge as an
@@ -393,7 +459,12 @@ def get_questions(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized
     response_model=QuestionResponse,
     dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
 )
-def answer_question(question_id: uuid.UUID, body: AnswerQuestionRequest, db: Session = Depends(get_db)):
+def answer_question(
+    question_id: uuid.UUID,
+    body: AnswerQuestionRequest,
+    _: AuthorityQuestion = Depends(_authorized_question),
+    db: Session = Depends(get_db),
+):
     try:
         question = svc.answer_question(db, question_id, body.answer)
     except QuestionNotFoundError:
@@ -444,6 +515,7 @@ def get_graph_diff(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorize
 def approve_graph(
     corpus_id: uuid.UUID,
     body: ApproveGraphRequest,
+    corpus: AuthorityCorpus = Depends(_authorized_corpus),
     db: Session = Depends(get_db),
     session_user: User | None = Depends(get_current_user_if_session),
 ):
@@ -456,7 +528,16 @@ def approve_graph(
     Milestone 2, Multi-Tenant Foundation, but this endpoint calls none
     of them directly and is otherwise unaffected). Gated by the same
     Permission.AUTHORITY_REVIEW every other reviewer action here
-    already requires -- no new permission introduced."""
+    already requires -- no new permission introduced.
+
+    Milestone 3 (Enterprise Surface Isolation): this endpoint took a
+    corpus_id but never verified it belonged to the caller's own
+    organization -- confirmed the worst finding in
+    MULTI_TENANT_ARCHITECTURE_VERIFICATION.md, since approval returns a
+    full snapshot of another org's graph and writes a falsely-attributed
+    audit record into that org's history. Now gated by the same
+    _authorized_corpus dependency every corpus-scoped read already
+    uses."""
     try:
         approval = svc.approve_graph(
             db, corpus_id,
