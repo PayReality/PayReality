@@ -9,9 +9,19 @@ import { Button } from "../components/ui/button";
 function describeSetupError(e: unknown): string {
   if (e instanceof ApiError) {
     if (e.status === 401) return "That Operator Key is incorrect.";
-    if (e.status === 503) return "No Operator Key is configured on this deployment yet.";
     if (e.status === 409) return "Another account already uses that email.";
     if (e.status === 422) return "Password must be at least 8 characters.";
+    if (e.status === 400) return "This deployment doesn't recognize its own organization yet. Contact whoever manages the platform.";
+    if (
+      e.status === 503 &&
+      typeof e.body === "object" &&
+      e.body !== null &&
+      "detail" in e.body &&
+      e.body.detail === "no_organization_bootstrapped"
+    ) {
+      return "No organization has been created on this deployment yet, so there's no Owner role to claim.";
+    }
+    if (e.status === 503) return "No Operator Key is configured on this deployment yet.";
   }
   return "Couldn't set up the account. Check your connection and try again.";
 }
