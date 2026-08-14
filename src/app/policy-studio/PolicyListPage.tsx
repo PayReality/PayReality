@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { policyStudioApi } from "./api";
 import type { RuntimePolicy } from "./types";
 import { PolicyStatusBadge } from "./components/PolicyStatusBadge";
+import { describeApiError } from "../live/format";
 import { HelpIcon } from "../help/HelpIcon";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
@@ -33,18 +34,18 @@ const DEFAULT_DIR: Record<SortKey, SortDir> = {
 
 export function PolicyListPage() {
   const [policies, setPolicies] = useState<RuntimePolicy[] | null>(null);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortKey, setSortKey] = useState<SortKey>("created_at");
   const [sortDir, setSortDir] = useState<SortDir>(DEFAULT_DIR.created_at);
 
   function load() {
-    setError(false);
+    setError(null);
     policyStudioApi
       .list()
       .then(setPolicies)
-      .catch(() => setError(true));
+      .catch((e) => setError(describeApiError(e, "Loading policies")));
   }
 
   useEffect(load, []);
@@ -174,7 +175,7 @@ export function PolicyListPage() {
       {error && (
         <Alert severity="warning" style={{ marginBottom: 16 }}>
           <div className="flex items-center gap-3">
-            <span>Could not reach the Policy Studio backend.</span>
+            <span>{error}</span>
             <Button variant="ghost" size="sm" onClick={load}>Retry</Button>
           </div>
         </Alert>

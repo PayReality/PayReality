@@ -26,7 +26,7 @@ export function ReviewQueuePage() {
   const [rejectReason, setRejectReason] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<{ policyKey: string; action: "approve" | "reject" } | null>(null);
-  const [loadError, setLoadError] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Only disable when we positively know the signed-in user lacks the
   // permission -- with no session (Operator Key bypass still active),
@@ -34,8 +34,8 @@ export function ReviewQueuePage() {
   const lacksPermission = !!user && !hasPermission("authority.review");
 
   function load() {
-    setLoadError(false);
-    policyStudioApi.list("pending_review").then(setPending).catch(() => setLoadError(true));
+    setLoadError(null);
+    policyStudioApi.list("pending_review").then(setPending).catch((e) => setLoadError(describeApiError(e, "Loading the review queue")));
   }
 
   useEffect(load, []);
@@ -117,7 +117,7 @@ export function ReviewQueuePage() {
       {loadError && (
         <Alert severity="warning" style={{ marginBottom: 12 }}>
           <div className="flex items-center gap-3">
-            <span>Could not load the review queue.</span>
+            <span>{loadError}</span>
             <Button variant="ghost" size="sm" onClick={load}>Retry</Button>
           </div>
         </Alert>

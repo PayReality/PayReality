@@ -28,7 +28,7 @@ function PolicyRow({ p, note }: { p: PolicyLifecycleSummary; note?: string }) {
 // Diff and Compile+DryRun+Deploy elsewhere in Policy Studio.
 export function RuntimePolicyDashboardPage() {
   const [dashboard, setDashboard] = useState<LifecycleDashboard | null>(null);
-  const [dashboardError, setDashboardError] = useState(false);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
 
   const [filters, setFilters] = useState<PolicySearchParams>({});
   const [results, setResults] = useState<PolicyLifecycleSummary[] | null>(null);
@@ -36,8 +36,8 @@ export function RuntimePolicyDashboardPage() {
   const [searchError, setSearchError] = useState<string | null>(null);
 
   function loadDashboard() {
-    setDashboardError(false);
-    policyLifecycleApi.dashboard().then(setDashboard).catch(() => setDashboardError(true));
+    setDashboardError(null);
+    policyLifecycleApi.dashboard().then(setDashboard).catch((e) => setDashboardError(describeApiError(e, "Loading the dashboard")));
   }
 
   useEffect(loadDashboard, []);
@@ -124,7 +124,7 @@ export function RuntimePolicyDashboardPage() {
       {dashboardError && (
         <Alert severity="warning" style={{ marginBottom: 16 }}>
           <div className="flex items-center gap-3">
-            <span>Could not load the dashboard.</span>
+            <span>{dashboardError}</span>
             <Button variant="ghost" size="sm" onClick={loadDashboard}>Retry</Button>
           </div>
         </Alert>

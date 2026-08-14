@@ -38,10 +38,10 @@ export function VersionsPage() {
   const { user, hasPermission } = useAuth();
   const canPublish = !user || hasPermission("runtime_policy.publish");
   const [versions, setVersions] = useState<RuntimePolicy[] | null>(null);
-  const [versionsError, setVersionsError] = useState(false);
+  const [versionsError, setVersionsError] = useState<string | null>(null);
   const [selected, setSelected] = useState<[number, number] | null>(null);
   const [diff, setDiff] = useState<PolicyDiff | null>(null);
-  const [diffError, setDiffError] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
   const [actor, setActor] = useState("");
   const [rollbackError, setRollbackError] = useState<string | null>(null);
 
@@ -64,8 +64,8 @@ export function VersionsPage() {
   }
 
   function loadVersions() {
-    setVersionsError(false);
-    policyStudioApi.getVersions(policyKey!).then(setVersions).catch(() => setVersionsError(true));
+    setVersionsError(null);
+    policyStudioApi.getVersions(policyKey!).then(setVersions).catch((e) => setVersionsError(describeApiError(e, "Loading version history")));
   }
 
   useEffect(loadVersions, [policyKey]);
@@ -73,14 +73,14 @@ export function VersionsPage() {
   function loadDiff() {
     if (!selected || selected[0] === selected[1]) return;
     setDiff(null);
-    setDiffError(false);
+    setDiffError(null);
     const [from, to] = [Math.min(...selected), Math.max(...selected)];
-    policyStudioApi.diff(policyKey!, from, to).then(setDiff).catch(() => setDiffError(true));
+    policyStudioApi.diff(policyKey!, from, to).then(setDiff).catch((e) => setDiffError(describeApiError(e, "Loading the comparison")));
   }
 
   useEffect(() => {
     setDiff(null);
-    setDiffError(false);
+    setDiffError(null);
     loadDiff();
   }, [policyKey, selected]);
 
@@ -97,7 +97,7 @@ export function VersionsPage() {
       {versionsError && (
         <Alert severity="warning" style={{ marginBottom: 12 }}>
           <div className="flex items-center gap-3">
-            <span>Could not load version history.</span>
+            <span>{versionsError}</span>
             <Button variant="ghost" size="sm" onClick={loadVersions}>Retry</Button>
           </div>
         </Alert>
@@ -178,7 +178,7 @@ export function VersionsPage() {
           {diffError && (
             <Alert severity="warning" style={{ marginBottom: 12 }}>
               <div className="flex items-center gap-3">
-                <span>Could not load the comparison.</span>
+                <span>{diffError}</span>
                 <Button variant="ghost" size="sm" onClick={loadDiff}>Retry</Button>
               </div>
             </Alert>

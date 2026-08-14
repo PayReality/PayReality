@@ -27,7 +27,7 @@ const OUTCOME_STYLE: Record<string, { bg: string; fg: string; icon: typeof Check
 export function LiveTestIntent() {
   const { user } = useAuth();
   const [agents, setAgents] = useState<LiveAgent[] | null>(null);
-  const [agentsError, setAgentsError] = useState(false);
+  const [agentsError, setAgentsError] = useState<string | null>(null);
   const [actions, setActions] = useState<string[]>([]);
   const [agentId, setAgentId] = useState("");
   const [action, setAction] = useState("");
@@ -44,8 +44,8 @@ export function LiveTestIntent() {
   const pollRef = useRef<number | null>(null);
 
   function loadAgents() {
-    setAgentsError(false);
-    apiClient.get<{ agents: LiveAgent[] }>("/v1/agents").then((r) => setAgents(r.agents)).catch(() => setAgentsError(true));
+    setAgentsError(null);
+    apiClient.get<{ agents: LiveAgent[] }>("/v1/agents").then((r) => setAgents(r.agents)).catch((e) => setAgentsError(describeApiError(e, "Loading agents")));
   }
 
   useEffect(() => {
@@ -281,7 +281,7 @@ export function LiveTestIntent() {
         {agentsError && (
           <Alert severity="warning" className="text-sm mb-4">
             <div className="flex items-center gap-3">
-              <span>Could not load agents.</span>
+              <span>{agentsError}</span>
               <Button variant="ghost" size="sm" onClick={loadAgents}>Retry</Button>
             </div>
           </Alert>
