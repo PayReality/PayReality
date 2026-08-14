@@ -60,6 +60,7 @@ export interface Team {
 
 export interface IntegrationsStatus {
   anthropic: IntegrationStatus;
+  azure_ai_foundry: IntegrationStatus;
   azure_openai: IntegrationStatus;
   aws_bedrock: IntegrationStatus;
   opa: IntegrationStatus;

@@ -106,12 +106,15 @@ def update_settings(db: Session, organization: Organization, updates: dict) -> O
 
 
 def get_integrations_status() -> dict:
-    """Real state only. Azure OpenAI and AWS Bedrock have zero integration
-    code in this codebase today -- reporting them as "configuration
-    required" (never "connected") is the honest status until an adapter
-    for either actually exists."""
+    """Real state only. Azure AI Foundry is this platform's actual AI
+    provider (routers/ai_authority_builder.py, routers/ai_policy_builder.py
+    both prefer it over Anthropic when configured); Azure OpenAI and AWS
+    Bedrock have zero integration code in this codebase today -- reporting
+    them as "configuration required" (never "connected") is the honest
+    status until an adapter for either actually exists."""
     return {
         "anthropic": "connected" if settings.anthropic_api_key else "configuration_required",
+        "azure_ai_foundry": "connected" if settings.azure_ai_foundry_endpoint else "configuration_required",
         "azure_openai": "configuration_required",
         "aws_bedrock": "configuration_required",
         "opa": "connected" if _opa_reachable() else "disconnected",

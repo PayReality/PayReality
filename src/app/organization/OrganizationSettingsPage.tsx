@@ -696,6 +696,7 @@ function IntegrationsTab() {
   }, []);
 
   const rows: Array<{ key: keyof IntegrationsStatus; label: string }> = [
+    { key: "azure_ai_foundry", label: "Azure AI Foundry" },
     { key: "anthropic", label: "Anthropic" },
     { key: "azure_openai", label: "Azure OpenAI" },
     { key: "aws_bedrock", label: "AWS Bedrock" },

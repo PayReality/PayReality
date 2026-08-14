@@ -28,6 +28,7 @@ class UpdateOrganizationSettingsRequest(BaseModel):
 
 class IntegrationsStatusResponse(BaseModel):
     anthropic: str
+    azure_ai_foundry: str
     azure_openai: str
     aws_bedrock: str
     opa: str

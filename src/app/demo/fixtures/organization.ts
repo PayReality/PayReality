@@ -58,6 +58,7 @@ export const demoOrganizationSettings: OrganizationSettings = {
 
 export const demoIntegrationsStatus: IntegrationsStatus = {
   anthropic: "connected",
+  azure_ai_foundry: "connected",
   azure_openai: "connected",
   aws_bedrock: "configuration_required",
   opa: "connected",
