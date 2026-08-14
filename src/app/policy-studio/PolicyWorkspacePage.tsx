@@ -79,6 +79,10 @@ export function PolicyWorkspacePage() {
   }, [isNew, policyKey]);
 
   async function handleSave() {
+    if (!form.scope.principal.trim() || !form.scope.action.trim()) {
+      setMessage("Who this applies to, and what action, are both required before a rule can be saved.");
+      return;
+    }
     setSaving(true);
     setMessage(null);
     const startedAt = Date.now();

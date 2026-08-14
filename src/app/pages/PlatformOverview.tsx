@@ -13,6 +13,7 @@ import {
 import { apiClient } from "../live/apiClient";
 import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
+import { describeApiError } from "../live/format";
 import type { LiveAgent, LivePolicy } from "../live/types";
 
 const WORKFLOW = [
@@ -62,6 +63,7 @@ export function PlatformOverview() {
   const [agentCount, setAgentCount] = useState<number | null>(null);
   const [activePolicy, setActivePolicy] = useState<LivePolicy | null>(null);
   const [reachable, setReachable] = useState<boolean | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -73,7 +75,15 @@ export function PlatformOverview() {
         setActivePolicy(policies.find((p) => p.status === "active") ?? null);
         setReachable(true);
       })
-      .catch(() => setReachable(false));
+      // Loading the overview's own status strip: a 401/403/400 here (an
+      // expired session, a missing permission, a stray Operator Key with
+      // no Organization Id) is a real, diagnosable cause, not a network
+      // outage -- describeApiError says which one instead of steering
+      // the very first thing a user sees toward the wrong fix.
+      .catch((e) => {
+        setReachable(false);
+        setLoadError(describeApiError(e, "Loading the overview"));
+      });
   }, []);
 
   return (
@@ -124,7 +134,7 @@ export function PlatformOverview() {
       <Card padding={20} borderColor="var(--pr-overlay-06)" className="mb-14 flex flex-wrap items-center gap-6">
         {reachable === false ? (
           <Alert severity="warning" icon={<ShieldCheck className="w-4 h-4" />}>
-            We couldn't reach the service. Please check your connection and try again.
+            {loadError}
           </Alert>
         ) : (
           <>

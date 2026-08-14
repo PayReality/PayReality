@@ -5,6 +5,7 @@ import { Card } from "../../components/ui/card";
 import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
+import { describeApiError } from "../format";
 import type { LivePolicy, LiveEvidence } from "../types";
 
 interface EvidencePayload {
@@ -39,7 +40,11 @@ export function LiveAssurance() {
         setEvidence(e);
         setLoaded(true);
       })
-      .catch(() => setError("We couldn't reach the service. Check your connection and try again."));
+      // A 401/403/400 here (an expired session, a missing permission, a
+      // stray Operator Key with no Organization Id) is a real,
+      // diagnosable cause, not a network outage; describeApiError says
+      // which one instead of steering the user toward the wrong fix.
+      .catch((e) => setError(describeApiError(e, "Loading Assurance")));
   }
 
   useEffect(load, []);
