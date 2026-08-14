@@ -23,9 +23,8 @@ container_apps_min_replicas           = 1
 # must consciously set this, no default exists.
 alert_notification_email = "payreality.ceo@gmail.com"
 
-# Milestone 6 (Production Blocker Resolution): redeployed again to fix
-# the Runtime Policy Simulator's multi-tenant crash and migrate AI
-# Policy Builder onto Azure AI Foundry; see
-# MILESTONE_6_PRODUCTION_BLOCKER_RESOLUTION_SUMMARY.md. Built and pushed
+# Redeployed to add Azure AI Foundry to the Integrations tab's real
+# status list (organization_service.get_integrations_status was
+# omitting the platform's actual, in-use AI provider). Built and pushed
 # via `az acr build`, tagged with the exact source commit as always.
-container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-54c4411"
+container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-6a33c58"
