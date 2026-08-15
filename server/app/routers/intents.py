@@ -4,14 +4,21 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Agent, EnterpriseSystem, Evidence, User
+from app.db.models import Agent, EnterpriseSystem, Evidence, Organization, Policy, User
 from app.db.session import get_db
-from app.dependencies import get_current_user_if_session, require_permission, verify_agent_signature
+from app.dependencies import (
+    get_current_organization,
+    get_current_user_if_session,
+    require_permission,
+    verify_agent_signature,
+)
 from app.domain.auth.signature import check_timestamp_window
 from app.domain.rbac.permissions import Permission
 from app.schemas.intent import (
+    DecisionPolicyBindingResponse,
     DecisionSummary,
     GetDecisionResponse,
+    PolicyManifestEntry,
     ResolutionSummary,
     ResolveDecisionRequest,
     ResolveDecisionResponse,
@@ -158,6 +165,54 @@ def get_decision(decision_id: UUID, db: Session = Depends(get_db)):
         policy_bundle_hash=evidence_payload.get("policy_bundle_hash"),
         authority_version=evidence_payload.get("authority_version"),
         resolution=resolution,
+    )
+
+
+@router.get(
+    "/decisions/{decision_id}/policy-binding",
+    response_model=DecisionPolicyBindingResponse,
+)
+def get_decision_policy_binding(
+    decision_id: UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    """Historical Policy Binding: answers 'exactly which policy state
+    evaluated this decision?' without ever reading whatever policy is
+    active today. Decision.policy_id already points to an immutable,
+    retired-not-deleted `policies` row (deploy_policy never mutates or
+    deletes one); this just surfaces it, plus the manifest of which
+    RuntimePolicyRecord versions were compiled into it, if the bundle
+    was deployed after Policy.bundle_manifest existed.
+
+    Org-scoped the same way runtime_policies.py's own read endpoints
+    are (compare against Policy.organization_id, 404 on mismatch --
+    never a 403 that would confirm the decision exists at all to a
+    caller from a different organization). GET /v1/decisions/{id}
+    itself has no such scoping (a separate, pre-existing, unrelated
+    fact, not something this endpoint changes); this one does, since
+    it's the one that can reveal another organization's actual policy
+    content."""
+    decision = intent_service.get_decision(db, decision_id)
+    if decision is None:
+        raise HTTPException(status_code=404, detail="decision_not_found")
+    if decision.policy_id is None:
+        raise HTTPException(status_code=404, detail="no_policy_bound")
+
+    policy = db.get(Policy, decision.policy_id)
+    if policy is None or policy.organization_id != organization.id:
+        raise HTTPException(status_code=404, detail="decision_not_found")
+
+    manifest = policy.bundle_manifest or {}
+    return DecisionPolicyBindingResponse(
+        decision_id=decision.id,
+        policy_id=policy.id,
+        bundle_hash=policy.bundle_hash,
+        bundle_version=policy.version,
+        compiled_at=policy.compiled_at,
+        activated_at=policy.activated_at,
+        retired_at=policy.retired_at,
+        policies=[PolicyManifestEntry(**p) for p in manifest.get("policies", [])],
     )
 
 

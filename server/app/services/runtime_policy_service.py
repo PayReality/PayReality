@@ -716,6 +716,11 @@ def deploy_policy(
         compiled_at=now,
         activated_at=now,
         organization_id=organization_id,
+        # Historical Policy Binding: the exact manifest already computed
+        # for this deploy (compile_bundle's own PolicyBundle.manifest) --
+        # nothing recomputed, nothing new derived, just no longer
+        # discarded once the Rego is pushed to OPA below.
+        bundle_manifest=result.bundle.manifest,
     )
     db.add(policy_row)
     # Flushed (not just added) so policy_row.id exists below: Mandate.

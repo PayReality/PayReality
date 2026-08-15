@@ -232,6 +232,14 @@ class Policy(Base):
     compiled_at: Mapped[datetime | None]
     activated_at: Mapped[datetime | None]
     retired_at: Mapped[datetime | None]
+    # Historical Policy Binding: the exact set of RuntimePolicyRecords
+    # (by id + version, each immutable) compiler_v2.compile_bundle
+    # already assembled into this bundle at deploy time
+    # (PolicyBundle.manifest) -- previously computed, then discarded.
+    # Null on every row created before this column existed; there is no
+    # way to backfill one for those, the in-memory manifest at their own
+    # deploy time is gone (see the migration's own docstring).
+    bundle_manifest: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("organizations.id")
     )

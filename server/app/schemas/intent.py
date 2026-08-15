@@ -101,3 +101,37 @@ class GetDecisionResponse(BaseModel):
     policy_bundle_hash: str | None = None
     authority_version: str | None = None
     resolution: ResolutionSummary | None = None
+
+
+class PolicyManifestEntry(BaseModel):
+    """One RuntimePolicy as it was actually compiled into this bundle,
+    read from Policy.bundle_manifest (Historical Policy Binding). `id`
+    is the policy_key (stable across that policy's own version
+    history); `version` pins exactly which of its immutable
+    RuntimePolicyRecord rows was included."""
+
+    id: str
+    name: str
+    version: int
+    effect: str
+    scope: dict[str, Any]
+
+
+class DecisionPolicyBindingResponse(BaseModel):
+    """Answers 'exactly which policy state evaluated this decision?'
+    without touching whatever policy happens to be active today.
+    Policy.id/bundle_hash/version/compiled_at/activated_at/retired_at
+    are the same immutable bundle row Decision.policy_id has always
+    pointed to; `policies` is that bundle's manifest, if it was deployed
+    after Policy.bundle_manifest existed. `policies` is empty (not an
+    error) for a bundle deployed before this column existed -- see the
+    migration's own docstring for why no backfill is possible."""
+
+    decision_id: UUID
+    policy_id: UUID
+    bundle_hash: str
+    bundle_version: int
+    compiled_at: datetime | None
+    activated_at: datetime | None
+    retired_at: datetime | None
+    policies: list[PolicyManifestEntry]
