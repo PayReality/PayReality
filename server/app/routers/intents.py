@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Agent, EnterpriseSystem, User
+from app.db.models import Agent, EnterpriseSystem, Evidence, User
 from app.db.session import get_db
 from app.dependencies import get_current_user_if_session, require_permission, verify_agent_signature
 from app.domain.auth.signature import check_timestamp_window
@@ -125,6 +125,21 @@ def get_decision(decision_id: UUID, db: Session = Depends(get_db)):
 
     status = "PENDING" if (decision.outcome == "HUMAN_REVIEW" and resolution is None) else "RESOLVED"
 
+    # Runtime Decision Center V2, Phase 2A: policy_version/policy_bundle_hash/
+    # authority_version are never persisted on Decision itself (see
+    # decision_engine.Decision's own docstring) -- this decision's own
+    # earliest Evidence record is where Phase 1 already pinned them, so
+    # they're read from there rather than recomputed. None of the three
+    # queries below are new persistence; they read what submit_intent
+    # already wrote.
+    earliest_evidence = (
+        db.query(Evidence)
+        .filter(Evidence.decision_id == decision.id)
+        .order_by(Evidence.created_at.asc(), Evidence.id.asc())
+        .first()
+    )
+    evidence_payload = earliest_evidence.payload if earliest_evidence is not None else {}
+
     return GetDecisionResponse(
         id=decision.id,
         status=status,
@@ -134,10 +149,14 @@ def get_decision(decision_id: UUID, db: Session = Depends(get_db)):
         action=intent.action,
         amount=float(intent.amount),
         currency=intent.currency,
+        created_at=decision.created_at,
         evaluated_mandates=decision.evaluated_mandates or [],
         evaluated_mandate_ids=decision.evaluated_mandate_ids or [],
         enterprise_system_id=decision.enterprise_system_id,
         enterprise_system_name=_enterprise_system_name(db, decision.enterprise_system_id),
+        policy_version=evidence_payload.get("policy_version"),
+        policy_bundle_hash=evidence_payload.get("policy_bundle_hash"),
+        authority_version=evidence_payload.get("authority_version"),
         resolution=resolution,
     )
 

@@ -48,10 +48,14 @@ function appendNextEvent() {
     action: spec.action,
     amount: spec.amount,
     currency: "USD",
+    created_at: now,
     evaluated_mandates: [spec.policyId],
     evaluated_mandate_ids: spec.mandateId ? [spec.mandateId] : [],
     enterprise_system_id: spec.enterpriseSystemId,
     enterprise_system_name: spec.enterpriseSystemName,
+    policy_version: null,
+    policy_bundle_hash: null,
+    authority_version: null,
     resolution: null,
   };
   demoDecisionCreatedAt[id] = now;

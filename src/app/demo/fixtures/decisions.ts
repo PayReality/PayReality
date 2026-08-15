@@ -180,10 +180,18 @@ export const demoDecisions: LiveDecision[] = allSeeds.map((s) => ({
   action: s.action,
   amount: s.amount,
   currency: s.currency,
+  created_at: agoMs(s.offsetMs),
   evaluated_mandates: s.evaluated_mandates,
   evaluated_mandate_ids: s.evaluated_mandate_ids,
   enterprise_system_id: s.enterprise_system_id,
   enterprise_system_name: s.enterprise_system_name,
+  // Not set in the demo fixtures (evidence.ts doesn't compute these
+  // either) -- null matches the real backend's own semantics for a
+  // decision with no matching Evidence-pinned policy version yet,
+  // rather than inventing demo values only on this side.
+  policy_version: null,
+  policy_bundle_hash: null,
+  authority_version: null,
   resolution: s.resolution,
 }));
 

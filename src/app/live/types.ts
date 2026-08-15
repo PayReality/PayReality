@@ -113,10 +113,18 @@ export interface LiveDecision {
   action: string;
   amount: number;
   currency: string;
+  created_at: string;
   evaluated_mandates: string[];
   evaluated_mandate_ids: string[];
   enterprise_system_id: string | null;
   enterprise_system_name: string | null;
+  // Runtime Decision Center V2, Phase 2A: read server-side off this
+  // decision's own earliest Evidence record (GetDecisionResponse never
+  // persists these on Decision itself). Null whenever no Evidence
+  // record exists yet or no active policy was ever evaluated.
+  policy_version: number | null;
+  policy_bundle_hash: string | null;
+  authority_version: string | null;
   resolution: LiveResolution | null;
 }
 

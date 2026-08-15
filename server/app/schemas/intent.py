@@ -69,7 +69,20 @@ class ResolveDecisionResponse(BaseModel):
 
 class GetDecisionResponse(BaseModel):
     """New (not in spec 19's literal API): the polling endpoint the
-    HUMAN_REVIEW-resolution addition needs (see plan)."""
+    HUMAN_REVIEW-resolution addition needs (see plan).
+
+    Runtime Decision Center V2, Phase 2A: `created_at` is a real,
+    previously-unexposed column already on the Decision row --
+    just added to the response. `policy_version`/`policy_bundle_hash`/
+    `authority_version` are not persisted on Decision at all (only ever
+    computed transiently in decision_engine.Decision, see that module's
+    own docstring); the router reads them off this decision's own
+    earliest Evidence record, the same real values Evidence has already
+    carried since Phase 1, rather than recomputing or inventing
+    anything. All three are None whenever no Evidence record exists yet
+    or no active policy was ever evaluated (a suspended/retired agent,
+    an unrecognized action) -- exactly Evidence's own existing
+    optionality, not a new failure mode."""
 
     id: UUID
     status: str  # "PENDING" | "RESOLVED"
@@ -79,8 +92,12 @@ class GetDecisionResponse(BaseModel):
     action: str
     amount: float
     currency: str
+    created_at: datetime
     evaluated_mandates: list[str]
     evaluated_mandate_ids: list[str] = []
     enterprise_system_id: UUID | None = None
     enterprise_system_name: str | None = None
+    policy_version: int | None = None
+    policy_bundle_hash: str | None = None
+    authority_version: str | None = None
     resolution: ResolutionSummary | None = None

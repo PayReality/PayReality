@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { CheckCircle2, Clock, Send, ShieldAlert, XCircle, ShieldOff } from "lucide-react";
 import { apiClient } from "../apiClient";
@@ -7,6 +7,7 @@ import { getAgentPrivateKey } from "../agentKeyStore";
 import { describeApiError, describeReason, formatStatus } from "../format";
 import { policyStudioApi } from "../../policy-studio/api";
 import { agentsApi } from "../../agents/api";
+import type { Certificate } from "../../agents/types";
 import { track, trackError } from "../../services/analytics";
 import { HelpIcon } from "../../help/HelpIcon";
 import { NextStepGuidance } from "../../help/NextStepGuidance";
@@ -48,7 +49,7 @@ interface Stage {
   key: string;
   label: string;
   state: StageState;
-  detail: string;
+  detail: ReactNode;
 }
 
 function StageRow({ stage, isLast }: { stage: Stage; isLast: boolean }) {
@@ -59,8 +60,9 @@ function StageRow({ stage, isLast }: { stage: Stage; isLast: boolean }) {
         <div
           className="rounded-full flex items-center justify-center text-[11px] font-bold"
           style={{ width: 22, height: 22, backgroundColor: style.bg, color: style.fg, border: `2px solid ${style.fg}` }}
+          aria-hidden="true"
         >
-          {stage.state === "done" ? "✓" : stage.state === "unavailable" ? "×" : ""}
+          {stage.state === "done" ? "✓" : ""}
         </div>
         {!isLast && <div style={{ width: 2, flex: 1, minHeight: 18, backgroundColor: "var(--pr-overlay-08)" }} />}
       </div>
@@ -86,7 +88,7 @@ function ContextRow({ label, value, muted }: { label: string; value: string; mut
       <span className="text-xs flex-shrink-0" style={{ color: "var(--pr-text-muted)" }}>{label}</span>
       <span
         className="text-xs font-medium text-right"
-        style={{ color: muted ? "var(--pr-text-disabled)" : "var(--pr-text-primary)", fontStyle: muted ? "italic" : "normal" }}
+        style={{ color: muted ? "var(--pr-text-disabled)" : "var(--pr-text-primary)" }}
       >
         {value}
       </span>
@@ -119,13 +121,36 @@ function EvidenceRecordCard({ evidence, label }: { evidence: LiveEvidence; label
     ["Policy version", p.policy_version !== undefined ? String(p.policy_version) : undefined],
     ["Policy bundle hash", p.policy_bundle_hash],
     ["Decision engine version", p.authority_version],
-    ["Previous record hash", p.previous_hash ?? "None (first record in this chain)"],
+    ["Prior record's hash", p.previous_hash ?? "None (first record in this chain)"],
     ["Matched policies", p.matched_mandate_ids.length > 0 ? p.matched_mandate_ids.join(", ") : "None"],
     ["Signature", `${evidence.signature.slice(0, 24)}...`],
   ];
   return (
     <div className="p-3 rounded-lg" style={{ backgroundColor: "var(--pr-overlay-03)", border: "1px solid var(--pr-overlay-05)" }}>
       <p className="text-xs font-semibold mb-2" style={{ color: "var(--pr-authority-blue)" }}>{label}</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
+        {fields.filter(([, v]) => v !== undefined).map(([k, v]) => (
+          <ContextRow key={k} label={k} value={v as string} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SignerCard({ certificate }: { certificate: Certificate }) {
+  const fields: Array<[string, string | undefined]> = [
+    ["Certificate ID", certificate.id],
+    ["Status", certificate.status],
+    ["Public key", `${certificate.public_key.slice(0, 24)}...`],
+    ["Issued at", new Date(certificate.issued_at).toLocaleString()],
+    ["Activated at", certificate.activated_at ? new Date(certificate.activated_at).toLocaleString() : undefined],
+    ["Rotated at", certificate.rotated_at ? new Date(certificate.rotated_at).toLocaleString() : undefined],
+    ["Expires at", certificate.expires_at ? new Date(certificate.expires_at).toLocaleString() : undefined],
+    ["Revoked at", certificate.revoked_at ? new Date(certificate.revoked_at).toLocaleString() : undefined],
+  ];
+  return (
+    <div className="p-3 rounded-lg" style={{ backgroundColor: "var(--pr-overlay-03)", border: "1px solid var(--pr-overlay-05)" }}>
+      <p className="text-xs font-semibold mb-2" style={{ color: "var(--pr-authority-blue)" }}>Signer</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
         {fields.filter(([, v]) => v !== undefined).map(([k, v]) => (
           <ContextRow key={k} label={k} value={v as string} />
@@ -163,6 +188,17 @@ export function LiveTestIntent() {
   const [evidenceRecords, setEvidenceRecords] = useState<LiveEvidence[]>([]);
   const [evidenceError, setEvidenceError] = useState<string | null>(null);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
+
+  // Runtime Decision Center V2, Phase 2A: the certificate that actually
+  // signed THIS submission's intent, not whatever the agent's current
+  // certificate happens to be (those can differ after a later
+  // rotation). Captured from the request itself, since no per-decision
+  // record of which certificate signed it is persisted anywhere
+  // (RUNTIME_DECISION_CENTER_HISTORICAL_POLICY_BINDING_ANALYSIS.md
+  // notes the same gap for policy bundles).
+  const [signingCertificate, setSigningCertificate] = useState<Certificate | null>(null);
+  const [certificateError, setCertificateError] = useState<string | null>(null);
+  const [certificateLoading, setCertificateLoading] = useState(false);
 
   function loadAgents() {
     setAgentsError(null);
@@ -263,6 +299,8 @@ export function LiveTestIntent() {
     setPollTimedOut(false);
     setEvidenceRecords([]);
     setEvidenceError(null);
+    setSigningCertificate(null);
+    setCertificateError(null);
     setSubmitting(true);
     if (pollRef.current) window.clearInterval(pollRef.current);
 
@@ -273,6 +311,7 @@ export function LiveTestIntent() {
       setSubmitting(false);
       return;
     }
+    const signingCertificateId = agent.certificate_id;
 
     const body = {
       agent_id: agentId,
@@ -318,6 +357,13 @@ export function LiveTestIntent() {
     // outcome (server/app/services/intent_service.py), so it's fetched
     // here immediately rather than waiting for the decision to resolve.
     loadEvidence(submitted.decision.decision_id);
+
+    setCertificateLoading(true);
+    agentsApi
+      .listCertificates(agentId)
+      .then((certs) => setSigningCertificate(certs.find((c) => c.id === signingCertificateId) ?? null))
+      .catch((e) => setCertificateError(describeApiError(e, "Loading the signing certificate")))
+      .finally(() => setCertificateLoading(false));
 
     try {
       const latest = await apiClient.get<LiveDecision>(`/v1/decisions/${submitted.decision.decision_id}`);
@@ -425,7 +471,7 @@ export function LiveTestIntent() {
       label: "Risk classified",
       state: evidenceLoading ? "pending" : evidenceError ? "unavailable" : originalEvidence ? "done" : "unavailable",
       detail: evidenceLoading
-        ? "Loading..."
+        ? <Skeleton height={10} width={90} />
         : evidenceError
           ? evidenceError
           : originalEvidence
@@ -457,7 +503,7 @@ export function LiveTestIntent() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
         {/* LEFT: Business Context */}
         <div className="flex flex-col gap-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--pr-text-disabled)" }}>
+          <p className="text-xs font-mono uppercase tracking-widest" style={{ color: "var(--pr-text-disabled)" }}>
             Business context
           </p>
           <Card padding={20} data-tour="intent-form">
@@ -543,35 +589,40 @@ export function LiveTestIntent() {
             {error && <Alert severity="error" className="text-sm mt-4">{error}</Alert>}
           </Card>
 
-          {contextAgent && (
-            <Card padding={20}>
-              <p className="text-xs font-semibold mb-2" style={{ color: "var(--pr-text-secondary)" }}>Acting identity</p>
-              <ContextRow label="Agent" value={contextAgent.name} />
-              <ContextRow
-                label="Principal"
-                value={principalName ?? (principalContextLoading ? "Loading..." : "Not resolved")}
-                muted={!principalName && !principalContextLoading}
-              />
-              {principalContextLoading && <Skeleton height={12} width="70%" style={{ marginTop: 8 }} />}
-              {principalContextError && (
-                <p className="text-xs mt-2" style={{ color: "var(--pr-warning-amber)" }}>{principalContextError}</p>
-              )}
-              {authorityCtx && !principalContextLoading && (
-                <>
-                  <ContextRow label="Role" value={authorityCtx.role ?? "Not set"} muted={!authorityCtx.role} />
-                  <ContextRow label="Team" value={authorityCtx.team ?? "Not set"} muted={!authorityCtx.team} />
-                  <ContextRow label="Department" value={authorityCtx.department ?? "Not set"} muted={!authorityCtx.department} />
-                  <ContextRow label="Business unit" value={authorityCtx.business_unit ?? "Not set"} muted={!authorityCtx.business_unit} />
-                  <ContextRow label="Organization" value={authorityCtx.organization ?? "Not set"} muted={!authorityCtx.organization} />
-                </>
-              )}
-            </Card>
-          )}
+          <Card padding={20}>
+            <p className="text-xs font-semibold mb-2" style={{ color: "var(--pr-text-secondary)" }}>Acting identity</p>
+            {!contextAgent && (
+              <p className="text-xs" style={{ color: "var(--pr-text-muted)" }}>Select an agent to see its identity and authority context.</p>
+            )}
+            {contextAgent && (
+              <>
+                <ContextRow label="Agent" value={contextAgent.name} />
+                <ContextRow
+                  label="Principal"
+                  value={principalName ?? (principalContextLoading ? "Loading..." : "Not resolved")}
+                  muted={!principalName && !principalContextLoading}
+                />
+                {principalContextLoading && <Skeleton height={12} width="70%" style={{ marginTop: 8 }} />}
+                {principalContextError && (
+                  <p className="text-xs mt-2" style={{ color: "var(--pr-warning-amber)" }}>{principalContextError}</p>
+                )}
+                {authorityCtx && !principalContextLoading && (
+                  <>
+                    <ContextRow label="Role" value={authorityCtx.role ?? "Not set"} muted={!authorityCtx.role} />
+                    <ContextRow label="Team" value={authorityCtx.team ?? "Not set"} muted={!authorityCtx.team} />
+                    <ContextRow label="Department" value={authorityCtx.department ?? "Not set"} muted={!authorityCtx.department} />
+                    <ContextRow label="Business unit" value={authorityCtx.business_unit ?? "Not set"} muted={!authorityCtx.business_unit} />
+                    <ContextRow label="Organization" value={authorityCtx.organization ?? "Not set"} muted={!authorityCtx.organization} />
+                  </>
+                )}
+              </>
+            )}
+          </Card>
         </div>
 
         {/* CENTER: Runtime Authority pipeline */}
         <div className="flex flex-col gap-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--pr-text-disabled)" }}>
+          <p className="text-xs font-mono uppercase tracking-widest" style={{ color: "var(--pr-text-disabled)" }}>
             Runtime authority
           </p>
           <Card padding={20} className="flex-1">
@@ -621,7 +672,7 @@ export function LiveTestIntent() {
 
         {/* RIGHT: Decision */}
         <div className="flex flex-col gap-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--pr-text-disabled)" }}>
+          <p className="text-xs font-mono uppercase tracking-widest" style={{ color: "var(--pr-text-disabled)" }}>
             Decision
           </p>
           <Card padding={20} className="flex-1" role="status" aria-live="polite" data-tour="decision-outcome">
@@ -667,17 +718,27 @@ export function LiveTestIntent() {
                   {decision.enterprise_system_name && (
                     <ContextRow label="Enterprise system" value={decision.enterprise_system_name} />
                   )}
-                  <ContextRow
-                    label="Risk classification"
-                    value={
-                      evidenceLoading
-                        ? "Loading..."
-                        : originalEvidence
-                          ? formatStatus(originalEvidence.payload.risk_classification)
-                          : "Not available"
-                    }
-                    muted={!evidenceLoading && !originalEvidence}
-                  />
+                  {evidenceLoading ? (
+                    <div className="flex items-center justify-between gap-3 py-1.5">
+                      <span className="text-xs flex-shrink-0" style={{ color: "var(--pr-text-muted)" }}>Risk classification</span>
+                      <Skeleton height={10} width={70} />
+                    </div>
+                  ) : (
+                    <ContextRow
+                      label="Risk classification"
+                      value={originalEvidence ? formatStatus(originalEvidence.payload.risk_classification) : "Not available"}
+                      muted={!originalEvidence}
+                    />
+                  )}
+                  {decision.policy_version !== null && (
+                    <ContextRow label="Policy version" value={String(decision.policy_version)} />
+                  )}
+                  {decision.policy_bundle_hash && (
+                    <ContextRow label="Policy bundle hash" value={decision.policy_bundle_hash} />
+                  )}
+                  {decision.authority_version && (
+                    <ContextRow label="Decision engine version" value={decision.authority_version} />
+                  )}
                   <ContextRow label="Evidence recorded" value={result ? "Yes" : "No"} />
                 </div>
 
@@ -804,7 +865,12 @@ export function LiveTestIntent() {
             {!evidenceLoading && !evidenceError && evidenceRecords.length === 0 && (
               <p className="text-sm" style={{ color: "var(--pr-text-muted)" }}>No evidence record loaded yet.</p>
             )}
+            {certificateLoading && <Skeleton height={14} width="30%" style={{ marginBottom: 12 }} />}
+            {certificateError && (
+              <Alert severity="warning" className="text-sm mb-3">{certificateError}</Alert>
+            )}
             <div className="flex flex-col gap-3">
+              {signingCertificate && <SignerCard certificate={signingCertificate} />}
               {originalEvidence && <EvidenceRecordCard evidence={originalEvidence} label="Recorded at submission" />}
               {resolutionEvidence && <EvidenceRecordCard evidence={resolutionEvidence} label="Recorded at resolution" />}
             </div>
@@ -830,13 +896,21 @@ export function LiveTestIntent() {
                   <span className="text-sm" style={{ color: "var(--pr-text-primary)" }}>Request sent (this browser)</span>
                 </div>
               )}
+              <div className="flex gap-3 py-3" style={{ borderBottom: "1px solid var(--pr-overlay-05)" }}>
+                <span className="text-xs font-mono flex-shrink-0" style={{ color: "var(--pr-text-disabled)", width: 90 }}>
+                  {new Date(decision.created_at).toLocaleTimeString()}
+                </span>
+                <span className="text-sm" style={{ color: "var(--pr-text-primary)" }}>
+                  Decision recorded: {formatStatus(decision.outcome)}
+                </span>
+              </div>
               {originalEvidence && (
                 <div className="flex gap-3 py-3" style={{ borderBottom: "1px solid var(--pr-overlay-05)" }}>
                   <span className="text-xs font-mono flex-shrink-0" style={{ color: "var(--pr-text-disabled)", width: 90 }}>
                     {new Date(originalEvidence.created_at).toLocaleTimeString()}
                   </span>
                   <span className="text-sm" style={{ color: "var(--pr-text-primary)" }}>
-                    Evidence recorded: {formatStatus(decision.outcome)}
+                    Evidence recorded
                   </span>
                 </div>
               )}
@@ -849,9 +923,6 @@ export function LiveTestIntent() {
                     Resolved {decision.resolution.resolution} by {decision.resolution.resolved_by}
                   </span>
                 </div>
-              )}
-              {!requestSentAt && !originalEvidence && (
-                <p className="text-sm" style={{ color: "var(--pr-text-muted)" }}>No timeline events yet.</p>
               )}
             </div>
           </Card>
