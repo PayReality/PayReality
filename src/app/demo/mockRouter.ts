@@ -258,9 +258,11 @@ on("GET", "/v1/policies", () =>
 // ---------------------------------------------------------------------
 // Evidence + Decisions + Intents (Live pages)
 // ---------------------------------------------------------------------
-on("GET", "/v1/evidence", () => {
+on("GET", "/v1/evidence", ({ query }) => {
   ensureLiveFeedStarted();
-  return getLiveEvidence();
+  const decisionId = query.get("decision_id");
+  const records = getLiveEvidence();
+  return decisionId ? records.filter((e) => e.decision_id === decisionId) : records;
 });
 on("POST", "/v1/evidence/:id/verify", () => ({ valid: true }));
 on("GET", "/v1/decisions/:id", ({ params }) => findLiveDecision(params.id) ?? notFound("decision"));

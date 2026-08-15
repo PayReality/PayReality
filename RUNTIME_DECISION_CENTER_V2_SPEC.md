@@ -88,9 +88,17 @@ Each panel is a self-contained component with its own loading/empty/error bounda
 
 **Phase 1, reskin with real data (no backend changes):** three-column layout, pipeline visualization driven by the existing decision result, Business Context cards from existing Agent/Decision fields, Decision panel populated from fields `GetDecisionResponse` already returns, Policy Evaluation panel listing `evaluated_mandate_ids` (real, flat list, no per-condition detail yet), Authority Chain shown honestly as one hop, Evidence panel, Timeline from existing timestamps.
 
-**Phase 2, small scoped backend additions:** expose `policy_version`/`policy_bundle_hash` (already computed in `decision/engine.py`, already written to Evidence) directly on `GetDecisionResponse` so the Decision panel doesn't need a second fetch; run the existing Simulator explainer (`policy_simulation/explainer.py`) against a resolved decision's stored context to populate real per-condition breakdown and the Explanation panel with genuine reasoning instead of a static example.
+**Phase 2, small scoped backend additions:** expose `policy_version`/`policy_bundle_hash`/`authority_version` directly on `GetDecisionResponse` so the Decision panel doesn't need a second fetch just to show them before Evidence loads (Phase 1 correction below found these are already real on Evidence, just not on the decision poll response itself); run the existing Simulator explainer (`policy_simulation/explainer.py`) against a resolved decision's stored context to populate real per-condition breakdown and a genuine Decision Explanation panel instead of omitting it.
 
-**Phase 3, genuinely new capability, only once a real need exists:** Enterprise Knowledge connectors (per `ENTERPRISE_KNOWLEDGE_ARCHITECTURE.md`'s own explicit deferral), multi-hop authority chain resolution (already named in that architecture doc as a Phase 4 concept), a live intermediate-state stream so the pipeline reflects real stage-by-stage backend progress rather than replaying a known result.
+**Phase 3, genuinely new capability, only once a real need exists:** Enterprise Knowledge connectors (per `ENTERPRISE_KNOWLEDGE_ARCHITECTURE.md`'s own explicit deferral), multi-hop authority chain resolution (already named in that architecture doc as a Phase 4 concept), a live intermediate-state stream so the pipeline reflects real stage-by-stage backend progress rather than a single atomic round trip.
+
+## 6a. Phase 1 implementation corrections
+
+Found while building the real page, not assumed beforehand:
+
+- **`EvidencePayload`'s frontend type was incomplete, not the backend.** `authority_version`, `policy_version`, `policy_bundle_hash`, `principal_name`, `resolved_by`, `responsible_party`, `reviewer`, `review_outcome` are all real keys `intent_service._build_evidence_payload` already writes into the live JSON response; the frontend's TypeScript interface simply never declared them. These are now declared and rendered from Evidence directly, no backend change needed for this part of what Phase 2 above assumed would require one.
+- **Resolving a HUMAN_REVIEW decision creates a second, separate Evidence record**, not an update to the first (`resolution_service.resolve_decision` calls `append_evidence` again, chained via `previous_hash`). The Decision Center fetches `GET /v1/evidence?decision_id=X` (the real, already-existing filter parameter) rather than a single evidence_id, so both records show up once a decision is resolved, oldest first.
+- **`GetDecisionResponse` (the poll endpoint) has no timestamp field of any kind on the decision itself.** The only genuinely real timestamps available are each Evidence record's `created_at` and, once resolved, `resolution.created_at`. The Timeline section is built from exactly those, plus a client-observed "request sent" time labeled as such (not asserted as a server timestamp).
 
 ## 7. Fields the brief requested that don't exist today
 

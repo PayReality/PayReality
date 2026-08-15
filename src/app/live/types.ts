@@ -174,10 +174,30 @@ export interface EvidencePayload {
   recorded_at: string;
   previous_hash: string | null;
   principal_id?: string;
+  // Runtime Governance Architecture, Phase 4: the resolved principal name
+  // pinned at evaluation time (server/app/services/intent_service.py's
+  // _build_evidence_payload) -- already written by the backend today,
+  // just not previously declared on this frontend type.
+  principal_name?: string;
   authority_context?: AuthorityContext;
   delegation_chain?: DelegationEdge[];
   evaluated_mandate_ids?: string[];
   authority_ids?: string[];
+  // Runtime Governance Architecture, Phase 1: version-pins this record's
+  // Decision Evidence to the exact engine/policy state it was evaluated
+  // against. Present whenever a matched active policy existed at
+  // evaluation time; already real and written by the backend, just not
+  // previously declared here.
+  authority_version?: string;
+  policy_version?: number;
+  policy_bundle_hash?: string;
+  // Written only by resolution_service.resolve_decision, on the second,
+  // separate Evidence record a HUMAN_REVIEW resolution appends -- absent
+  // on every record created at submission time.
+  resolved_by?: string;
+  responsible_party?: string;
+  reviewer?: string;
+  review_outcome?: string;
   // Phase 5, Release 2 (Enterprise System binding): present only when
   // resolve_enterprise_system found a matched policy configured with,
   // and still referencing, a real EnterpriseSystem row.
