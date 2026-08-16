@@ -23,8 +23,10 @@ container_apps_min_replicas           = 1
 # must consciously set this, no default exists.
 alert_notification_email = "payreality.ceo@gmail.com"
 
-# Redeployed for Phase 2B (live per-condition Runtime Policy
-# explainability): adds GET /v1/decisions/{id}/explanation. No new
-# migration this round (no schema change). Built and pushed via
+# Redeployed for Milestone 11 (Security Boundary Completion). This
+# also carries Milestone 10's decision-security fixes live for the
+# first time -- no deployment credentials were available in that
+# session, so this is the first deploy since Phase 2B (prod-5041fbc).
+# No new migration this round (no schema change). Built and pushed via
 # `az acr build`, tagged with the exact source commit as always.
-container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-5041fbc"
+container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-11f4d3e"
