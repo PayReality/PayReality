@@ -4,7 +4,14 @@ import { CheckCircle2, Clock, Send, ShieldAlert, XCircle, ShieldOff } from "luci
 import { apiClient } from "../apiClient";
 import { signBody } from "../crypto";
 import { getAgentPrivateKey } from "../agentKeyStore";
-import { describeApiError, describeExplanationUnavailable, describeReason, formatStatus } from "../format";
+import {
+  describeApiError,
+  describeConditionBusiness,
+  describeConditionTechnical,
+  describeExplanationUnavailable,
+  describeReason,
+  formatStatus,
+} from "../format";
 import { policyStudioApi } from "../../policy-studio/api";
 import { agentsApi } from "../../agents/api";
 import type { Certificate } from "../../agents/types";
@@ -145,20 +152,28 @@ function EvidenceRecordCard({ evidence, label }: { evidence: LiveEvidence; label
 // a live re-evaluation. `expected_value`/`actual_value` are rendered
 // with String() since they can be a number, string, or bool depending
 // on the condition's own field.
+// Milestone 10: two layers, per the audit's own finding that expanded
+// condition detail was technical notation only. The business sentence
+// (describeConditionBusiness) is primary; the exact symbolic notation
+// (describeConditionTechnical) stays available right below it, smaller
+// and explicitly labeled -- evidence for an auditor, not removed, just
+// no longer the only thing an operator sees.
 function ConditionRow({ condition }: { condition: ConditionEvaluation }) {
   return (
-    <div className="flex items-start gap-2 py-1 text-xs">
+    <div className="flex items-start gap-2 py-1.5">
       <span
-        className="flex-shrink-0 font-bold"
+        className="flex-shrink-0 font-bold text-xs mt-0.5"
         style={{ color: condition.passed ? "var(--pr-trust-green)" : "var(--pr-critical-red)" }}
         aria-hidden="true"
       >
         {condition.passed ? "✓" : "✗"}
       </span>
-      <span className="font-mono" style={{ color: "var(--pr-text-primary)" }}>
-        {condition.field} {condition.operator} {String(condition.expected_value)}
-      </span>
-      <span style={{ color: "var(--pr-text-disabled)" }}>(actual: {String(condition.actual_value)})</span>
+      <div className="min-w-0">
+        <p className="text-xs" style={{ color: "var(--pr-text-primary)" }}>{describeConditionBusiness(condition)}</p>
+        <p className="text-[11px] font-mono mt-0.5" style={{ color: "var(--pr-text-disabled)" }}>
+          Technical detail: {describeConditionTechnical(condition)}
+        </p>
+      </div>
     </div>
   );
 }
@@ -198,6 +213,13 @@ function RuleEvaluationCard({ rule, isCausal }: { rule: RuleEvaluation; isCausal
           Scoped to a different principal or action -- not evaluated against this request.
         </p>
       )}
+      {/* Milestone 10: the raw policy identifier lives here now -- inside
+         expandable technical detail, not the collapsed pipeline stage or
+         the primary "why" text above (PHASE_2B_PRODUCTION_AND_PRODUCT_READINESS_AUDIT.md
+         section 9's finding). */}
+      <p className="text-[11px] font-mono mt-2 pt-2" style={{ color: "var(--pr-text-disabled)", borderTop: "1px solid var(--pr-overlay-05)" }}>
+        Policy ID: {rule.policy_id}
+      </p>
     </div>
   );
 }
@@ -562,11 +584,20 @@ export function LiveTestIntent() {
     });
     stages.push({
       key: "policies",
-      label: "Runtime policies evaluated",
+      // Milestone 10: renamed from "Runtime policies evaluated" -- the
+      // explanation card below used the identical label
+      // (PHASE_2B_PRODUCTION_AND_PRODUCT_READINESS_AUDIT.md section 9),
+      // and this stage's own detail text used to list raw policy UUIDs
+      // (evaluated_mandates) directly, an operator's only "why" signal
+      // in the collapsed view. Neither a policy name nor a version
+      // exists on GetDecisionResponse to show instead (checked, not
+      // assumed), so this stays an honest count; the named policy and
+      // its full breakdown live in "Why this decision was made" below.
+      label: "Policy evaluation",
       state: decision.evaluated_mandates.length > 0 ? "done" : "unavailable",
       detail:
         decision.evaluated_mandates.length > 0
-          ? `${decision.evaluated_mandates.length} polic${decision.evaluated_mandates.length === 1 ? "y" : "ies"} evaluated: ${decision.evaluated_mandates.join(", ")}`
+          ? `${decision.evaluated_mandates.length} polic${decision.evaluated_mandates.length === 1 ? "y" : "ies"} evaluated. See "Why this decision was made" below for detail.`
           : describeReason(decision.reason) ?? "No policy matched this request.",
     });
     stages.push({
@@ -931,11 +962,20 @@ export function LiveTestIntent() {
             )}
           </Card>
 
-          {/* Phase 2B (PHASE_2B_LIVE_PER_CONDITION_EXPLAINABILITY_SUMMARY.md):
-             the flat matched-policy list stays visible by default (cheap,
-             already-loaded); the per-condition breakdown is a real,
-             separate reconstruction (GET /v1/decisions/{id}/explanation)
-             fetched only once expanded, never on every decision. */}
+          {/* Milestone 10 (MILESTONE_10_DECISION_SECURITY_AND_CLARITY_SUMMARY.md):
+             renamed from "Runtime policies evaluated" -- the pipeline
+             stage above used the identical label
+             (PHASE_2B_PRODUCTION_AND_PRODUCT_READINESS_AUDIT.md section
+             9). This card answers "why," not just "which policies ran,"
+             so it's named for that. The collapsed state now shows a
+             plain count, never the raw policy UUIDs
+             (evaluated_mandates) directly -- those move to expandable
+             technical detail (RuleEvaluationCard's own "Policy ID"
+             line) once expanded, per the audit's own finding that a raw
+             UUID was an operator's only "why" signal before. The
+             per-condition breakdown itself is a real, separate
+             reconstruction (GET /v1/decisions/{id}/explanation) fetched
+             only once expanded, never on every decision (Phase 2B). */}
           <Card padding={20}>
             <button
               onClick={handleToggleExplanation}
@@ -944,7 +984,7 @@ export function LiveTestIntent() {
               data-tour="policy-evaluation"
             >
               <div>
-                <p className="text-sm font-semibold" style={{ color: "var(--pr-text-primary)" }}>Runtime policies evaluated</p>
+                <p className="text-sm font-semibold" style={{ color: "var(--pr-text-primary)" }}>Why this decision was made</p>
                 <p className="text-xs mt-0.5" style={{ color: "var(--pr-text-muted)" }}>
                   {decision.evaluated_mandates.length === 0
                     ? (describeReason(decision.reason) ?? "No policy matched.")
@@ -952,16 +992,9 @@ export function LiveTestIntent() {
                 </p>
               </div>
               <span className="text-xs font-medium flex-shrink-0" style={{ color: "var(--pr-authority-blue)" }}>
-                {explanationExpanded ? "Hide policy evaluation" : "Show policy evaluation"}
+                {explanationExpanded ? "Hide explanation" : "Show explanation"}
               </span>
             </button>
-
-            {!explanationExpanded &&
-              decision.evaluated_mandates.map((key) => (
-                <div key={key} className="py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
-                  <span className="font-mono" style={{ color: "var(--pr-text-primary)" }}>{key}</span>
-                </div>
-              ))}
 
             {explanationExpanded && (
               <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--pr-overlay-05)" }}>

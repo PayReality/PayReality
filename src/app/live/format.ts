@@ -106,3 +106,77 @@ export function describeExplanationUnavailable(reason: string | null | undefined
   if (!reason) return "Condition-level detail isn't available for this decision.";
   return EXPLANATION_UNAVAILABLE_SENTENCE[reason] ?? formatStatus(reason);
 }
+
+// Milestone 10 (MILESTONE_10_DECISION_SECURITY_AND_CLARITY_SUMMARY.md):
+// a small, deterministic business-language layer for per-condition
+// explanations (PHASE_2B_PRODUCTION_AND_PRODUCT_READINESS_AUDIT.md
+// section 10 found none existed). No LLM, no semantic guessing: only
+// `amount`, the one field this platform's own vocabulary is confident
+// about, gets a fully-worded sentence; every Operator gets a phrase,
+// since Operator is a small, closed, unambiguous set
+// (domain/runtime_policy/conditions.py's Operator enum), not
+// open-ended text safe or unsafe to translate. An unrecognized field
+// keeps its raw name verbatim rather than an invented label -- "if a
+// condition cannot safely be translated, keep it honest," not silently
+// papered over.
+const CONDITION_FIELD_LABELS: Record<string, string> = {
+  amount: "Payment amount",
+};
+
+const OPERATOR_PHRASES: Record<string, string> = {
+  "<=": "at or below",
+  ">=": "at or above",
+  "<": "below",
+  ">": "above",
+  "==": "equal to",
+  "!=": "not equal to",
+  in: "one of",
+  contains: "includes",
+  exists: "present",
+};
+
+function formatConditionValue(field: string, value: unknown): string {
+  if (typeof value === "number") {
+    const formatted = value.toLocaleString("en-US");
+    return field === "amount" ? `$${formatted}` : formatted;
+  }
+  return String(value);
+}
+
+interface ConditionLike {
+  field: string;
+  operator: string;
+  expected_value: unknown;
+  actual_value: unknown;
+  passed: boolean;
+}
+
+// The primary, operator-facing line. Deterministically derived from the
+// same field/operator/expected/actual values the technical line below
+// also shows -- never a different, invented claim about what the
+// condition means.
+export function describeConditionBusiness(condition: ConditionLike): string {
+  const fieldLabel = CONDITION_FIELD_LABELS[condition.field] ?? condition.field;
+  const expected = formatConditionValue(condition.field, condition.expected_value);
+  const actual = formatConditionValue(condition.field, condition.actual_value);
+
+  if (condition.field === "amount" && (condition.operator === "<=" || condition.operator === "<")) {
+    return condition.passed
+      ? `${fieldLabel} (${actual}) is within the allowed limit of ${expected}.`
+      : `${fieldLabel} (${actual}) exceeds the allowed limit of ${expected}.`;
+  }
+  if (condition.field === "amount" && (condition.operator === ">=" || condition.operator === ">")) {
+    return condition.passed
+      ? `${fieldLabel} (${actual}) meets the required minimum of ${expected}.`
+      : `${fieldLabel} (${actual}) is below the required minimum of ${expected}.`;
+  }
+  const operatorPhrase = OPERATOR_PHRASES[condition.operator] ?? condition.operator;
+  return `${fieldLabel} was ${operatorPhrase} ${expected} (actual: ${actual}) -- ${condition.passed ? "matched" : "did not match"}.`;
+}
+
+// The secondary, auditor/engineer-facing line -- the exact symbolic
+// notation, preserved verbatim (never removed, only de-emphasized and
+// labeled), so nothing the business line summarizes is ever lost.
+export function describeConditionTechnical(condition: ConditionLike): string {
+  return `${condition.field} ${condition.operator} ${String(condition.expected_value)} (actual: ${String(condition.actual_value)})`;
+}

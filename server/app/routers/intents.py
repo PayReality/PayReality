@@ -110,12 +110,35 @@ def submit_intent(
     )
 
 
-@router.get("/decisions/{decision_id}", response_model=GetDecisionResponse)
-def get_decision(decision_id: UUID, db: Session = Depends(get_db)):
+@router.get(
+    "/decisions/{decision_id}",
+    response_model=GetDecisionResponse,
+    dependencies=[Depends(require_permission(Permission.DECISIONS_VIEW))],
+)
+def get_decision(
+    decision_id: UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     """New (not in spec 19's literal API): the poll endpoint a caller uses
-    until a HUMAN_REVIEW decision is resolved (see plan's addition)."""
-    decision = intent_service.get_decision(db, decision_id)
-    if decision is None:
+    until a HUMAN_REVIEW decision is resolved (see plan's addition).
+
+    Milestone 10 (MILESTONE_10_DECISION_SECURITY_AND_CLARITY_SUMMARY.md):
+    this endpoint previously had no authentication or organization
+    scoping at all -- a real, live-confirmed security defect
+    (PHASE_2B_PRODUCTION_AND_PRODUCT_READINESS_AUDIT.md section 7.2).
+    Gated with Permission.DECISIONS_VIEW, an existing RBAC permission
+    defined since Phase 10 but never enforced anywhere until now --
+    reusing it rather than inventing a new one. Org-scoped with the same
+    discipline get_decision_policy_binding already established: a
+    decision belonging to a different organization returns the same 404
+    as a decision that doesn't exist at all, so cross-org access can
+    never be distinguished from nonexistence."""
+    try:
+        decision = intent_service.get_decision_for_organization(db, decision_id, organization.id)
+    except intent_service.DecisionNotFoundError:
+        raise HTTPException(status_code=404, detail="decision_not_found")
+    except intent_service.CrossOrganizationAccessError:
         raise HTTPException(status_code=404, detail="decision_not_found")
 
     from app.db.models import DecisionResolution, Intent
@@ -173,6 +196,7 @@ def get_decision(decision_id: UUID, db: Session = Depends(get_db)):
 @router.get(
     "/decisions/{decision_id}/policy-binding",
     response_model=DecisionPolicyBindingResponse,
+    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
 )
 def get_decision_policy_binding(
     decision_id: UUID,
@@ -191,10 +215,20 @@ def get_decision_policy_binding(
     are (compare against Policy.organization_id, 404 on mismatch --
     never a 403 that would confirm the decision exists at all to a
     caller from a different organization). GET /v1/decisions/{id}
-    itself has no such scoping (a separate, pre-existing, unrelated
-    fact, not something this endpoint changes); this one does, since
-    it's the one that can reveal another organization's actual policy
-    content."""
+    itself now has the same org-scoping (Milestone 10, see that
+    endpoint's own docstring for why it didn't before).
+
+    Milestone 10 (MILESTONE_10_DECISION_SECURITY_AND_CLARITY_SUMMARY.md):
+    now gated by the same Permission.RUNTIME_POLICY_VIEW
+    get_decision_explanation already required
+    (PHASE_2B_PRODUCTION_AND_PRODUCT_READINESS_AUDIT.md section 7.1).
+    Previously this endpoint required authentication but no specific
+    permission, letting a REVIEWER-role user (who lacks
+    RUNTIME_POLICY_VIEW) see the same policy manifest content
+    /explanation correctly denied them -- an unintended asymmetry
+    between two closely related read-only endpoints, not a considered
+    design choice (no evidence of intent was found in RBAC.md or
+    anywhere else)."""
     decision = intent_service.get_decision(db, decision_id)
     if decision is None:
         raise HTTPException(status_code=404, detail="decision_not_found")

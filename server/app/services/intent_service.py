@@ -50,6 +50,19 @@ class ReplayDetectedError(Exception):
     """spec 21.2: the (agent_id, nonce) pair has already been used."""
 
 
+class DecisionNotFoundError(Exception):
+    pass
+
+
+class CrossOrganizationAccessError(Exception):
+    """Raised when a decision belongs to a different organization than
+    the caller's. Routers turn this into the same 404 as
+    DecisionNotFoundError, never a 403 -- matching
+    decision_explanation_service.CrossOrganizationAccessError's own
+    discipline: a cross-org caller can't distinguish "wrong
+    organization" from "doesn't exist."""
+
+
 class _DbPolicyStore:
     """Adapts the `policies` table to decision_engine.PolicyStore.
 
@@ -567,6 +580,36 @@ def submit_intent(
 
 def get_decision(db: Session, decision_id: uuid.UUID) -> Decision | None:
     return db.get(Decision, decision_id)
+
+
+def get_decision_for_organization(
+    db: Session, decision_id: uuid.UUID, organization_id: uuid.UUID | None
+) -> Decision:
+    """Milestone 10 (MILESTONE_10_DECISION_SECURITY_AND_CLARITY_SUMMARY.md):
+    the org-scoped, independently-testable core of
+    GET /v1/decisions/{id}'s authorization boundary, factored out of the
+    router (rather than left inline there) so the actual authorization
+    path -- not just the route -- can be exercised directly, the same
+    way decision_explanation_service.get_decision_explanation's
+    tenant-isolation already is.
+
+    Resolves the decision's owning organization via
+    _resolve_chain_scope (Agent -> Principal -> organization_id), the
+    same path Runtime Authority Context and the Evidence chain already
+    use -- not a new resolution mechanism. organization_id=None is a
+    real, valid scope some legacy Principals still have (see
+    _resolve_chain_scope's own docstring); a caller authenticated for a
+    real organization never matches that, so those decisions are simply
+    unreachable via this path, never leaked to whichever organization
+    happens to ask first."""
+    decision = get_decision(db, decision_id)
+    if decision is None:
+        raise DecisionNotFoundError(str(decision_id))
+    intent = db.get(Intent, decision.intent_id)
+    decision_organization_id = _resolve_chain_scope(db, intent.agent_id)
+    if decision_organization_id != organization_id:
+        raise CrossOrganizationAccessError(str(decision_id))
+    return decision
 
 
 def list_decisions_for_agent(db: Session, agent_id: uuid.UUID, limit: int = 20) -> list[Decision]:

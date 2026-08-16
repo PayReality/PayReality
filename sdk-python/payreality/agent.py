@@ -353,8 +353,18 @@ class Agent:
 
     def get_decision(self, decision_id: str) -> Decision:
         """Fetches the current state of a decision: useful for polling
-        one that came back HUMAN_REVIEW until a human resolves it."""
-        response = self._client.request("GET", f"/v1/decisions/{decision_id}")
+        one that came back HUMAN_REVIEW until a human resolves it.
+
+        Milestone 10: this call previously sent no authentication at
+        all, matching a corresponding gap on the server side
+        (MILESTONE_10_DECISION_SECURITY_AND_CLARITY_SUMMARY.md) that has
+        now been closed -- GET /v1/decisions/{id} requires a credential.
+        `operator_auth=True` attaches the same operator-key + organization-id
+        pair every other administrative call in this class already
+        requires (register/activate/revoke/rotate above), so this
+        doesn't introduce any new configuration requirement for an
+        Agent that's already doing any of those."""
+        response = self._client.request("GET", f"/v1/decisions/{decision_id}", operator_auth=True)
         resolution = None
         if response.get("resolution"):
             resolution = Resolution(
