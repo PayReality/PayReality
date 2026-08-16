@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.schemas.policy_simulation import RuleEvaluationResponse
+
 
 class SubmitIntentRequest(BaseModel):
     """spec 19.5, extended with `nonce` (required by spec 9.3/21.2's replay
@@ -135,3 +137,44 @@ class DecisionPolicyBindingResponse(BaseModel):
     activated_at: datetime | None
     retired_at: datetime | None
     policies: list[PolicyManifestEntry]
+
+
+class DecisionExplanationResponse(BaseModel):
+    """Phase 2B: the explanatory path, kept strictly separate from the
+    authoritative one (server/app/services/decision_explanation_service.py).
+    Reconstructed entirely from Historical Policy Binding
+    (Policy.bundle_manifest) plus Decision/Evidence/Intent, using the
+    existing, unmodified Runtime Policy Simulator explainer
+    (domain/policy_simulation/explainer.build_rule_evaluations) -- never
+    an LLM, never a second decision, never a mutation of anything.
+
+    `available=False` (with `unavailable_reason` set, every other field
+    left at its default) is a real, distinct response, not an error:
+    some historical decisions genuinely cannot be reconstructed (no
+    policy was ever evaluated, the bundle predates
+    Policy.bundle_manifest, OPA itself never completed the evaluation),
+    and this says so explicitly rather than fabricating a plausible-
+    looking explanation.
+
+    `rules` reuses RuleEvaluationResponse/ConditionEvaluationResponse
+    unchanged, the same schema the Runtime Policy Simulator's own API
+    already returns -- not a second, parallel definition of the same
+    shape. `causal_policy_id` is the one rule (if any) whose match
+    actually produced this outcome; null when no rule matched (the
+    default-deny/undetermined fallback path, or a decision made before
+    any policy existed)."""
+
+    decision_id: UUID
+    available: bool
+    unavailable_reason: str | None = None
+    outcome: str | None = None
+    reason: str | None = None
+    policy_id: UUID | None = None
+    bundle_hash: str | None = None
+    bundle_version: int | None = None
+    compiled_at: datetime | None = None
+    activated_at: datetime | None = None
+    retired_at: datetime | None = None
+    evaluated_at: datetime | None = None
+    causal_policy_id: str | None = None
+    rules: list[RuleEvaluationResponse] = []

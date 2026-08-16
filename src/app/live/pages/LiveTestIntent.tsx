@@ -4,7 +4,7 @@ import { CheckCircle2, Clock, Send, ShieldAlert, XCircle, ShieldOff } from "luci
 import { apiClient } from "../apiClient";
 import { signBody } from "../crypto";
 import { getAgentPrivateKey } from "../agentKeyStore";
-import { describeApiError, describeReason, formatStatus } from "../format";
+import { describeApiError, describeExplanationUnavailable, describeReason, formatStatus } from "../format";
 import { policyStudioApi } from "../../policy-studio/api";
 import { agentsApi } from "../../agents/api";
 import type { Certificate } from "../../agents/types";
@@ -25,6 +25,9 @@ import type {
   LiveEvidence,
   AuthorityContext,
   DelegationEdge,
+  DecisionExplanation,
+  RuleEvaluation,
+  ConditionEvaluation,
 } from "../types";
 
 const POLL_MAX_ATTEMPTS = 60;
@@ -137,6 +140,68 @@ function EvidenceRecordCard({ evidence, label }: { evidence: LiveEvidence; label
   );
 }
 
+// Phase 2B: one policy condition, exactly as it was actually evaluated
+// against this decision's reconstructed historical policy state -- never
+// a live re-evaluation. `expected_value`/`actual_value` are rendered
+// with String() since they can be a number, string, or bool depending
+// on the condition's own field.
+function ConditionRow({ condition }: { condition: ConditionEvaluation }) {
+  return (
+    <div className="flex items-start gap-2 py-1 text-xs">
+      <span
+        className="flex-shrink-0 font-bold"
+        style={{ color: condition.passed ? "var(--pr-trust-green)" : "var(--pr-critical-red)" }}
+        aria-hidden="true"
+      >
+        {condition.passed ? "✓" : "✗"}
+      </span>
+      <span className="font-mono" style={{ color: "var(--pr-text-primary)" }}>
+        {condition.field} {condition.operator} {String(condition.expected_value)}
+      </span>
+      <span style={{ color: "var(--pr-text-disabled)" }}>(actual: {String(condition.actual_value)})</span>
+    </div>
+  );
+}
+
+// One policy rule as reconstructed from the exact historical bundle this
+// decision was evaluated against (server/app/services/decision_explanation_service.py).
+// `isCausal` highlights the single rule (if any) whose match actually
+// produced this decision's outcome -- read from the real OPA answer
+// (evaluated_mandates), never recomputed.
+function RuleEvaluationCard({ rule, isCausal }: { rule: RuleEvaluation; isCausal: boolean }) {
+  const statusLabel = rule.matched ? "Applied" : rule.scope_matched ? "Not applied" : "Not relevant";
+  return (
+    <div
+      className="p-3 rounded-lg mb-2"
+      style={{
+        backgroundColor: isCausal ? "rgba(77,124,254,0.06)" : "var(--pr-overlay-03)",
+        border: `1px solid ${isCausal ? "var(--pr-authority-blue)" : "var(--pr-overlay-05)"}`,
+      }}
+    >
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <span className="text-xs font-semibold" style={{ color: "var(--pr-text-primary)" }}>{rule.policy_name}</span>
+        <span
+          className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded flex-shrink-0"
+          style={{
+            color: rule.matched ? "var(--pr-authority-blue)" : "var(--pr-text-disabled)",
+            backgroundColor: rule.matched ? "rgba(77,124,254,0.12)" : "var(--pr-overlay-05)",
+          }}
+        >
+          {statusLabel}
+        </span>
+      </div>
+      <p className="text-xs mb-2" style={{ color: "var(--pr-text-muted)" }}>{rule.summary}</p>
+      {rule.scope_matched ? (
+        rule.conditions.map((c, i) => <ConditionRow key={i} condition={c} />)
+      ) : (
+        <p className="text-xs" style={{ color: "var(--pr-text-disabled)" }}>
+          Scoped to a different principal or action -- not evaluated against this request.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function SignerCard({ certificate }: { certificate: Certificate }) {
   const fields: Array<[string, string | undefined]> = [
     ["Certificate ID", certificate.id],
@@ -188,6 +253,19 @@ export function LiveTestIntent() {
   const [evidenceRecords, setEvidenceRecords] = useState<LiveEvidence[]>([]);
   const [evidenceError, setEvidenceError] = useState<string | null>(null);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
+
+  // Phase 2B: fetched lazily, on first expand, not on every decision --
+  // most visitors won't open the per-condition breakdown, and the
+  // reconstruction (GET /v1/decisions/{id}/explanation) is real work
+  // server-side (rehydrating a historical policy bundle), not a cached
+  // read. `explanationDecisionId` records which decision `explanation`
+  // actually belongs to, so a stale explanation is never shown across
+  // decisions (e.g. re-expanding right after a fresh submit).
+  const [explanationExpanded, setExplanationExpanded] = useState(false);
+  const [explanation, setExplanation] = useState<DecisionExplanation | null>(null);
+  const [explanationDecisionId, setExplanationDecisionId] = useState<string | null>(null);
+  const [explanationLoading, setExplanationLoading] = useState(false);
+  const [explanationError, setExplanationError] = useState<string | null>(null);
 
   // Runtime Decision Center V2, Phase 2A: the certificate that actually
   // signed THIS submission's intent, not whatever the agent's current
@@ -277,6 +355,27 @@ export function LiveTestIntent() {
       .finally(() => setEvidenceLoading(false));
   }
 
+  function loadExplanation(decisionId: string) {
+    setExplanationLoading(true);
+    setExplanationError(null);
+    apiClient
+      .get<DecisionExplanation>(`/v1/decisions/${decisionId}/explanation`)
+      .then((r) => {
+        setExplanation(r);
+        setExplanationDecisionId(decisionId);
+      })
+      .catch((e) => setExplanationError(describeApiError(e, "Loading policy evaluation")))
+      .finally(() => setExplanationLoading(false));
+  }
+
+  function handleToggleExplanation() {
+    const next = !explanationExpanded;
+    setExplanationExpanded(next);
+    if (next && decision && explanationDecisionId !== decision.id && !explanationLoading) {
+      loadExplanation(decision.id);
+    }
+  }
+
   const startPolling = (decisionId: string) => {
     let attempts = 0;
     pollRef.current = window.setInterval(async () => {
@@ -301,6 +400,10 @@ export function LiveTestIntent() {
     setEvidenceError(null);
     setSigningCertificate(null);
     setCertificateError(null);
+    setExplanationExpanded(false);
+    setExplanation(null);
+    setExplanationDecisionId(null);
+    setExplanationError(null);
     setSubmitting(true);
     if (pollRef.current) window.clearInterval(pollRef.current);
 
@@ -828,23 +931,84 @@ export function LiveTestIntent() {
             )}
           </Card>
 
-          {/* Runtime policy evaluation: the real, flat list of matched
-             mandates only. No per-condition breakdown is shown; that
-             would require wiring the Simulator's explainer to live
-             traffic (spec Phase 2), not something to fake here. */}
+          {/* Phase 2B (PHASE_2B_LIVE_PER_CONDITION_EXPLAINABILITY_SUMMARY.md):
+             the flat matched-policy list stays visible by default (cheap,
+             already-loaded); the per-condition breakdown is a real,
+             separate reconstruction (GET /v1/decisions/{id}/explanation)
+             fetched only once expanded, never on every decision. */}
           <Card padding={20}>
-            <p className="text-sm font-semibold mb-1" style={{ color: "var(--pr-text-primary)" }}>Runtime policies evaluated</p>
-            <p className="text-xs mb-3" style={{ color: "var(--pr-text-muted)" }}>
-              Policies that matched this request. Condition-level detail isn't available in this view yet.
-            </p>
-            {decision.evaluated_mandates.length === 0 && (
-              <p className="text-xs" style={{ color: "var(--pr-text-muted)" }}>{describeReason(decision.reason) ?? "No policy matched."}</p>
-            )}
-            {decision.evaluated_mandates.map((key) => (
-              <div key={key} className="py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
-                <span className="font-mono" style={{ color: "var(--pr-text-primary)" }}>{key}</span>
+            <button
+              onClick={handleToggleExplanation}
+              className="w-full flex items-center justify-between gap-3 text-left"
+              aria-expanded={explanationExpanded}
+              data-tour="policy-evaluation"
+            >
+              <div>
+                <p className="text-sm font-semibold" style={{ color: "var(--pr-text-primary)" }}>Runtime policies evaluated</p>
+                <p className="text-xs mt-0.5" style={{ color: "var(--pr-text-muted)" }}>
+                  {decision.evaluated_mandates.length === 0
+                    ? (describeReason(decision.reason) ?? "No policy matched.")
+                    : `${decision.evaluated_mandates.length} polic${decision.evaluated_mandates.length === 1 ? "y" : "ies"} matched.`}
+                </p>
               </div>
-            ))}
+              <span className="text-xs font-medium flex-shrink-0" style={{ color: "var(--pr-authority-blue)" }}>
+                {explanationExpanded ? "Hide policy evaluation" : "Show policy evaluation"}
+              </span>
+            </button>
+
+            {!explanationExpanded &&
+              decision.evaluated_mandates.map((key) => (
+                <div key={key} className="py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
+                  <span className="font-mono" style={{ color: "var(--pr-text-primary)" }}>{key}</span>
+                </div>
+              ))}
+
+            {explanationExpanded && (
+              <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--pr-overlay-05)" }}>
+                {explanationLoading && (
+                  <div className="flex flex-col gap-2">
+                    <Skeleton height={14} width="80%" />
+                    <Skeleton height={14} width="60%" />
+                  </div>
+                )}
+
+                {!explanationLoading && explanationError && (
+                  <Alert severity="warning" className="text-sm">
+                    <div className="flex items-center gap-3">
+                      <span>{explanationError}</span>
+                      <Button variant="ghost" size="sm" onClick={() => loadExplanation(decision.id)}>Retry</Button>
+                    </div>
+                  </Alert>
+                )}
+
+                {!explanationLoading && !explanationError && explanation && explanationDecisionId === decision.id && (
+                  <>
+                    {!explanation.available && (
+                      <p className="text-xs" style={{ color: "var(--pr-text-muted)" }}>
+                        {describeExplanationUnavailable(explanation.unavailable_reason)}
+                      </p>
+                    )}
+                    {explanation.available && explanation.rules.length === 0 && (
+                      <p className="text-xs" style={{ color: "var(--pr-text-muted)" }}>
+                        No policy conditions were recorded for this decision.
+                      </p>
+                    )}
+                    {explanation.available && explanation.rules.length > 0 && (
+                      <>
+                        {explanation.rules.map((r) => (
+                          <RuleEvaluationCard key={r.policy_id} rule={r} isCausal={r.policy_id === explanation.causal_policy_id} />
+                        ))}
+                        <p className="text-xs mt-1" style={{ color: "var(--pr-text-disabled)" }}>
+                          Evaluated against policy version {explanation.bundle_version}
+                          {explanation.bundle_hash ? ` (bundle ${explanation.bundle_hash.slice(0, 12)}...)` : ""}
+                          {explanation.evaluated_at ? `, ${new Date(explanation.evaluated_at).toLocaleString()}` : ""}.
+                        </p>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </Card>
         </div>
       )}

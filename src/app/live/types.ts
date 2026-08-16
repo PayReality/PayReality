@@ -104,6 +104,51 @@ export interface LiveResolution {
   created_at: string;
 }
 
+// Phase 2B (PHASE_2B_LIVE_PER_CONDITION_EXPLAINABILITY_SUMMARY.md): the
+// same shape GET /v1/runtime-policies/simulate already returns for each
+// rule (server/app/schemas/policy_simulation.py's RuleEvaluationResponse/
+// ConditionEvaluationResponse), reused verbatim rather than duplicated,
+// for the explanatory (not authoritative) reconstruction of a decision.
+export interface ConditionEvaluation {
+  field: string;
+  operator: string;
+  expected_value: unknown;
+  actual_value: unknown;
+  passed: boolean;
+}
+
+export interface RuleEvaluation {
+  policy_id: string;
+  policy_name: string;
+  principal: string;
+  action: string;
+  effect: string;
+  scope_matched: boolean;
+  conditions: ConditionEvaluation[];
+  matched: boolean;
+  summary: string;
+}
+
+// GET /v1/decisions/{id}/explanation. `available=false` is a real,
+// distinct response (see `unavailable_reason`), not an error -- some
+// historical decisions genuinely cannot be reconstructed.
+export interface DecisionExplanation {
+  decision_id: string;
+  available: boolean;
+  unavailable_reason: string | null;
+  outcome: string | null;
+  reason: string | null;
+  policy_id: string | null;
+  bundle_hash: string | null;
+  bundle_version: number | null;
+  compiled_at: string | null;
+  activated_at: string | null;
+  retired_at: string | null;
+  evaluated_at: string | null;
+  causal_policy_id: string | null;
+  rules: RuleEvaluation[];
+}
+
 export interface LiveDecision {
   id: string;
   status: "PENDING" | "RESOLVED";

@@ -25,6 +25,12 @@ const PERMISSION_DETAIL: Record<string, string> = {
   permission_denied: "your role doesn't include this permission. Ask your Organisation Owner if you believe this is wrong.",
 };
 
+// Phase 2B: GET .../explanation's own 404, distinct from an Operator Key
+// problem -- the decision itself (or its cross-org binding) wasn't found.
+const NOT_FOUND_DETAIL: Record<string, string> = {
+  decision_not_found: "this decision could not be found.",
+};
+
 export function describeApiError(e: unknown, action: string): string {
   if (e instanceof ApiError) {
     const detail = e.body && typeof e.body === "object" ? (e.body as { detail?: string }).detail : undefined;
@@ -33,6 +39,9 @@ export function describeApiError(e: unknown, action: string): string {
     }
     if (detail && PERMISSION_DETAIL[detail]) {
       return `${action} failed: ${PERMISSION_DETAIL[detail]}`;
+    }
+    if (detail && NOT_FOUND_DETAIL[detail]) {
+      return `${action} failed: ${NOT_FOUND_DETAIL[detail]}`;
     }
     if (e.status === 401 || e.status === 403) {
       return `${action} failed: this action needs the Operator Key set in the sidebar (bottom left). Enter it there and try again.`;
@@ -76,4 +85,24 @@ export function describeReason(reason: string | null | undefined): string | null
   if (reason.startsWith("opa_error")) return "The policy check itself hit an error, so this was sent to a human to decide.";
   // Unknown code: fall back to a humanized version rather than the raw token.
   return formatStatus(reason);
+}
+
+// Phase 2B (PHASE_2B_LIVE_PER_CONDITION_EXPLAINABILITY_SUMMARY.md):
+// GET .../explanation's `unavailable_reason` codes -- distinct from a
+// Decision's own `reason` above, these explain why the per-condition
+// RECONSTRUCTION isn't possible, not why the decision itself came out
+// the way it did.
+const EXPLANATION_UNAVAILABLE_SENTENCE: Record<string, string> = {
+  no_policy_evaluated: "No active policy existed when this decision was made, so there's no rule to break down.",
+  evaluation_did_not_complete: "The policy check itself didn't complete for this decision, so there's no rule-level result to show.",
+  bundle_not_found: "The exact policy bundle this decision was evaluated against can no longer be found.",
+  bundle_manifest_not_available: "This decision predates per-condition explainability, so condition-level detail isn't available for it.",
+  evidence_not_available: "No evidence record was found for this decision, so condition-level detail isn't available.",
+  principal_not_resolved: "The acting principal for this decision couldn't be resolved, so condition-level detail isn't available.",
+  historical_policy_record_missing: "Part of the historical policy record this decision depended on is missing.",
+};
+
+export function describeExplanationUnavailable(reason: string | null | undefined): string {
+  if (!reason) return "Condition-level detail isn't available for this decision.";
+  return EXPLANATION_UNAVAILABLE_SENTENCE[reason] ?? formatStatus(reason);
 }

@@ -15,6 +15,7 @@ from app.dependencies import (
 from app.domain.auth.signature import check_timestamp_window
 from app.domain.rbac.permissions import Permission
 from app.schemas.intent import (
+    DecisionExplanationResponse,
     DecisionPolicyBindingResponse,
     DecisionSummary,
     GetDecisionResponse,
@@ -25,7 +26,8 @@ from app.schemas.intent import (
     SubmitIntentRequest,
     SubmitIntentResponse,
 )
-from app.services import intent_service, resolution_service
+from app.schemas.policy_simulation import ConditionEvaluationResponse, RuleEvaluationResponse
+from app.services import decision_explanation_service, intent_service, resolution_service
 from app.services.intent_service import (
     AgentNotOperationalError,
     AgentRetiredError,
@@ -213,6 +215,74 @@ def get_decision_policy_binding(
         activated_at=policy.activated_at,
         retired_at=policy.retired_at,
         policies=[PolicyManifestEntry(**p) for p in manifest.get("policies", [])],
+    )
+
+
+def _rule_to_response(r) -> RuleEvaluationResponse:
+    """Same conversion routers/policy_simulation.py's own
+    _rule_to_response does for the Simulator's identical
+    RuleEvaluation/ConditionEvaluation dataclasses -- reusing the
+    SCHEMA (RuleEvaluationResponse/ConditionEvaluationResponse) rather
+    than defining a second one; kept as its own small function here
+    (not imported from that router module) since this is presentation-
+    layer glue, not business logic, and importing across router modules
+    for six lines would be an odd cross-dependency for no real reuse
+    benefit."""
+    return RuleEvaluationResponse(
+        policy_id=r.policy_id, policy_name=r.policy_name, principal=r.principal, action=r.action,
+        effect=r.effect, scope_matched=r.scope_matched, matched=r.matched, summary=r.summary,
+        conditions=[
+            ConditionEvaluationResponse(
+                field=c.field, operator=c.operator, expected_value=c.expected_value,
+                actual_value=c.actual_value, passed=c.passed,
+            )
+            for c in r.conditions
+        ],
+    )
+
+
+@router.get(
+    "/decisions/{decision_id}/explanation",
+    response_model=DecisionExplanationResponse,
+    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
+)
+def get_decision_explanation(
+    decision_id: UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    """Phase 2B: the explanatory path. Gated by Permission.RUNTIME_POLICY_VIEW,
+    the same permission routers/policy_simulation.py already uses for
+    every read-only rule-evaluation exposure in this codebase (that
+    router's own docstring: "simulating... is an exploratory, read-only
+    action... not an edit/publish action"), reusing precedent rather
+    than inventing a new gate. Org-scoped the same way
+    get_decision_policy_binding is (404, never 403, on a cross-org
+    Policy)."""
+    try:
+        result = decision_explanation_service.get_decision_explanation(db, decision_id, organization.id)
+    except decision_explanation_service.DecisionNotFoundError:
+        raise HTTPException(status_code=404, detail="decision_not_found")
+    except decision_explanation_service.CrossOrganizationAccessError:
+        raise HTTPException(status_code=404, detail="decision_not_found")
+
+    if isinstance(result, decision_explanation_service.ExplanationUnavailable):
+        return DecisionExplanationResponse(decision_id=result.decision_id, available=False, unavailable_reason=result.reason)
+
+    return DecisionExplanationResponse(
+        decision_id=result.decision_id,
+        available=True,
+        outcome=result.outcome,
+        reason=result.reason,
+        policy_id=result.policy_id,
+        bundle_hash=result.bundle_hash,
+        bundle_version=result.bundle_version,
+        compiled_at=result.compiled_at,
+        activated_at=result.activated_at,
+        retired_at=result.retired_at,
+        evaluated_at=result.evaluated_at,
+        causal_policy_id=result.causal_policy_id,
+        rules=[_rule_to_response(r) for r in result.rules],
     )
 
 
