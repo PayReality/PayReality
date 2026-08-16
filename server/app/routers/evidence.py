@@ -121,19 +121,44 @@ def verify_evidence(
     )
 
 
-@router.get("/chain/verify", response_model=ChainVerificationResponse)
-def verify_chain(organization_id: UUID | None = None, since: datetime | None = None, db: Session = Depends(get_db)):
+@router.get(
+    "/chain/verify", response_model=ChainVerificationResponse,
+    dependencies=[Depends(require_permission(Permission.EVIDENCE_VIEW))],
+)
+def verify_chain(
+    since: datetime | None = None,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
     """PHASE_5_EVIDENCE.md: independent verification of an Organisation-
-    scoped chain, usable by a third party (auditor, regulator, insurer)
-    with only the published verification key -- checks both per-record
-    signature validity and previous_hash continuity, catching a deleted
-    or reordered record that per-record verification alone cannot.
-    organization_id=None verifies the chain for every record whose
-    Principal has no organisation set yet (a valid, consistent scope in
-    its own right, not an error)."""
-    result = evidence_service.verify_chain(db, organization_id, since=since)
+    scoped chain -- checks both per-record signature validity and
+    previous_hash continuity, catching a deleted or reordered record
+    that per-record verification alone cannot.
+
+    Milestone 11 (MILESTONE_11_SECURITY_BOUNDARY_COMPLETION_SUMMARY.md):
+    this endpoint previously took `organization_id` as a plain,
+    caller-supplied query parameter with no authentication at all --
+    confirmed live-reachable, a CRITICAL finding from the Milestone 10
+    sweep. `organization_id` is no longer accepted from the request at
+    all (not merely ignored): it is now derived exclusively from the
+    caller's authenticated identity, the same `Depends(get_current_organization)`
+    plus `Permission.EVIDENCE_VIEW` pattern get_evidence/list_evidence/
+    verify_evidence above already use, so an authenticated caller can
+    only ever verify their own organisation's chain. This necessarily
+    ends the endpoint's previous framing as a credential-free tool for
+    an outside third party (the docstring's own former "auditor,
+    regulator, insurer... with only the published verification key"
+    story) and the previously-reachable organization_id=None scope
+    (evidence for a Principal with no organisation assigned) -- no
+    authenticated caller's own organisation is ever None, so that scope
+    is now simply unreachable here, never silently granted to whichever
+    caller asks first. A genuinely credential-free third-party
+    verification story, if still wanted, is a different mechanism (e.g.
+    a signed, evidence-specific export the organisation explicitly
+    generates) and is out of this milestone's scope, not decided here."""
+    result = evidence_service.verify_chain(db, organization.id, since=since)
     return ChainVerificationResponse(
-        organization_id=organization_id,
+        organization_id=organization.id,
         total=result.total,
         intact=result.intact,
         invalid_signatures=list(result.invalid_signatures),

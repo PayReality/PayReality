@@ -126,7 +126,10 @@ def create_agent(
     return _to_response(agent, certificate)
 
 
-@router.get("", response_model=AgentListResponse)
+@router.get(
+    "", response_model=AgentListResponse,
+    dependencies=[Depends(require_permission(Permission.AGENT_VIEW))],
+)
 def list_agents(
     status: str | None = None,
     environment: str | None = None,
@@ -142,7 +145,16 @@ def list_agents(
     params, paginated. `limit` is capped at 500 regardless of what's
     requested, the same defensive cap pattern used elsewhere in this
     codebase for any list endpoint that could otherwise return an
-    unbounded result set."""
+    unbounded result set.
+
+    Milestone 11 (MILESTONE_11_SECURITY_BOUNDARY_COMPLETION_SUMMARY.md):
+    gated with Permission.AGENT_VIEW, matching its sibling
+    GET /v1/principals (list) exactly (routers/principals.py) -- this
+    endpoint already had authentication and organisation-scoping via
+    get_current_organization, just no permission check, an inconsistency
+    found in the Milestone 10 sweep. Already granted to GOVERNANCE_ADMIN,
+    AGENT_ADMIN, and AUDITOR; not REVIEWER or EXECUTIVE, matching those
+    roles' existing, narrower scope everywhere else in this codebase."""
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
     pairs, total = agent_service.list_agents(

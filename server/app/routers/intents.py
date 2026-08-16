@@ -328,6 +328,7 @@ def get_decision_explanation(
 def resolve_decision(
     decision_id: UUID,
     body: ResolveDecisionRequest,
+    organization: Organization = Depends(get_current_organization),
     db: Session = Depends(get_db),
     session_user: User | None = Depends(get_current_user_if_session),
 ):
@@ -341,7 +342,14 @@ def resolve_decision(
     carried a real session (not the Operator Key, not a bare API key),
     `resolved_by_user_id` now also records the exact, authenticated User
     who clicked, so the audit trail can't diverge from who was actually
-    permitted to act."""
+    permitted to act.
+
+    Milestone 11 (MILESTONE_11_SECURITY_BOUNDARY_COMPLETION_SUMMARY.md):
+    now organisation-scoped -- previously a caller with
+    Permission.DECISIONS_RESOLVE for any organisation could resolve any
+    other organisation's HUMAN_REVIEW decision. See
+    resolution_service.resolve_decision's own docstring for the
+    ownership-check discipline."""
     if body.resolution not in ("approved", "denied"):
         raise HTTPException(status_code=422, detail="invalid_resolution")
 
@@ -349,6 +357,7 @@ def resolve_decision(
         resolution_row = resolution_service.resolve_decision(
             db,
             decision_id=decision_id,
+            organization_id=organization.id,
             resolution=body.resolution,
             resolved_by=body.resolved_by,
             reason=body.reason,
