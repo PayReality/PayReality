@@ -23,9 +23,8 @@ container_apps_min_replicas           = 1
 # must consciously set this, no default exists.
 alert_notification_email = "payreality.ceo@gmail.com"
 
-# Redeployed for Historical Policy Binding: adds Policy.bundle_manifest
-# (a real Alembic migration, applied automatically by entrypoint.sh's
-# `alembic upgrade head` on container start) and GET /v1/decisions/{id}/
-# policy-binding. Built and pushed via `az acr build`, tagged with the
-# exact source commit as always.
-container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-a05383a"
+# Redeployed for Phase 2B (live per-condition Runtime Policy
+# explainability): adds GET /v1/decisions/{id}/explanation. No new
+# migration this round (no schema change). Built and pushed via
+# `az acr build`, tagged with the exact source commit as always.
+container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-5041fbc"
