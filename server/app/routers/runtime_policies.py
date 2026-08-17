@@ -139,7 +139,10 @@ def get_vocabulary():
     return {"actions": sorted(FINANCIAL_VOCABULARY.known_actions)}
 
 
-@router.get("", response_model=list[RuntimePolicyResponse])
+@router.get(
+    "", response_model=list[RuntimePolicyResponse],
+    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
+)
 def list_policies(
     status: str | None = None,
     organization: Organization = Depends(get_current_organization),
@@ -148,7 +151,10 @@ def list_policies(
     return [_record_to_response(r) for r in svc.list_latest_policies(db, organization.id, status=status)]
 
 
-@router.get("/{policy_key}", response_model=RuntimePolicyResponse)
+@router.get(
+    "/{policy_key}", response_model=RuntimePolicyResponse,
+    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
+)
 def get_policy(
     policy_key: uuid.UUID,
     organization: Organization = Depends(get_current_organization),
@@ -161,7 +167,10 @@ def get_policy(
     return _record_to_response(row)
 
 
-@router.get("/{policy_key}/versions", response_model=list[RuntimePolicyResponse])
+@router.get(
+    "/{policy_key}/versions", response_model=list[RuntimePolicyResponse],
+    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
+)
 def get_versions(
     policy_key: uuid.UUID,
     organization: Organization = Depends(get_current_organization),
@@ -174,7 +183,10 @@ def get_versions(
     return [_record_to_response(r) for r in rows]
 
 
-@router.get("/{policy_key}/versions/{version}", response_model=RuntimePolicyResponse)
+@router.get(
+    "/{policy_key}/versions/{version}", response_model=RuntimePolicyResponse,
+    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
+)
 def get_version(
     policy_key: uuid.UUID,
     version: int,
@@ -332,7 +344,10 @@ def compile_policy(
     )
 
 
-@router.post("/{policy_key}/dry-run", response_model=DryRunResponse)
+@router.post(
+    "/{policy_key}/dry-run", response_model=DryRunResponse,
+    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
+)
 def dry_run_policy(
     policy_key: uuid.UUID,
     body: DryRunRequest,
@@ -405,7 +420,10 @@ def deploy_policy(
     )
 
 
-@router.get("/{policy_key}/diff", response_model=DiffResponse)
+@router.get(
+    "/{policy_key}/diff", response_model=DiffResponse,
+    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
+)
 def diff_versions(
     policy_key: uuid.UUID,
     from_version: int,

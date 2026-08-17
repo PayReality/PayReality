@@ -306,7 +306,10 @@ def cancel_schedule(
 # --- Read: preview, timeline, schedules ------------------------------------
 
 
-@router.get("/{policy_key}/lifecycle/activation-preview", response_model=ActivationImpactPreviewResponse)
+@router.get(
+    "/{policy_key}/lifecycle/activation-preview", response_model=ActivationImpactPreviewResponse,
+    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
+)
 def activation_preview(
     policy_key: uuid.UUID,
     organization: Organization = Depends(get_current_organization),
@@ -324,7 +327,10 @@ def activation_preview(
     )
 
 
-@router.get("/{policy_key}/lifecycle/timeline", response_model=TimelineResponse)
+@router.get(
+    "/{policy_key}/lifecycle/timeline", response_model=TimelineResponse,
+    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
+)
 def timeline(
     policy_key: uuid.UUID,
     organization: Organization = Depends(get_current_organization),
@@ -337,7 +343,10 @@ def timeline(
     return TimelineResponse(policy_key=str(policy_key), events=[_event_to_schema(e) for e in events])
 
 
-@router.get("/{policy_key}/lifecycle/schedules", response_model=list[ScheduleSchema])
+@router.get(
+    "/{policy_key}/lifecycle/schedules", response_model=list[ScheduleSchema],
+    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
+)
 def get_schedules(
     policy_key: uuid.UUID,
     status: str | None = None,
@@ -351,7 +360,10 @@ def get_schedules(
 # --- Cross-policy: dashboard, search, process-due-schedules ----------------
 
 
-@dashboard_router.get("/dashboard", response_model=DashboardResponse)
+@dashboard_router.get(
+    "/dashboard", response_model=DashboardResponse,
+    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
+)
 def dashboard(organization: Organization = Depends(get_current_organization), db: Session = Depends(get_db)):
     summary = lsvc.get_dashboard(db, organization.id)
     return DashboardResponse(
@@ -373,7 +385,10 @@ def dashboard(organization: Organization = Depends(get_current_organization), db
     )
 
 
-@dashboard_router.get("/search", response_model=SearchResponse)
+@dashboard_router.get(
+    "/search", response_model=SearchResponse,
+    dependencies=[Depends(require_permission(Permission.RUNTIME_POLICY_VIEW))],
+)
 def search(
     principal: str | None = None, resource: str | None = None, action: str | None = None,
     state: str | None = None, version: int | None = None, reviewer: str | None = None,

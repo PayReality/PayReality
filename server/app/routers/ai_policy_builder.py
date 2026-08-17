@@ -139,17 +139,26 @@ async def upload(
     return _upload_to_response(row)
 
 
-@router.get("/uploads", response_model=list[UploadResponse])
+@router.get(
+    "/uploads", response_model=list[UploadResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def list_uploads(organization: Organization = Depends(get_current_organization), db: Session = Depends(get_db)):
     return [_upload_to_response(u) for u in svc.list_uploads(db, organization.id)]
 
 
-@router.get("/uploads/{upload_id}", response_model=UploadResponse)
+@router.get(
+    "/uploads/{upload_id}", response_model=UploadResponse,
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_upload(upload_id: uuid.UUID, upload: PolicyExtractionUpload = Depends(_authorized_upload)):
     return _upload_to_response(upload)
 
 
-@router.get("/uploads/{upload_id}/candidates", response_model=list[CandidateResponse])
+@router.get(
+    "/uploads/{upload_id}/candidates", response_model=list[CandidateResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def list_candidates_for_upload(
     upload_id: uuid.UUID,
     upload: PolicyExtractionUpload = Depends(_authorized_upload),
@@ -158,7 +167,10 @@ def list_candidates_for_upload(
     return [candidate_to_response(c) for c in svc.list_candidates(db, upload.organization_id, upload_id=upload_id)]
 
 
-@router.get("/candidates", response_model=list[CandidateResponse])
+@router.get(
+    "/candidates", response_model=list[CandidateResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def list_candidates(
     status: str | None = None,
     upload_id: uuid.UUID | None = None,
@@ -172,7 +184,10 @@ def list_candidates(
     ]
 
 
-@router.get("/candidates/{candidate_id}", response_model=CandidateResponse)
+@router.get(
+    "/candidates/{candidate_id}", response_model=CandidateResponse,
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_candidate(
     candidate_id: uuid.UUID,
     organization: Organization = Depends(get_current_organization),

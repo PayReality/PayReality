@@ -276,7 +276,10 @@ def _authorized_question(
     return question
 
 
-@router.get("/corpora", response_model=list[CorpusResponse])
+@router.get(
+    "/corpora", response_model=list[CorpusResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def list_corpora(
     organization: Organization = Depends(get_current_organization), db: Session = Depends(get_db)
 ):
@@ -287,12 +290,18 @@ def list_corpora(
     ]
 
 
-@router.get("/corpora/{corpus_id}", response_model=CorpusResponse)
+@router.get(
+    "/corpora/{corpus_id}", response_model=CorpusResponse,
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_corpus(corpus_id: uuid.UUID, corpus: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return _corpus_to_response(corpus, len(svc.list_documents(db, corpus_id)))
 
 
-@router.get("/corpora/{corpus_id}/summary", response_model=GraphSummaryResponse)
+@router.get(
+    "/corpora/{corpus_id}/summary", response_model=GraphSummaryResponse,
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_summary(
     corpus_id: uuid.UUID, corpus: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)
 ):
@@ -314,7 +323,10 @@ def get_summary(
     )
 
 
-@router.get("/corpora/{corpus_id}/principals", response_model=list[PrincipalResponse])
+@router.get(
+    "/corpora/{corpus_id}/principals", response_model=list[PrincipalResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_principals(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_principal_to_response(p) for p in svc.list_principals(db, corpus_id)]
 
@@ -322,6 +334,7 @@ def get_principals(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorize
 @router.get(
     "/principals/{authority_principal_id}/candidates",
     response_model=list[PrincipalCandidateResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
 )
 def get_principal_candidates(
     authority_principal_id: uuid.UUID,
@@ -381,17 +394,26 @@ def resolve_principal(
     return _principal_to_response(discovery)
 
 
-@router.get("/corpora/{corpus_id}/resources", response_model=list[ResourceResponse])
+@router.get(
+    "/corpora/{corpus_id}/resources", response_model=list[ResourceResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_resources(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_resource_to_response(r) for r in svc.list_resources(db, corpus_id)]
 
 
-@router.get("/corpora/{corpus_id}/operations", response_model=list[OperationResponse])
+@router.get(
+    "/corpora/{corpus_id}/operations", response_model=list[OperationResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_operations(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_operation_to_response(o) for o in svc.list_operations(db, corpus_id)]
 
 
-@router.get("/corpora/{corpus_id}/relationships", response_model=list[RelationshipResponse])
+@router.get(
+    "/corpora/{corpus_id}/relationships", response_model=list[RelationshipResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_relationships(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_relationship_to_response(r) for r in svc.list_relationships(db, corpus_id)]
 
@@ -441,17 +463,26 @@ def activate_relationship(
     return _relationship_to_response(relationship)
 
 
-@router.get("/corpora/{corpus_id}/conflicts", response_model=list[ConflictResponse])
+@router.get(
+    "/corpora/{corpus_id}/conflicts", response_model=list[ConflictResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_conflicts(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_conflict_to_response(c) for c in svc.list_conflicts(db, corpus_id)]
 
 
-@router.get("/corpora/{corpus_id}/gaps", response_model=list[GapResponse])
+@router.get(
+    "/corpora/{corpus_id}/gaps", response_model=list[GapResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_gaps(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_gap_to_response(g) for g in svc.list_gaps(db, corpus_id)]
 
 
-@router.get("/corpora/{corpus_id}/questions", response_model=list[QuestionResponse])
+@router.get(
+    "/corpora/{corpus_id}/questions", response_model=list[QuestionResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_questions(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     return [_question_to_response(q) for q in svc.list_questions(db, corpus_id)]
 
@@ -477,7 +508,10 @@ def answer_question(
 # --- Phase 3: Explainability & Human Review -----------------------------
 
 
-@router.get("/corpora/{corpus_id}/coverage", response_model=CoverageResponse)
+@router.get(
+    "/corpora/{corpus_id}/coverage", response_model=CoverageResponse,
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_coverage(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     """Task 5: deterministic parsing statistics aggregated across this
     corpus's documents -- see AuthorityCorpusDocument's own columns and
@@ -486,7 +520,10 @@ def get_coverage(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_
     return CoverageResponse(**svc.get_coverage(db, corpus_id))
 
 
-@router.get("/corpora/{corpus_id}/missing-information", response_model=list[MissingInformationItem])
+@router.get(
+    "/corpora/{corpus_id}/missing-information", response_model=list[MissingInformationItem],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_missing_information(
     corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)
 ):
@@ -496,7 +533,10 @@ def get_missing_information(
     return [MissingInformationItem(**item) for item in svc.detect_missing_information(db, corpus_id)]
 
 
-@router.get("/corpora/{corpus_id}/diff", response_model=GraphDiffResponse)
+@router.get(
+    "/corpora/{corpus_id}/diff", response_model=GraphDiffResponse,
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def get_graph_diff(corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)):
     """Task 7: this corpus's candidate Authority Graph vs. the Authority
     Graph already in force for the same organisation. A deterministic
@@ -555,7 +595,10 @@ def approve_graph(
     )
 
 
-@router.get("/corpora/{corpus_id}/approvals", response_model=list[GraphApprovalResponse])
+@router.get(
+    "/corpora/{corpus_id}/approvals", response_model=list[GraphApprovalResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
 def list_approvals(
     corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)
 ):

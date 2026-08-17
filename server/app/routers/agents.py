@@ -248,7 +248,10 @@ def bulk_rotate(
     )
 
 
-@router.get("/{agent_id}", response_model=AgentDetailResponse)
+@router.get(
+    "/{agent_id}", response_model=AgentDetailResponse,
+    dependencies=[Depends(require_permission(Permission.AGENT_VIEW))],
+)
 def get_agent_detail(agent_id: UUID, agent: Agent = Depends(_authorized_agent), db: Session = Depends(get_db)):
     certificate = agent_service.get_active_certificate_for_agent(db, agent_id)
     certificates = agent_service.list_certificates(db, agent_id)
@@ -328,12 +331,18 @@ def delete_agent(agent_id: UUID, _: Agent = Depends(_authorized_agent), db: Sess
     return _to_response(agent, certificate)
 
 
-@router.get("/{agent_id}/certificates", response_model=list[CertificateResponse])
+@router.get(
+    "/{agent_id}/certificates", response_model=list[CertificateResponse],
+    dependencies=[Depends(require_permission(Permission.AGENT_VIEW))],
+)
 def list_certificates(agent_id: UUID, _: Agent = Depends(_authorized_agent), db: Session = Depends(get_db)):
     return [CertificateResponse.model_validate(c) for c in agent_service.list_certificates(db, agent_id)]
 
 
-@router.get("/{agent_id}/audit", response_model=list[AuditEventResponse])
+@router.get(
+    "/{agent_id}/audit", response_model=list[AuditEventResponse],
+    dependencies=[Depends(require_permission(Permission.AGENT_VIEW))],
+)
 def list_audit_events(
     agent_id: UUID, limit: int = 50, _: Agent = Depends(_authorized_agent), db: Session = Depends(get_db)
 ):
@@ -343,7 +352,10 @@ def list_audit_events(
     ]
 
 
-@router.post("/{agent_id}/audit/{event_id}/verify", response_model=VerifyAuditEventResponse)
+@router.post(
+    "/{agent_id}/audit/{event_id}/verify", response_model=VerifyAuditEventResponse,
+    dependencies=[Depends(require_permission(Permission.AGENT_VIEW))],
+)
 def verify_audit_event(
     agent_id: UUID, event_id: UUID, _: Agent = Depends(_authorized_agent), db: Session = Depends(get_db)
 ):
