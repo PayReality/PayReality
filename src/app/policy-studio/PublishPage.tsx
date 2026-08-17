@@ -61,12 +61,18 @@ export function PublishPage() {
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   function load() {
-    policyStudioApi.get(policyKey!).then((p) => {
-      setPolicy(p);
-      setPrincipal(p.scope.principal);
-      setAction(p.scope.action);
-    });
+    setLoadError(null);
+    policyStudioApi
+      .get(policyKey!)
+      .then((p) => {
+        setPolicy(p);
+        setPrincipal(p.scope.principal);
+        setAction(p.scope.action);
+      })
+      .catch((e) => setLoadError(describeApiError(e, "Loading policy")));
   }
 
   useEffect(load, [policyKey]);
@@ -171,6 +177,18 @@ export function PublishPage() {
     }
   }
 
+  if (!policy && loadError) {
+    return (
+      <div className="p-8">
+        <Alert severity="error" className="text-sm">
+          <div className="flex items-center gap-3">
+            <span>{loadError}</span>
+            <Button variant="ghost" size="sm" onClick={load}>Retry</Button>
+          </div>
+        </Alert>
+      </div>
+    );
+  }
   if (!policy) return <div className="p-8" style={{ color: "var(--pr-text-muted)" }}>Loading...</div>;
 
   return (

@@ -8,6 +8,8 @@ import { describeApiError, formatStatus } from "../live/format";
 import { generateKeyPair } from "../live/crypto";
 import { saveAgentKeyPair } from "../live/agentKeyStore";
 import { HelpIcon } from "../help/HelpIcon";
+import { useAuth } from "../auth/AuthContext";
+import { useResourceSync } from "../services/resourceSync";
 import type { AgentDetail } from "./types";
 import type { PrincipalAuthorityContext } from "../live/types";
 import { Card } from "../components/ui/card";
@@ -31,11 +33,14 @@ function Field({ label, value }: { label: string; value: string | null | undefin
 export function AgentDetailPage() {
   const { agentId } = useParams();
   const now = useNow();
+  const { user, hasPermission } = useAuth();
   const [detail, setDetail] = useState<AgentDetail | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [verifyResults, setVerifyResults] = useState<Record<string, boolean>>({});
   const [newOwner, setNewOwner] = useState("");
   const [newBusinessUnit, setNewBusinessUnit] = useState("");
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
   // Authority-as-a-continuous-object, Stage I.9: the Principal's real
   // organisational placement and active delegations, resolved via the
   // same authority-context lookup every Intent already uses. null until
@@ -45,10 +50,18 @@ export function AgentDetailPage() {
 
   function load() {
     if (!agentId) return;
-    agentsApi.getDetail(agentId).then(setDetail);
+    setLoadError(null);
+    agentsApi
+      .getDetail(agentId)
+      .then(setDetail)
+      .catch((e) => setLoadError(describeApiError(e, "Loading agent")));
   }
 
   useEffect(load, [agentId]);
+  // Milestone 14: this page was the disclosed Phase 6A gap -- certificate
+  // rotation/revocation or a lifecycle change made from another tab (or
+  // the Agent Directory) never reached this page while it stayed mounted.
+  useResourceSync(["agents", "certificates"], load);
 
   useEffect(() => {
     if (!detail) return;
@@ -58,29 +71,61 @@ export function AgentDetailPage() {
       .catch(() => setAuthorityContext(null));
   }, [detail?.agent.acting_for_principal_id]);
 
-  async function runAction(fn: () => Promise<unknown>, label: string) {
+  // Only disable when we positively know the signed-in user lacks the
+  // permission -- with no session (Operator Key bypass still active),
+  // stay permissive rather than guessing (same rule ReviewQueuePage uses).
+  function lacksPermission(permission: string): boolean {
+    return !!user && !hasPermission(permission);
+  }
+
+  async function runAction(fn: () => Promise<unknown>, label: string): Promise<boolean> {
     setMessage(null);
+    setPendingAction(label);
     try {
       await fn();
       load();
+      return true;
     } catch (e) {
       setMessage(describeApiError(e, label));
+      return false;
+    } finally {
+      setPendingAction(null);
     }
   }
 
   async function handleRotate() {
     if (!agentId) return;
     const { publicKeyB64, privateKeyB64 } = generateKeyPair();
-    await runAction(() => agentsApi.rotate(agentId, `ed25519:base64:${publicKeyB64}`), "Rotate certificate");
-    saveAgentKeyPair(agentId, privateKeyB64, publicKeyB64);
+    const succeeded = await runAction(() => agentsApi.rotate(agentId, `ed25519:base64:${publicKeyB64}`), "Rotate certificate");
+    // Only persist the new private key locally if the server actually
+    // accepted the rotation -- runAction used to swallow the failure and
+    // this ran unconditionally, silently desyncing the stored key from
+    // the agent's real active certificate.
+    if (succeeded) saveAgentKeyPair(agentId, privateKeyB64, publicKeyB64);
   }
 
   async function handleVerify(eventId: string) {
     if (!agentId) return;
-    const result = await agentsApi.verifyAuditEvent(agentId, eventId);
-    setVerifyResults((prev) => ({ ...prev, [eventId]: result.valid }));
+    try {
+      const result = await agentsApi.verifyAuditEvent(agentId, eventId);
+      setVerifyResults((prev) => ({ ...prev, [eventId]: result.valid }));
+    } catch (e) {
+      setMessage(describeApiError(e, "Verify audit event"));
+    }
   }
 
+  if (!detail && loadError) {
+    return (
+      <div className="p-8">
+        <Alert severity="error" className="text-sm">
+          <div className="flex items-center gap-3">
+            <span>{loadError}</span>
+            <Button variant="ghost" size="sm" onClick={load}>Retry</Button>
+          </div>
+        </Alert>
+      </div>
+    );
+  }
   if (!detail) return <div className="p-8" style={{ color: "var(--pr-text-muted)" }}>Loading...</div>;
 
   const { agent } = detail;
@@ -103,18 +148,53 @@ export function AgentDetailPage() {
 
       <div className="flex flex-wrap gap-2 mb-6">
         {(agent.status === "registered" || agent.status === "suspended") && (
-          <Button variant="tint-success" size="sm" onClick={() => runAction(() => agentsApi.activate(agentId!), "Activate")}>Activate</Button>
+          <Button
+            variant="tint-success"
+            size="sm"
+            disabled={!!pendingAction || lacksPermission("agent.activate")}
+            onClick={() => runAction(() => agentsApi.activate(agentId!), "Activate")}
+          >
+            {pendingAction === "Activate" ? "Activating..." : "Activate"}
+          </Button>
         )}
         {agent.status === "active" && (
-          <button onClick={() => runAction(() => agentsApi.suspend(agentId!), "Suspend")} className="px-3 py-1.5 rounded-lg text-xs" style={{ backgroundColor: "rgba(245,158,11,0.1)", color: "var(--pr-warning-amber)" }}>Suspend</button>
+          <button
+            onClick={() => runAction(() => agentsApi.suspend(agentId!), "Suspend")}
+            disabled={!!pendingAction || lacksPermission("agent.suspend")}
+            className="px-3 py-1.5 rounded-lg text-xs disabled:opacity-40"
+            style={{ backgroundColor: "rgba(245,158,11,0.1)", color: "var(--pr-warning-amber)" }}
+          >
+            {pendingAction === "Suspend" ? "Suspending..." : "Suspend"}
+          </button>
         )}
         {(agent.status === "active" || agent.status === "suspended") && (
-          <button onClick={handleRotate} className="px-3 py-1.5 rounded-lg text-xs" style={{ backgroundColor: "rgba(77,124,254,0.1)", color: "var(--pr-authority-blue)" }}>Rotate certificate</button>
+          <button
+            onClick={handleRotate}
+            disabled={!!pendingAction || lacksPermission("agent.rotate")}
+            className="px-3 py-1.5 rounded-lg text-xs disabled:opacity-40"
+            style={{ backgroundColor: "rgba(77,124,254,0.1)", color: "var(--pr-authority-blue)" }}
+          >
+            {pendingAction === "Rotate certificate" ? "Rotating..." : "Rotate certificate"}
+          </button>
         )}
         {(agent.status === "registered" || agent.status === "active" || agent.status === "suspended") && (
           <>
-            <button onClick={() => runAction(() => agentsApi.retire(agentId!), "Retire")} className="px-3 py-1.5 rounded-lg text-xs" style={{ backgroundColor: "var(--pr-overlay-06)", color: "var(--pr-text-secondary)" }}>Retire</button>
-            <Button variant="tint-danger" size="sm" onClick={() => runAction(() => agentsApi.revoke(agentId!), "Revoke")}>Revoke</Button>
+            <button
+              onClick={() => runAction(() => agentsApi.retire(agentId!), "Retire")}
+              disabled={!!pendingAction || lacksPermission("agent.retire")}
+              className="px-3 py-1.5 rounded-lg text-xs disabled:opacity-40"
+              style={{ backgroundColor: "var(--pr-overlay-06)", color: "var(--pr-text-secondary)" }}
+            >
+              {pendingAction === "Retire" ? "Retiring..." : "Retire"}
+            </button>
+            <Button
+              variant="tint-danger"
+              size="sm"
+              disabled={!!pendingAction || lacksPermission("agent.revoke")}
+              onClick={() => runAction(() => agentsApi.revoke(agentId!), "Revoke")}
+            >
+              {pendingAction === "Revoke" ? "Revoking..." : "Revoke"}
+            </Button>
           </>
         )}
       </div>
@@ -203,12 +283,21 @@ export function AgentDetailPage() {
               style={{ backgroundColor: "var(--pr-bg-hover)", borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-primary)" }}
             />
             <button
-              onClick={() => runAction(() => agentsApi.transfer(agentId!, newOwner, newBusinessUnit || undefined), "Transfer")}
-              disabled={!newOwner.trim()}
+              onClick={async () => {
+                const succeeded = await runAction(
+                  () => agentsApi.transfer(agentId!, newOwner, newBusinessUnit || undefined),
+                  "Transfer"
+                );
+                if (succeeded) {
+                  setNewOwner("");
+                  setNewBusinessUnit("");
+                }
+              }}
+              disabled={!newOwner.trim() || !!pendingAction || lacksPermission("agent.manage")}
               className="px-3 py-1.5 rounded-lg text-xs disabled:opacity-40 flex-shrink-0"
               style={{ backgroundColor: "rgba(77,124,254,0.1)", color: "var(--pr-authority-blue)" }}
             >
-              Transfer
+              {pendingAction === "Transfer" ? "Transferring..." : "Transfer"}
             </button>
           </div>
         </Card>

@@ -14,6 +14,7 @@ import { apiClient } from "../live/apiClient";
 import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
 import { describeApiError } from "../live/format";
+import { useResourceSync } from "../services/resourceSync";
 import type { LiveAgent, LivePolicy } from "../live/types";
 
 const WORKFLOW = [
@@ -65,7 +66,7 @@ export function PlatformOverview() {
   const [reachable, setReachable] = useState<boolean | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function load() {
     Promise.all([
       apiClient.get<{ agents: LiveAgent[]; total: number }>("/v1/agents"),
       apiClient.get<LivePolicy[]>("/v1/policies"),
@@ -84,7 +85,12 @@ export function PlatformOverview() {
         setReachable(false);
         setLoadError(describeApiError(e, "Loading the overview"));
       });
-  }, []);
+  }
+
+  useEffect(load, []);
+  // Milestone 14: this strip's agent count and active-policy badge had
+  // no way to learn either changed while the page stayed mounted.
+  useResourceSync(["agents", "policies"], load);
 
   return (
     <div className="p-8 max-w-5xl mx-auto" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
@@ -140,7 +146,7 @@ export function PlatformOverview() {
           <>
             <div>
               <div className="text-2xl font-semibold" style={{ color: "var(--pr-text-primary)" }}>
-                {agentCount ?? "N/A"}
+                {agentCount ?? "…"}
               </div>
               <div className="text-xs" style={{ color: "var(--pr-text-muted)" }}>
                 Registered agents

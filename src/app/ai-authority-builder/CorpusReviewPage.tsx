@@ -207,6 +207,8 @@ export function AIAuthorityBuilderCorpusReviewPage() {
   const [diff, setDiff] = useState<GraphDiff | null>(null);
   const [approvals, setApprovals] = useState<GraphApproval[] | null>(null);
   const [answerDrafts, setAnswerDrafts] = useState<Record<string, string>>({});
+  const [answerErrors, setAnswerErrors] = useState<Record<string, string>>({});
+  const [answerBusyId, setAnswerBusyId] = useState<string | null>(null);
   const [aiEnabled, setAiEnabled] = useState(true);
 
   const [approving, setApproving] = useState(false);
@@ -233,25 +235,43 @@ export function AIAuthorityBuilderCorpusReviewPage() {
     aiAuthorityBuilderApi.getStatus().then((s) => setAiEnabled(s.ai_enabled));
   }, []);
 
+  // Milestone 14: these 14 fetches used to have no .catch() at all -- any
+  // single failing endpoint left its field's state permanently null,
+  // which the shared Section component (below) renders identically to
+  // "still loading" forever, with no indication anything failed and no
+  // way to retry. Each fetch is now attributed to `sectionLoadErrors` so
+  // at least one visible signal exists, with a single retry-everything
+  // action rather than 14 separate per-field retry buttons.
+  const [sectionLoadErrors, setSectionLoadErrors] = useState<string[]>([]);
+
   function loadAll() {
     if (!corpusId) return;
-    aiAuthorityBuilderApi.getCorpus(corpusId).then(setCorpus);
-    aiAuthorityBuilderApi.getSummary(corpusId).then(setSummary);
-    aiPolicyBuilderApi.listCandidatesForCorpus(corpusId).then(setPolicies);
-    aiAuthorityBuilderApi.getPrincipals(corpusId).then(setPrincipals);
-    aiAuthorityBuilderApi.getResources(corpusId).then(setResources);
-    aiAuthorityBuilderApi.getOperations(corpusId).then(setOperations);
-    aiAuthorityBuilderApi.getRelationships(corpusId).then(setRelationships);
-    aiAuthorityBuilderApi.getConflicts(corpusId).then(setConflicts);
-    aiAuthorityBuilderApi.getGaps(corpusId).then(setGaps);
-    aiAuthorityBuilderApi.getQuestions(corpusId).then(setQuestions);
-    aiAuthorityBuilderApi.getCoverage(corpusId).then(setCoverage);
-    aiAuthorityBuilderApi.getMissingInformation(corpusId).then(setMissingInfo);
-    aiAuthorityBuilderApi.getDiff(corpusId).then(setDiff);
-    aiAuthorityBuilderApi.getApprovals(corpusId).then(setApprovals);
-    agentsApi.listPrincipals().then((list) => {
-      setResolvedPrincipalNameById(Object.fromEntries(list.map((p) => [p.id, p.name])));
-    });
+    setSectionLoadErrors([]);
+    function track<T>(label: string, promise: Promise<T>, setter: (v: T) => void) {
+      promise.then(setter).catch((e) =>
+        setSectionLoadErrors((prev) => [...prev, describeApiError(e, label)])
+      );
+    }
+    track("Corpus", aiAuthorityBuilderApi.getCorpus(corpusId), setCorpus);
+    track("Summary", aiAuthorityBuilderApi.getSummary(corpusId), setSummary);
+    track("Rules", aiPolicyBuilderApi.listCandidatesForCorpus(corpusId), setPolicies);
+    track("Principals", aiAuthorityBuilderApi.getPrincipals(corpusId), setPrincipals);
+    track("Resources", aiAuthorityBuilderApi.getResources(corpusId), setResources);
+    track("Operations", aiAuthorityBuilderApi.getOperations(corpusId), setOperations);
+    track("Relationships", aiAuthorityBuilderApi.getRelationships(corpusId), setRelationships);
+    track("Conflicts", aiAuthorityBuilderApi.getConflicts(corpusId), setConflicts);
+    track("Gaps", aiAuthorityBuilderApi.getGaps(corpusId), setGaps);
+    track("Questions", aiAuthorityBuilderApi.getQuestions(corpusId), setQuestions);
+    track("Coverage", aiAuthorityBuilderApi.getCoverage(corpusId), setCoverage);
+    track("Missing information", aiAuthorityBuilderApi.getMissingInformation(corpusId), setMissingInfo);
+    track("Diff", aiAuthorityBuilderApi.getDiff(corpusId), setDiff);
+    track("Approval history", aiAuthorityBuilderApi.getApprovals(corpusId), setApprovals);
+    agentsApi
+      .listPrincipals()
+      .then((list) => {
+        setResolvedPrincipalNameById(Object.fromEntries(list.map((p) => [p.id, p.name])));
+      })
+      .catch((e) => setSectionLoadErrors((prev) => [...prev, describeApiError(e, "Principal names")]));
   }
 
   useEffect(loadAll, [corpusId]);
@@ -290,8 +310,16 @@ export function AIAuthorityBuilderCorpusReviewPage() {
   async function submitAnswer(questionId: string) {
     const answer = answerDrafts[questionId];
     if (!answer?.trim()) return;
-    await aiAuthorityBuilderApi.answerQuestion(questionId, answer);
-    aiAuthorityBuilderApi.getQuestions(corpusId!).then(setQuestions);
+    setAnswerErrors((prev) => ({ ...prev, [questionId]: "" }));
+    setAnswerBusyId(questionId);
+    try {
+      await aiAuthorityBuilderApi.answerQuestion(questionId, answer);
+      aiAuthorityBuilderApi.getQuestions(corpusId!).then(setQuestions);
+    } catch (e) {
+      setAnswerErrors((prev) => ({ ...prev, [questionId]: describeApiError(e, "Save answer") }));
+    } finally {
+      setAnswerBusyId(null);
+    }
   }
 
   async function handleApprove() {
@@ -438,6 +466,29 @@ export function AIAuthorityBuilderCorpusReviewPage() {
         </p>
 
         {!aiEnabled && <AiComingSoonBanner />}
+
+        {sectionLoadErrors.length > 0 && (
+          <div
+            role="alert"
+            className="flex items-center justify-between gap-3 mb-4"
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              fontSize: 12,
+              backgroundColor: "rgba(245,158,11,0.08)",
+              color: "var(--pr-warning-amber)",
+              border: "1px solid rgba(245,158,11,0.2)",
+            }}
+          >
+            <span>
+              {sectionLoadErrors.length} section{sectionLoadErrors.length > 1 ? "s" : ""} failed to load
+              ({sectionLoadErrors.join("; ")}). The sections above may be showing stale or empty data.
+            </span>
+            <button onClick={loadAll} style={{ color: "var(--pr-authority-blue)", fontWeight: 500, flexShrink: 0 }}>
+              Retry all
+            </button>
+          </div>
+        )}
 
         {summary && tab === "graph" && (
           <div
@@ -640,11 +691,15 @@ export function AIAuthorityBuilderCorpusReviewPage() {
                       />
                       <button
                         onClick={() => submitAnswer(q.id)}
-                        style={{ color: "var(--pr-authority-blue)", fontSize: 13, padding: "6px 10px" }}
+                        disabled={answerBusyId === q.id}
+                        style={{ color: "var(--pr-authority-blue)", fontSize: 13, padding: "6px 10px", opacity: answerBusyId === q.id ? 0.5 : 1 }}
                       >
-                        Save
+                        {answerBusyId === q.id ? "Saving..." : "Save"}
                       </button>
                     </div>
+                  )}
+                  {answerErrors[q.id] && (
+                    <p role="alert" style={{ color: "var(--pr-critical-red)", fontSize: 12, marginTop: 4 }}>{answerErrors[q.id]}</p>
                   )}
                 </div>
               ))}

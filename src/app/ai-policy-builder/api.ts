@@ -1,4 +1,5 @@
 import { apiClient } from "../live/apiClient";
+import { notifyResourceChanged } from "../services/resourceSync";
 import type { RuntimePolicyRequest } from "../policy-studio/types";
 import type { Candidate, PromoteResult, Upload } from "./types";
 
@@ -23,6 +24,12 @@ export const aiPolicyBuilderApi = {
     apiClient.put<Candidate>(`${BASE}/candidates/${candidateId}`, { content }),
   dismissCandidate: (candidateId: string) =>
     apiClient.post<Candidate>(`${BASE}/candidates/${candidateId}/dismiss`),
+  // Milestone 14: promotion creates a real new draft policy server-side,
+  // exactly like every other policy-creating action in policy-studio/api.ts
+  // -- PolicyListPage/RuntimePolicyDashboardPage need this signal to stay
+  // fresh if left open in another tab while a candidate is promoted here.
   promoteCandidate: (candidateId: string) =>
-    apiClient.post<PromoteResult>(`${BASE}/candidates/${candidateId}/promote`),
+    apiClient
+      .post<PromoteResult>(`${BASE}/candidates/${candidateId}/promote`)
+      .then((r) => { notifyResourceChanged("policies"); return r; }),
 };

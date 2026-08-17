@@ -34,8 +34,11 @@ export const organizationApi = {
   revokeApiKey: (id: string) => apiClient.delete<void>(`/v1/organization/api-keys/${id}`),
 
   listEnterpriseSystems: () => apiClient.get<EnterpriseSystem[]>("/v1/enterprise-systems"),
+  // Milestone 14: was the one mutation in this object not emitting
+  // "organization" -- PolicyWorkspacePage's Enterprise System dropdown
+  // depends on this list and had no way to learn it changed.
   createEnterpriseSystem: (name: string, type: EnterpriseSystemType) =>
-    apiClient.post<EnterpriseSystem>("/v1/enterprise-systems", { name, type }),
+    apiClient.post<EnterpriseSystem>("/v1/enterprise-systems", { name, type }).then((r) => { notifyResourceChanged("organization"); return r; }),
 };
 
 // Phase 5, Release 1: Organisation Structure (Business Units / Departments / Teams).

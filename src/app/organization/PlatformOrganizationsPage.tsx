@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { platformOrganizationsApi } from "./api";
 import { describeApiError } from "../live/format";
 import { Card } from "../components/ui/card";
+import { ConfirmButton } from "../components/ui/confirm-button";
 import type { OrganizationLifecycle } from "./types";
 
 // Milestone 3 (Enterprise Surface Isolation): the first UI ever built for
@@ -174,18 +175,33 @@ export function PlatformOrganizationsPage() {
                   <td className="px-4 py-3">
                     <span className="flex items-center gap-3 text-xs">
                       {org.status === "active" && (
-                        <button type="button" onClick={() => transition(org, "deactivate")} style={{ color: "var(--pr-authority-blue)" }}>
+                        <ConfirmButton
+                          variant="ghost"
+                          size="sm"
+                          confirmLabel="Confirm deactivate"
+                          onConfirm={() => transition(org, "deactivate")}
+                        >
                           Deactivate
-                        </button>
+                        </ConfirmButton>
                       )}
                       {org.status === "deactivated" && (
                         <>
-                          <button type="button" onClick={() => transition(org, "reactivate")} style={{ color: "var(--pr-authority-blue)" }}>
+                          <ConfirmButton
+                            variant="ghost"
+                            size="sm"
+                            confirmLabel="Confirm reactivate"
+                            onConfirm={() => transition(org, "reactivate")}
+                          >
                             Reactivate
-                          </button>
-                          <button type="button" onClick={() => transition(org, "archive")} style={{ color: "var(--pr-critical-red)" }}>
+                          </ConfirmButton>
+                          <ConfirmButton
+                            variant="tint-danger"
+                            size="sm"
+                            confirmLabel="Confirm archive"
+                            onConfirm={() => transition(org, "archive")}
+                          >
                             Archive
-                          </button>
+                          </ConfirmButton>
                         </>
                       )}
                     </span>

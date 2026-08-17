@@ -65,7 +65,14 @@ const MIN_REFRESH_INTERVAL_MS = 3000;
 // the caller's responsibility, not this hook's. Debounced to avoid a
 // refetch storm from rapid alt-tabbing.
 export function useResourceSync(kinds: ResourceKind[], onStale: () => void): void {
-  const lastRefreshRef = useRef(Date.now());
+  // Milestone 14: this used to initialize to Date.now(), which meant any
+  // real storage/focus event arriving within MIN_REFRESH_INTERVAL_MS of
+  // the component mounting was silently swallowed by the debounce guard
+  // below -- caught by this file's own first unit tests, not by hand
+  // tracing. 0 means the very first genuine trigger is never debounced
+  // against mount time, only against a previous trigger this hook itself
+  // already acted on.
+  const lastRefreshRef = useRef(0);
   const onStaleRef = useRef(onStale);
   onStaleRef.current = onStale;
   const kindsKey = kinds.join(",");

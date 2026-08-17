@@ -249,7 +249,11 @@ function SignerCard({ certificate }: { certificate: Certificate }) {
 }
 
 export function LiveTestIntent() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
+  // Only disable when we positively know the signed-in user lacks the
+  // permission -- with no session (Operator Key bypass still active),
+  // stay permissive rather than guessing (same rule ReviewQueuePage uses).
+  const lacksResolvePermission = !!user && !hasPermission("decisions.resolve");
   const [agents, setAgents] = useState<LiveAgent[] | null>(null);
   const [agentsError, setAgentsError] = useState<string | null>(null);
   const [actions, setActions] = useState<string[]>([]);
@@ -914,21 +918,26 @@ export function LiveTestIntent() {
                     <div className="flex gap-3">
                       <button
                         onClick={() => handleResolve("approved")}
-                        disabled={resolving}
-                        className="flex-1 px-4 py-2 rounded-lg text-sm flex items-center justify-center gap-2"
+                        disabled={resolving || lacksResolvePermission}
+                        className="flex-1 px-4 py-2 rounded-lg text-sm flex items-center justify-center gap-2 disabled:opacity-40"
                         style={{ backgroundColor: "rgba(34,197,94,0.1)", color: "var(--pr-trust-green)" }}
                       >
                         <CheckCircle2 className="w-4 h-4" /> Approve
                       </button>
                       <button
                         onClick={() => handleResolve("denied")}
-                        disabled={resolving}
-                        className="flex-1 px-4 py-2 rounded-lg text-sm flex items-center justify-center gap-2"
+                        disabled={resolving || lacksResolvePermission}
+                        className="flex-1 px-4 py-2 rounded-lg text-sm flex items-center justify-center gap-2 disabled:opacity-40"
                         style={{ backgroundColor: "rgba(239,68,68,0.1)", color: "var(--pr-critical-red)" }}
                       >
                         <XCircle className="w-4 h-4" /> Deny
                       </button>
                     </div>
+                    {lacksResolvePermission && (
+                      <p className="text-xs mt-2" style={{ color: "var(--pr-text-muted)" }}>
+                        Your role can view this decision but not resolve it.
+                      </p>
+                    )}
                     {resolveError && <Alert severity="error" className="text-sm mt-3">{resolveError}</Alert>}
                   </div>
                 )}

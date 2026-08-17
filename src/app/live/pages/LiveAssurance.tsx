@@ -6,6 +6,7 @@ import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
 import { describeApiError } from "../format";
+import { useResourceSync } from "../../services/resourceSync";
 import type { LivePolicy, LiveEvidence } from "../types";
 
 interface EvidencePayload {
@@ -48,6 +49,9 @@ export function LiveAssurance() {
   }
 
   useEffect(load, []);
+  // Milestone 14: this rollup depends on agents, policies, and evidence
+  // but had no way to learn any of them changed while it stayed mounted.
+  useResourceSync(["agents", "policies", "evidence"], load);
 
   const activePolicy = policies.find((p) => p.status === "active");
   const activeAgents = activeAgentTotal;

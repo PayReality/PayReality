@@ -16,8 +16,10 @@ import { FieldLabel } from "../components/ui/label";
 import { Input, getInputStyle } from "../components/ui/input";
 import { Button } from "../components/ui/button";
 import { ConfirmButton } from "../components/ui/confirm-button";
+import { Alert } from "../components/ui/alert";
 import { policyLifecycleApi } from "./lifecycleApi";
 import { useAuth } from "../auth/AuthContext";
+import { useResourceSync } from "../services/resourceSync";
 
 const EMPTY: RuntimePolicyRequest = {
   name: "",
@@ -58,25 +60,45 @@ export function PolicyWorkspacePage() {
   // list/create systems, unchanged by this release).
   const [enterpriseSystems, setEnterpriseSystems] = useState<EnterpriseSystem[]>([]);
 
-  useEffect(() => {
+  function loadEnterpriseSystems() {
     organizationApi.listEnterpriseSystems().then(setEnterpriseSystems).catch(() => setEnterpriseSystems([]));
-  }, []);
+  }
 
-  useEffect(() => {
+  useEffect(loadEnterpriseSystems, []);
+  // Milestone 14: this dropdown had no way to learn a system was
+  // registered elsewhere (e.g. Organisation Settings, open in another
+  // tab) -- "organization" had zero consumers anywhere in the app before
+  // this.
+  useResourceSync(["organization"], loadEnterpriseSystems);
+
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  function loadExisting() {
     if (isNew) return;
-    policyStudioApi.get(policyKey!).then((p) => {
-      setExisting(p);
-      setForm({
-        name: p.name,
-        description: p.description,
-        scope: p.scope,
-        conditions: p.conditions,
-        effect: p.effect,
-        constraints: p.constraints,
-        metadata: p.metadata,
-      });
-    });
-  }, [isNew, policyKey]);
+    setLoadError(null);
+    policyStudioApi
+      .get(policyKey!)
+      .then((p) => {
+        setExisting(p);
+        setForm({
+          name: p.name,
+          description: p.description,
+          scope: p.scope,
+          conditions: p.conditions,
+          effect: p.effect,
+          constraints: p.constraints,
+          metadata: p.metadata,
+        });
+      })
+      .catch((e) => setLoadError(describeApiError(e, "Loading policy")));
+  }
+
+  // Milestone 14: this fetch used to have no .catch() -- a failure left
+  // `existing` null forever with no error shown, and since `isNew` is
+  // derived only from the URL param (not from whether the fetch
+  // succeeded), the page silently rendered as a blank "New Rule" form
+  // for what was actually an existing policy that failed to load.
+  useEffect(loadExisting, [isNew, policyKey]);
 
   async function handleSave() {
     if (!form.scope.principal.trim() || !form.scope.action.trim()) {
@@ -167,6 +189,22 @@ export function PolicyWorkspacePage() {
   }
   function removeTag(tag: string) {
     updateMetadata({ ...form.metadata, tags: form.metadata.tags.filter((t) => t !== tag) });
+  }
+
+  if (!isNew && !existing && loadError) {
+    return (
+      <div className="p-8 max-w-3xl">
+        <Link to="/governance" style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>
+          &lt; Back to Governance
+        </Link>
+        <Alert severity="error" className="text-sm mt-4">
+          <div className="flex items-center gap-3">
+            <span>{loadError}</span>
+            <Button variant="ghost" size="sm" onClick={loadExisting}>Retry</Button>
+          </div>
+        </Alert>
+      </div>
+    );
   }
 
   return (
