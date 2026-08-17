@@ -23,11 +23,8 @@ container_apps_min_replicas           = 1
 # must consciously set this, no default exists.
 alert_notification_email = "payreality.ceo@gmail.com"
 
-# Redeployed for Milestone 15 (Enterprise Readiness Closure): closes a
-# live, real-session-confirmed RBAC bypass across policy/agent/AI-builder
-# read endpoints, found by a genuine authenticated probe against this
-# exact production API before this deploy (see
-# MILESTONE_15_ENTERPRISE_READINESS_AUDIT.md). No new migration this
-# round (no schema change). Built and pushed via `az acr build`, tagged
-# with the exact source commit as always.
-container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-a84f77b"
+# Redeployed a second time for Milestone 15: adds the Blob/Search
+# tenant-isolation defense-in-depth check (Workstream 11 hardening,
+# code-only, no schema change). No new migration this round. Built and
+# pushed via `az acr build`, tagged with the exact source commit as always.
+container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-0c7672d"
