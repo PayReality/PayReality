@@ -250,6 +250,33 @@ def test_g_list_documents_has_no_per_organization_isolation_a_known_limitation(d
     )
 
 
+def test_g_second_document_relationship_path_has_the_same_limitation(db):
+    """Milestone 13 (MILESTONE_13_LEGACY_DOCUMENT_TENANCY_SUMMARY.md)'s
+    forensic audit found a second, independent nullable FK to
+    documents.id -- Principal.source_document_id (models.py, present
+    since the initial migration) -- that Milestone 12's own audit missed
+    (it only traced Authority.document_id). No code anywhere ever sets
+    this column (confirmed: zero `Document(...)` constructions exist in
+    application code at all), so it poses no live risk today, but any
+    future schema decision for `documents` must account for BOTH paths,
+    not just the one through Authority. This test proves the same
+    disclosed limitation holds via this second path too: a document
+    reachable only through a specific organisation's Principal is still
+    visible to every other organisation via the unscoped list."""
+    org, principal, _ = _org_with_agent(db, "Org A")
+    doc = Document(id=uuid.uuid4(), name="cited-by-principal.pdf", content=b"x", status="extracted")
+    db.add(doc)
+    db.flush()
+    principal.source_document_id = doc.id
+    db.commit()
+
+    documents = document_service.list_documents(db)
+    assert any(d.id == doc.id for d in documents), (
+        "the same structural limitation applies regardless of which FK "
+        "path a document is reachable through"
+    )
+
+
 # =========================================================================
 # H: policy authorities organisation isolation
 # =========================================================================
