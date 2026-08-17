@@ -244,11 +244,11 @@ export function UsersPage() {
               <h3 className="text-xs font-medium mb-2" style={{ color: "var(--pr-text-muted)" }}>Pending invitations</h3>
               <ul className="space-y-1.5">
                 {invitations.map((inv) => (
-                  <li key={inv.id} className="flex items-center justify-between text-xs">
+                  <li key={inv.id} className="flex items-center justify-between gap-3 text-xs">
                     <span style={{ color: "var(--pr-text-secondary)" }}>
                       {inv.email} &middot; {ROLE_LABELS[inv.role as keyof typeof ROLE_LABELS] ?? inv.role}
                     </span>
-                    <button type="button" onClick={() => revokeInvitation(inv.id)} style={{ color: "var(--pr-critical-red)" }}>
+                    <button type="button" onClick={() => revokeInvitation(inv.id)} style={{ color: "var(--pr-critical-red)", flexShrink: 0 }}>
                       Revoke
                     </button>
                   </li>

@@ -134,11 +134,11 @@ export function ReviewQueuePage() {
 
       {pending?.map((p) => (
         <Card key={p.policy_key} padding={16} style={{ marginBottom: 12 }}>
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between gap-3 mb-2">
             <Link to={`/governance/${p.policy_key}`} style={{ color: "var(--pr-authority-blue)" }}>
               {p.name} (v{p.version})
             </Link>
-            <div className="flex gap-2">
+            <div className="flex gap-2" style={{ flexShrink: 0 }}>
               {confirming?.policyKey === p.policy_key ? (
                 <>
                   <button

@@ -129,7 +129,7 @@ export function VersionsPage() {
       {versions?.map((v) => (
         <div
           key={v.version}
-          className="flex items-center justify-between py-2"
+          className="flex items-center justify-between gap-3 py-2"
           style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}
         >
           <div className="flex items-center gap-3">

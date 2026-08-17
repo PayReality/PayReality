@@ -135,7 +135,7 @@ export function AgentDetailPage() {
     <div className="p-8 max-w-4xl" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
       <Link to="/agents" style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>&lt; Back to Agents</Link>
 
-      <div className="flex items-center justify-between mt-2 mb-1">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-1">
         <h1 style={{ color: "var(--pr-text-primary)" }}>{agent.name}</h1>
         <AgentStatusBadge status={agent.status} />
       </div>

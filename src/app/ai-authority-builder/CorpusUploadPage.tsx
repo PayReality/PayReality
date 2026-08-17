@@ -144,12 +144,12 @@ export function AIAuthorityBuilderUploadPage() {
         {files.length > 0 && (
           <div className="mb-4">
             {files.map((f, i) => (
-              <div key={i} className="flex items-center justify-between py-1" style={{ fontSize: 13, color: "var(--pr-text-secondary)" }}>
-                <span>{f.name}</span>
+              <div key={i} className="flex items-center justify-between gap-3 py-1" style={{ fontSize: 13, color: "var(--pr-text-secondary)" }}>
+                <span style={{ wordBreak: "break-word" }}>{f.name}</span>
                 <button
                   onClick={() => removeFile(i)}
                   aria-label={`Remove ${f.name}`}
-                  style={{ color: "var(--pr-critical-red)", fontSize: 12, padding: "4px 8px" }}
+                  style={{ color: "var(--pr-critical-red)", fontSize: 12, padding: "4px 8px", flexShrink: 0 }}
                 >
                   Remove
                 </button>

@@ -242,15 +242,15 @@ export function PolicySimulationPage() {
               scenarios.map((s) => {
                 const run = scenarioRuns[s.id];
                 return (
-                  <div key={s.id} className="flex items-center justify-between" style={{ padding: "8px 0", borderTop: "1px solid var(--pr-overlay-05)" }}>
-                    <div>
-                      <div style={{ fontSize: 13, color: "var(--pr-text-primary)" }}>{s.name}</div>
+                  <div key={s.id} className="flex items-center justify-between gap-3" style={{ padding: "8px 0", borderTop: "1px solid var(--pr-overlay-05)" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, color: "var(--pr-text-primary)", wordBreak: "break-word" }}>{s.name}</div>
                       <div style={{ fontSize: 11, color: "var(--pr-text-muted)" }}>
                         Expected: {DECISION_STYLE[s.expected_outcome]?.label ?? s.expected_outcome}
                         {run && <> &middot; Actual: {DECISION_STYLE[run.actual]?.label ?? run.actual}</>}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
                       {run && <SmallBadge ok={run.passed} trueLabel="PASS" falseLabel="FAIL" />}
                       <Button size="sm" variant="ghost" onClick={() => runSavedScenario(s.id)}>Run</Button>
                     </div>
@@ -300,9 +300,9 @@ export function PolicySimulationPage() {
                   </summary>
                   <div style={{ marginTop: 8, maxHeight: 240, overflowY: "auto" }}>
                     {batchResult.sample_rows.map((r) => (
-                      <div key={r.row_number} className="flex items-center justify-between" style={{ padding: "4px 0", borderTop: "1px solid var(--pr-overlay-05)" }}>
+                      <div key={r.row_number} className="flex items-center justify-between gap-3" style={{ padding: "4px 0", borderTop: "1px solid var(--pr-overlay-05)" }}>
                         <span style={{ color: "var(--pr-text-secondary)" }}>#{r.row_number} {r.principal} &middot; {r.action}</span>
-                        <span style={{ color: r.error ? "var(--pr-critical-red)" : DECISION_STYLE[r.decision ?? ""]?.color }}>
+                        <span style={{ flexShrink: 0, color: r.error ? "var(--pr-critical-red)" : DECISION_STYLE[r.decision ?? ""]?.color }}>
                           {r.error ?? DECISION_STYLE[r.decision ?? ""]?.label ?? r.decision}
                         </span>
                       </div>
@@ -347,11 +347,11 @@ export function PolicySimulationPage() {
                 <div style={sectionTitle}>Decision Explanation</div>
                 {result.rules.map((r, i) => (
                   <div key={r.policy_id} style={{ padding: "10px 0", borderTop: i > 0 ? "1px solid var(--pr-overlay-05)" : undefined }}>
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-3">
                       <span style={{ fontSize: 13, color: "var(--pr-text-primary)", fontWeight: 500 }}>
                         Rule {i + 1} &middot; {r.policy_name}
                       </span>
-                      <SmallBadge ok={r.matched} trueLabel="PASSED" falseLabel="FAILED" />
+                      <span style={{ flexShrink: 0 }}><SmallBadge ok={r.matched} trueLabel="PASSED" falseLabel="FAILED" /></span>
                     </div>
                     <p style={{ fontSize: 12, color: "var(--pr-text-muted)", marginTop: 2 }}>{r.summary}</p>
                     {r.conditions.map((c, ci) => (

@@ -12,13 +12,13 @@ import type { LifecycleDashboard, PolicyLifecycleSummary, PolicySearchParams } f
 
 function PolicyRow({ p, note }: { p: PolicyLifecycleSummary; note?: string }) {
   return (
-    <div className="flex items-center justify-between py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
+    <div className="flex items-center justify-between gap-3 py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
       <div className="flex items-center gap-3">
         <Link to={`/governance/${p.policy_key}`} style={{ color: "var(--pr-authority-blue)" }}>{p.name}</Link>
         <span style={{ color: "var(--pr-text-muted)" }}>v{p.version}</span>
         <PolicyStatusBadge status={p.effective_status} />
       </div>
-      {note && <span style={{ color: "var(--pr-text-muted)" }}>{note}</span>}
+      {note && <span style={{ color: "var(--pr-text-muted)", flexShrink: 0 }}>{note}</span>}
     </div>
   );
 }
@@ -176,13 +176,13 @@ export function RuntimePolicyDashboardPage() {
           <Card style={{ marginBottom: 16 }}>
             <h2 className="text-sm font-medium mb-2" style={{ color: "var(--pr-text-primary)" }}>Upcoming changes</h2>
             {dashboard.upcoming_activations.map((s) => (
-              <div key={s.id} className="flex justify-between py-1" style={{ fontSize: 13, borderTop: "1px solid var(--pr-overlay-05)" }}>
+              <div key={s.id} className="flex justify-between gap-3 py-1" style={{ fontSize: 13, borderTop: "1px solid var(--pr-overlay-05)" }}>
                 <Link to={`/governance/${s.policy_key}`} style={{ color: "var(--pr-authority-blue)" }}>Activate v{s.version}</Link>
                 <span style={{ color: "var(--pr-text-muted)" }}>{new Date(s.effective_at).toLocaleString()}</span>
               </div>
             ))}
             {dashboard.upcoming_retirements.map((s) => (
-              <div key={s.id} className="flex justify-between py-1" style={{ fontSize: 13, borderTop: "1px solid var(--pr-overlay-05)" }}>
+              <div key={s.id} className="flex justify-between gap-3 py-1" style={{ fontSize: 13, borderTop: "1px solid var(--pr-overlay-05)" }}>
                 <Link to={`/governance/${s.policy_key}`} style={{ color: "var(--pr-warning-amber)" }}>Retire v{s.version}</Link>
                 <span style={{ color: "var(--pr-text-muted)" }}>{new Date(s.effective_at).toLocaleString()}</span>
               </div>

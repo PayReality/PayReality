@@ -526,11 +526,11 @@ export function AIAuthorityBuilderCorpusReviewPage() {
             <Section title="Principals" count={principals?.length ?? null} emptyLabel="No principals were found in this corpus.">
               {principals?.map((p) => (
                 <div key={p.id} style={rowStyle}>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <span style={{ color: "var(--pr-text-primary)" }}>
                       {p.name}{p.role ? `, ${p.role}` : ""}{p.reports_to ? ` (reports to ${p.reports_to})` : ""}
                     </span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
                       {p.resolved_principal_id ? (
                         <span style={{ fontSize: 12, color: "var(--pr-trust-green)" }}>
                           Resolved &rarr; {resolvedPrincipalNameById[p.resolved_principal_id] ?? p.resolved_principal_id}
@@ -564,11 +564,11 @@ export function AIAuthorityBuilderCorpusReviewPage() {
             <Section title="Resources" count={resources?.length ?? null} emptyLabel="No resources were found in this corpus.">
               {resources?.map((r) => (
                 <div key={r.id} style={rowStyle}>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <span style={{ color: "var(--pr-text-primary)" }}>
                       {r.name}{r.description ? `, ${r.description}` : ""}
                     </span>
-                    <ConfidenceBadge confidence={r.confidence} />
+                    <span style={{ flexShrink: 0 }}><ConfidenceBadge confidence={r.confidence} /></span>
                   </div>
                   <Citation excerpt={r.source_excerpt} location={r.source_location} />
                   <Explainability item={r} />
@@ -579,11 +579,11 @@ export function AIAuthorityBuilderCorpusReviewPage() {
             <Section title="Operations" count={operations?.length ?? null} emptyLabel="No operations were found in this corpus.">
               {operations?.map((o) => (
                 <div key={o.id} style={rowStyle}>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <span style={{ color: "var(--pr-text-primary)" }}>
                       {o.name}{o.description ? `, ${o.description}` : ""}
                     </span>
-                    <ConfidenceBadge confidence={o.confidence} />
+                    <span style={{ flexShrink: 0 }}><ConfidenceBadge confidence={o.confidence} /></span>
                   </div>
                   <Citation excerpt={o.source_excerpt} location={o.source_location} />
                   <Explainability item={o} />
@@ -600,14 +600,14 @@ export function AIAuthorityBuilderCorpusReviewPage() {
                 const busy = relationshipBusyId === r.id;
                 return (
                   <div key={r.id} style={rowStyle}>
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-3">
                       <span style={{ color: "var(--pr-text-primary)" }}>
                         <span style={{ textTransform: "uppercase", fontSize: 11, color: "var(--pr-authority-blue)", marginRight: 8 }}>
                           {r.kind}
                         </span>
                         {r.from_principal} &rarr; {r.to_principal}
                       </span>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
                         <span
                           style={{
                             fontSize: 11,
@@ -743,9 +743,9 @@ export function AIAuthorityBuilderCorpusReviewPage() {
           >
             {missingInfo?.map((m, i) => (
               <div key={`code-${i}`} style={rowStyle}>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3">
                   <span style={{ color: "var(--pr-warning-amber)" }}>{m.description}</span>
-                  <span style={{ fontSize: 11, color: "var(--pr-text-muted)", textTransform: "uppercase" }}>
+                  <span style={{ fontSize: 11, color: "var(--pr-text-muted)", textTransform: "uppercase", flexShrink: 0 }}>
                     {m.category.replace(/_/g, " ")}
                   </span>
                 </div>
@@ -753,9 +753,9 @@ export function AIAuthorityBuilderCorpusReviewPage() {
             ))}
             {gaps?.map((g) => (
               <div key={g.id} style={rowStyle}>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3">
                   <span style={{ color: "var(--pr-warning-amber)" }}>{g.description}</span>
-                  <ConfidenceBadge confidence={g.confidence} />
+                  <span style={{ flexShrink: 0 }}><ConfidenceBadge confidence={g.confidence} /></span>
                 </div>
                 <Citation excerpt={g.source_excerpt} location={g.source_location} />
               </div>
@@ -836,11 +836,11 @@ export function AIAuthorityBuilderCorpusReviewPage() {
           >
             {approvals?.map((a) => (
               <div key={a.id} style={rowStyle}>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3">
                   <span style={{ color: "var(--pr-text-primary)" }}>
                     Version {a.version} approved by {a.reviewer}
                   </span>
-                  <span style={{ fontSize: 12, color: "var(--pr-text-muted)" }}>
+                  <span style={{ fontSize: 12, color: "var(--pr-text-muted)", flexShrink: 0 }}>
                     {new Date(a.approved_at).toLocaleString()}
                   </span>
                 </div>

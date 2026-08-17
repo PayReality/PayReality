@@ -594,8 +594,8 @@ function ApiKeysSection() {
 
       <div className="space-y-1.5">
         {(keys ?? []).map((k) => (
-          <div key={k.id} className="flex items-center justify-between text-xs py-1.5" style={{ color: "var(--pr-text-secondary)" }}>
-            <span>
+          <div key={k.id} className="flex items-center justify-between gap-3 text-xs py-1.5" style={{ color: "var(--pr-text-secondary)" }}>
+            <span style={{ wordBreak: "break-word" }}>
               {k.name} <span style={{ color: "var(--pr-text-muted)" }}>({k.key_prefix}...)</span> -- {humanize(k.role)}
             </span>
             {k.revoked_at ? (
@@ -713,7 +713,7 @@ function IntegrationsTab() {
       </p>
       <div className="space-y-3">
         {rows.map((row) => (
-          <div key={row.key} className="flex items-center justify-between">
+          <div key={row.key} className="flex items-center justify-between gap-3">
             <span className="text-sm" style={{ color: "var(--pr-text-primary)" }}>{row.label}</span>
             {status ? (
               <Pill label={humanize(status[row.key])} color={INTEGRATION_COLORS[status[row.key]]} />
@@ -796,8 +796,8 @@ function EnterpriseSystemsTab() {
 
       <div className="space-y-1.5">
         {(systems ?? []).map((s) => (
-          <div key={s.id} className="flex items-center justify-between text-sm py-1.5" style={{ color: "var(--pr-text-secondary)" }}>
-            <span>
+          <div key={s.id} className="flex items-center justify-between gap-3 text-sm py-1.5" style={{ color: "var(--pr-text-secondary)" }}>
+            <span style={{ wordBreak: "break-word" }}>
               {s.name} <span style={{ color: "var(--pr-text-muted)", fontSize: 12 }}>({humanize(s.type)})</span>
             </span>
             <Pill label={humanize(s.status)} color={ENTERPRISE_SYSTEM_STATUS_COLORS[s.status]} />
@@ -949,7 +949,7 @@ function OrganisationHealthTab() {
     <div style={{ ...cardStyle, padding: 16, maxWidth: 480 }}>
       <div className="space-y-3">
         {rows.map((row) => (
-          <div key={row.key} className="flex items-center justify-between">
+          <div key={row.key} className="flex items-center justify-between gap-3">
             <span className="text-sm" style={{ color: "var(--pr-text-primary)" }}>{row.label}</span>
             {health ? (
               <Pill label={humanize(health[row.key])} color={HEALTH_COLORS[health[row.key]]} />
