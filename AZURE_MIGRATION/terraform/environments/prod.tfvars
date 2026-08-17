@@ -23,9 +23,11 @@ container_apps_min_replicas           = 1
 # must consciously set this, no default exists.
 alert_notification_email = "payreality.ceo@gmail.com"
 
-# Redeployed for Milestone 12 (Policy API Security Boundary): closes
-# the CRITICAL unauthenticated /v1/policies finding Milestone 11's
-# sweep discovered, reproduced live in production before this deploy.
-# No new migration this round (no schema change). Built and pushed via
-# `az acr build`, tagged with the exact source commit as always.
-container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-04b2817"
+# Redeployed for Milestone 15 (Enterprise Readiness Closure): closes a
+# live, real-session-confirmed RBAC bypass across policy/agent/AI-builder
+# read endpoints, found by a genuine authenticated probe against this
+# exact production API before this deploy (see
+# MILESTONE_15_ENTERPRISE_READINESS_AUDIT.md). No new migration this
+# round (no schema change). Built and pushed via `az acr build`, tagged
+# with the exact source commit as always.
+container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-a84f77b"

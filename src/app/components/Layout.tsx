@@ -30,21 +30,38 @@ import { TourProvider } from "../demo/tour/TourProvider";
 // Authority/Policy Studio/Runtime Decisions per the product simplification
 // review (PAYREALITY_UX_REVIEW.md): "Authority" collided with three other
 // unrelated uses of the same word elsewhere in the product.
-const navItems = [
+// Milestone 15: `permission` names the exact backend Permission this
+// destination's own page depends on to show real content (cross-checked
+// against server/app/domain/rbac/permissions.py's actual route gates,
+// not guessed) -- a real-session RBAC audit found every one of these
+// items rendered unconditionally, so a Reviewer/Executive/Agent Admin
+// routinely saw a nav entry that always dead-ended on "you don't have
+// permission." `undefined` means genuinely no permission is required
+// (Overview is a general landing page).
+const navItems: { path: string; label: string; icon: typeof Bot; permission?: string }[] = [
   // In the public demo, "/" is the dedicated landing page (DemoLanding),
   // not the real dashboard -- Overview points at the always-present
   // /overview alias instead so the sidebar still reaches it.
   { path: DEMO_MODE ? "/overview" : "/", label: "Overview", icon: Compass },
-  { path: "/agents", label: "Agents", icon: Bot },
-  { path: "/governance", label: "Governance", icon: ScrollText },
-  { path: "/decisions", label: "Decisions", icon: FlaskConical },
-  { path: "/evidence", label: "Evidence", icon: Database },
-  { path: "/assurance", label: "Assurance", icon: Building2 },
-  { path: "/organization", label: "Organisation Settings", icon: Settings },
+  { path: "/agents", label: "Agents", icon: Bot, permission: "agent.view" },
+  { path: "/governance", label: "Governance", icon: ScrollText, permission: "runtime_policy.view" },
+  { path: "/decisions", label: "Decisions", icon: FlaskConical, permission: "decisions.view" },
+  { path: "/evidence", label: "Evidence", icon: Database, permission: "evidence.view" },
+  { path: "/assurance", label: "Assurance", icon: Building2, permission: "assurance.view" },
+  { path: "/organization", label: "Organisation Settings", icon: Settings, permission: "settings.view" },
 ];
 
 function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
   const location = useLocation();
+  const { user, hasPermission } = useAuth();
+  // Same permissive-when-unknown rule every other permission gate in
+  // this app already follows (ReviewQueuePage.tsx, AgentDetailPage.tsx):
+  // with no session (Operator Key bypass still active), show everything
+  // rather than guessing; only hide once a real signed-in user is
+  // positively known to lack the permission.
+  const visibleNavItems = navItems.filter(
+    (item) => !item.permission || !user || hasPermission(item.permission)
+  );
 
   const isActive = (path: string) => {
     if (path === "/") return location.pathname === "/";
@@ -81,7 +98,7 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
             The Workflow
           </p>
           <div className="space-y-0.5">
-            {navItems.map((item) => {
+            {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const active = isActive(item.path);
               return (

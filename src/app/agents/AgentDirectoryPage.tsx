@@ -47,21 +47,28 @@ export function AgentDirectoryPage() {
   const [registerMessage, setRegisterMessage] = useState<string | null>(null);
   const [registering, setRegistering] = useState(false);
   const [justActivatedName, setJustActivatedName] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [creatingPrincipal, setCreatingPrincipal] = useState(false);
 
   function loadPrincipals() {
-    agentsApi.listPrincipals().then((ps) => {
-      setPrincipals(ps);
-      setPrincipalById(Object.fromEntries(ps.map((p) => [p.id, p.name])));
-    });
+    agentsApi
+      .listPrincipals()
+      .then((ps) => {
+        setPrincipals(ps);
+        setPrincipalById(Object.fromEntries(ps.map((p) => [p.id, p.name])));
+      })
+      .catch((e) => setRegisterMessage(describeApiError(e, "Loading principals")));
   }
 
   function loadAgents() {
+    setLoadError(null);
     agentsApi
       .list({ q: q || undefined, status: statusFilter || undefined, environment: environmentFilter || undefined, limit: PAGE_SIZE, offset })
       .then((page) => {
         setAgents(page.agents);
         setTotal(page.total);
-      });
+      })
+      .catch((e) => setLoadError(describeApiError(e, "Loading agents")));
   }
 
   useEffect(loadPrincipals, []);
@@ -83,11 +90,18 @@ export function AgentDirectoryPage() {
 
   async function handleCreatePrincipal() {
     if (!newPrincipalName.trim()) return;
-    const principal = await agentsApi.createPrincipal(newPrincipalName);
-    setPrincipals((prev) => [...prev, principal]);
-    setPrincipalById((prev) => ({ ...prev, [principal.id]: principal.name }));
-    setPrincipalId(principal.id);
-    setNewPrincipalName("");
+    setCreatingPrincipal(true);
+    try {
+      const principal = await agentsApi.createPrincipal(newPrincipalName);
+      setPrincipals((prev) => [...prev, principal]);
+      setPrincipalById((prev) => ({ ...prev, [principal.id]: principal.name }));
+      setPrincipalId(principal.id);
+      setNewPrincipalName("");
+    } catch (e) {
+      setRegisterMessage(describeApiError(e, "Create principal"));
+    } finally {
+      setCreatingPrincipal(false);
+    }
   }
 
   async function handleRegister() {
@@ -228,10 +242,11 @@ export function AgentDirectoryPage() {
           </div>
           <button
             onClick={handleCreatePrincipal}
-            className="px-4 py-2 rounded-lg text-sm border"
+            disabled={creatingPrincipal || !newPrincipalName.trim()}
+            className="px-4 py-2 rounded-lg text-sm border disabled:opacity-40"
             style={{ borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-secondary)" }}
           >
-            Create
+            {creatingPrincipal ? "Creating..." : "Create"}
           </button>
         </div>
 
@@ -312,7 +327,17 @@ export function AgentDirectoryPage() {
         )}
       </div>
 
+      {loadError && (
+        <Alert severity="warning" style={{ marginBottom: 16 }}>
+          <div className="flex items-center gap-3">
+            <span>{loadError}</span>
+            <Button variant="ghost" size="sm" onClick={loadAgents}>Retry</Button>
+          </div>
+        </Alert>
+      )}
+
       <Card padding={0} style={{ overflow: "hidden" }}>
+        <div className="overflow-x-auto">
         <table className="w-full text-sm" style={{ color: "var(--pr-text-primary)" }}>
           <thead>
             <tr style={{ color: "var(--pr-text-muted)", textAlign: "left", fontSize: 12, borderBottom: "1px solid var(--pr-overlay-05)" }}>
@@ -394,6 +419,7 @@ export function AgentDirectoryPage() {
             )}
           </tbody>
         </table>
+        </div>
       </Card>
 
       <div className="flex items-center justify-between mt-3" style={{ fontSize: 12, color: "var(--pr-text-muted)" }}>

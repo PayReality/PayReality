@@ -194,6 +194,21 @@ def index_document(
         logger.exception("authority_intelligence_index_failed corpus_id=%s document_id=%s", corpus_id, document_id)
 
 
+def _scoped_filter(corpus_id: uuid.UUID, organization_id: uuid.UUID | None) -> str:
+    """Milestone 15 (Blob/Search tenant hardening, Workstream 11): the
+    single place this OData filter is ever constructed. Milestone 13's
+    audit found every existing caller applied it correctly, but noted
+    the string-interpolated filter had no backstop if a future caller
+    forgot to build it -- centralizing construction here means there is
+    only one place to get it right, and only one place to review when
+    the index's tenant-scoping logic ever needs to change. Both values
+    are internally-generated UUIDs (never raw user input), so injection
+    risk is structurally low, but this still isn't the place to relax
+    that assumption."""
+    org_value = str(organization_id) if organization_id is not None else ""
+    return f"corpus_id eq '{corpus_id}' and organization_id eq '{org_value}'"
+
+
 def retrieve_corpus_text(corpus_id: uuid.UUID, organization_id: uuid.UUID | None = None, client=None) -> str | None:
     """Retrieves every indexed document belonging to this corpus and
     concatenates them in the exact `=== FILE: <filename> ===` format
@@ -212,24 +227,38 @@ def retrieve_corpus_text(corpus_id: uuid.UUID, organization_id: uuid.UUID | None
     a relevance-ranked subset -- retrieval here is what makes that
     deterministic and traceable, not what makes it approximate.
 
-    Milestone 3 (Enterprise Surface Isolation): the query filter now
-    also requires organization_id to match -- confirmed filtered only
-    by corpus_id before this, with no tenant boundary in the index
-    itself at all (MULTI_TENANT_ARCHITECTURE_VERIFICATION.md). Since
-    corpus_id already belongs to exactly one organization in Postgres,
-    this is defense in depth against the index ever drifting out of
-    sync with that fact, not the only thing standing between two
-    tenants' documents. `client` is injectable, see
+    Milestone 3 (Enterprise Surface Isolation): the query filter also
+    requires organization_id to match -- confirmed filtered only by
+    corpus_id before this, with no tenant boundary in the index itself
+    at all (MULTI_TENANT_ARCHITECTURE_VERIFICATION.md).
+
+    Milestone 15 (Workstream 11 hardening): the query-side filter above
+    is no longer the *only* thing standing between two tenants' documents
+    -- every result is now independently re-checked against the expected
+    scope below (`_scoped_filter` centralizes the query itself). This is
+    the actual "backstop that doesn't depend solely on developer
+    discipline" the milestone's own hardening proposal asked for: if the
+    index's own filtering were ever bypassed or misconfigured, a
+    cross-tenant document would be dropped here, fail-closed, rather than
+    silently returned. `client` is injectable, see
     upload_document_to_blob's docstring for why."""
     client = client or _search_client()
     if client is None:
         return None
-    org_value = str(organization_id) if organization_id is not None else ""
     try:
-        results = client.search(
-            search_text="*", filter=f"corpus_id eq '{corpus_id}' and organization_id eq '{org_value}'"
-        )
-        parts = [f"=== FILE: {r['filename']} ===\n{r['content']}" for r in results]
+        results = client.search(search_text="*", filter=_scoped_filter(corpus_id, organization_id))
+        parts = []
+        for r in results:
+            if str(r.get("corpus_id")) != str(corpus_id) or str(r.get("organization_id")) != (
+                str(organization_id) if organization_id is not None else ""
+            ):
+                logger.error(
+                    "authority_intelligence_scope_mismatch_dropped corpus_id=%s organization_id=%s "
+                    "result_corpus_id=%s result_organization_id=%s",
+                    corpus_id, organization_id, r.get("corpus_id"), r.get("organization_id"),
+                )
+                continue
+            parts.append(f"=== FILE: {r['filename']} ===\n{r['content']}")
     except Exception:
         logger.exception("authority_intelligence_retrieval_failed corpus_id=%s", corpus_id)
         return None

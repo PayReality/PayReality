@@ -143,8 +143,8 @@ def test_retrieve_corpus_text_filters_by_corpus_id_and_organization_id_and_conca
     corpus_id = uuid.uuid4()
     client = _FakeSearchClient(
         search_results=[
-            {"filename": "doa.txt", "content": "The Controller may approve up to $50,000."},
-            {"filename": "matrix.csv", "content": "role,limit\nController,75000"},
+            {"filename": "doa.txt", "content": "The Controller may approve up to $50,000.", "corpus_id": str(corpus_id), "organization_id": ""},
+            {"filename": "matrix.csv", "content": "role,limit\nController,75000", "corpus_id": str(corpus_id), "organization_id": ""},
         ]
     )
 
@@ -159,11 +159,45 @@ def test_retrieve_corpus_text_filters_by_corpus_id_and_organization_id_and_conca
 
 def test_retrieve_corpus_text_filters_by_the_given_organization_id():
     corpus_id, organization_id = uuid.uuid4(), uuid.uuid4()
-    client = _FakeSearchClient(search_results=[{"filename": "doa.txt", "content": "text"}])
+    client = _FakeSearchClient(search_results=[
+        {"filename": "doa.txt", "content": "text", "corpus_id": str(corpus_id), "organization_id": str(organization_id)}
+    ])
 
     svc.retrieve_corpus_text(corpus_id, organization_id=organization_id, client=client)
 
     assert client.last_search_filter == f"corpus_id eq '{corpus_id}' and organization_id eq '{organization_id}'"
+
+
+# --- Milestone 15 (Workstream 11 hardening): the defense-in-depth check ---
+# that no longer trusts the query-side filter alone -------------------------
+
+
+def test_retrieve_corpus_text_drops_a_result_whose_organization_id_does_not_match():
+    """Simulates the index's own filter being bypassed or misconfigured --
+    a cross-tenant result must never reach the caller even if the Search
+    query itself somehow returned it."""
+    corpus_id, organization_id, other_org_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    client = _FakeSearchClient(search_results=[
+        {"filename": "mine.txt", "content": "mine", "corpus_id": str(corpus_id), "organization_id": str(organization_id)},
+        {"filename": "not-mine.txt", "content": "someone else's", "corpus_id": str(corpus_id), "organization_id": str(other_org_id)},
+    ])
+
+    text = svc.retrieve_corpus_text(corpus_id, organization_id=organization_id, client=client)
+
+    assert "mine.txt" in text
+    assert "not-mine.txt" not in text
+    assert "someone else's" not in text
+
+
+def test_retrieve_corpus_text_drops_a_result_whose_corpus_id_does_not_match():
+    corpus_id, other_corpus_id, organization_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    client = _FakeSearchClient(search_results=[
+        {"filename": "wrong-corpus.txt", "content": "wrong", "corpus_id": str(other_corpus_id), "organization_id": str(organization_id)},
+    ])
+
+    text = svc.retrieve_corpus_text(corpus_id, organization_id=organization_id, client=client)
+
+    assert text is None
 
 
 def test_retrieve_corpus_text_returns_none_not_empty_string_when_nothing_indexed():

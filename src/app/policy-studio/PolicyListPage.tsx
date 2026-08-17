@@ -195,6 +195,7 @@ export function PolicyListPage() {
       )}
 
       {policies && (
+        <div className="overflow-x-auto">
         <table className="w-full text-sm" style={{ color: "var(--pr-text-primary)" }}>
           <thead>
             <tr style={{ color: "var(--pr-text-muted)", textAlign: "left", fontSize: 12 }}>
@@ -256,6 +257,7 @@ export function PolicyListPage() {
             )}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   );
