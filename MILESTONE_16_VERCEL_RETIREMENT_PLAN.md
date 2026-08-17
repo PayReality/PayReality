@@ -43,14 +43,17 @@ or absent API calls).
 
 ## What must be true before retirement (checklist, none checked yet)
 
-- [ ] DNS cutover complete and stable for the full observation window, zero rollback triggers.
-- [ ] Both custom domains (`aisecurewatch.com` + `www`, `payreality.aisecurewatch.com`) resolve to Azure
-      and serve valid, trusted HTTPS.
+- [x] Both custom domains (`aisecurewatch.com` + `www`, `payreality.aisecurewatch.com`) resolve to Azure
+      and serve valid, trusted HTTPS. **VERIFIED LIVE.**
+- [x] Both GitHub repositories confirmed private (`gh repo view`, `"isPrivate": true` on both) with CI/CD
+      independently verified still working from the private state -- both deploy workflows manually
+      triggered post-visibility-change and both completed successfully. **VERIFIED LIVE.**
+- [x] No remaining production DNS record for either in-scope domain still points at Vercel. **VERIFIED.**
+- [ ] DNS cutover complete and stable for the full observation window, zero rollback triggers -- domains
+      are live and correct; the 48-72 hour elapsed-time window itself has not yet passed.
 - [ ] Full production validation (`MILESTONE_16_PRODUCTION_VALIDATION.md`'s Phase 7 checklist, including
-      all six Decision Center states) passed against the real domains, not just the staging subdomains.
-- [ ] Both GitHub repositories confirmed private (see completion summary) with CI/CD independently
-      verified still working from the private state.
-- [ ] No remaining production DNS record for either in-scope domain still points at Vercel.
+      all six Decision Center states) passed against the real domains, not just the staging subdomains --
+      still needs a real browser session or the user's own manual click-through.
 - [ ] Vercel's own dashboard confirms materially zero traffic to both in-scope projects during the
       observation window.
 

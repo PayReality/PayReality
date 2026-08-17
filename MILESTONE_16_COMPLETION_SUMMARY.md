@@ -76,14 +76,20 @@ Full detail: `MILESTONE_16_FRONTEND_MIGRATION_AUDIT.md`, `MILESTONE_16_AZURE_FRO
   verification.
 
 ### Repositories
-- **Are the relevant GitHub repositories private?** No. Correctly not yet attempted -- sequenced after
-  DNS cutover (now complete) and a documented observation window, per this milestone's own Phase 2/10
-  ordering.
-- **Does CI/CD still work with private repositories?** Not yet testable -- repositories are still public.
+- **Are the relevant GitHub repositories private?** **Yes, LIVE, VERIFIED** -- both `PayReality/
+  Payreality-website` and `PayReality/PayReality` confirmed private via `gh repo view` (`"isPrivate":
+  true`), not merely requested. Made private once Azure deployment was already confirmed working from
+  both repos (this milestone's own Phase 10 precondition), independent of the Vercel observation window,
+  which specifically gates Vercel *retirement* (Phase 11), not repo visibility (Phase 10) -- the two are
+  separate gates in this milestone's own phase ordering.
+- **Does CI/CD still work with private repositories?** **VERIFIED, not assumed** -- per this milestone's
+  own explicit instruction ("do not assume private repository access is configured correctly, actually
+  test it"), the deploy workflow was manually triggered on both repos immediately after the visibility
+  change and both completed successfully, confirmed via `gh run list`. All three production domains and
+  the API were re-checked immediately after and remain healthy (`200` on all four).
 - **Are there no production secrets in the repositories?** **VERIFIED** -- full history scan of both
   repositories, current tree and every file ever committed, found zero private keys, API key patterns, or
-  `.env` files with real values. Both repositories are ready for the privacy transition from a
-  secrets-exposure standpoint specifically.
+  `.env` files with real values, confirmed before the visibility change.
 
 ### API
 - **Does the frontend still communicate with `api.aisecurewatch.com`?** **VERIFIED** for the dashboard
@@ -124,27 +130,34 @@ custom domains reached `"status": "Ready"` in Azure with valid, issued certifica
 was a clean, repeated, cache-flushed HTTPS check against all three real production domains, plus a live
 CORS preflight check against the real API confirming the dashboard's production origin is allowlisted.
 
+Since then: the Mixpanel project token was supplied by the user, set as a `VITE_MIXPANEL_TOKEN` GitHub
+Actions secret on both repos, and a redeploy triggered on each -- confirmed live by finding the token
+string in both live-served JS bundles. Both repositories were then made private
+(`gh repo edit --visibility private`), confirmed via `gh repo view`, and immediately re-tested per this
+milestone's own instruction not to assume private-repo access works: both deploy workflows were manually
+triggered and both completed successfully from the private state, with all three production domains and
+the API re-confirmed healthy immediately after.
+
 ## Verdict
 
 **AZURE FRONTEND MIGRATION NOT READY**
 
-The DNS cutover itself -- the step this environment structurally could not perform alone -- is now
-**complete and live-verified**. What remains is real, meaningfully scoped work, not a rubber stamp:
+The DNS cutover, analytics parity, and repository privacy transition -- the three steps requiring real
+external action (Namecheap DNS, a credential only the user held, and a visibility change with its own
+verification requirement) -- are now **complete and live-verified**. What remains is narrower than
+before:
 
 1. **Full browser-level production validation** -- the dashboard's login, RBAC, and all six Decision
    Center states, plus the marketing site's forms/responsive behavior -- still requires either a real
    browser (unavailable this session, a standing environment limitation) or the user's own manual
-   click-through. The CORS precondition that would have made this untestable even with a browser is now
+   click-through. The CORS precondition that would have made this untestable even with a browser is
    confirmed resolved, which is real, meaningful progress, but it is not the same claim as "the dashboard
    was clicked through and works."
-2. **The Mixpanel analytics token** still needs to be supplied to GitHub Actions secrets for true feature
-   parity with the current Vercel behavior (the app functions correctly without it; analytics is simply
-   silently off on Azure right now).
-3. **The observation window** -- recommend 48-72 hours of real traffic with zero rollback triggers,
-   matching Milestone 7's own precedent, starting from this cutover, not from a future date.
-4. **Private-repository transition and its own verification**, correctly sequenced after the observation
-   window, not before.
-5. **Vercel retirement**, correctly sequenced last, per `MILESTONE_16_VERCEL_RETIREMENT_PLAN.md`.
+2. **The observation window** -- recommend 48-72 hours of real traffic with zero rollback triggers,
+   matching Milestone 7's own precedent, starting from the DNS cutover, not from today.
+3. **Vercel retirement**, correctly sequenced last, per `MILESTONE_16_VERCEL_RETIREMENT_PLAN.md` --
+   requires the observation window above to actually elapse, which cannot happen inside a working
+   session by definition.
 
 Per this milestone's own instruction, work does not proceed into Enterprise Knowledge implementation as
 part of this milestone, and nothing above was rushed or fabricated to produce a premature READY verdict --
