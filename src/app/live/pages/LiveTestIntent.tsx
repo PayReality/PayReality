@@ -16,6 +16,7 @@ import { policyStudioApi } from "../../policy-studio/api";
 import { agentsApi } from "../../agents/api";
 import type { Certificate } from "../../agents/types";
 import { track, trackError } from "../../services/analytics";
+import { notifyResourceChanged, useResourceSync } from "../../services/resourceSync";
 import { HelpIcon } from "../../help/HelpIcon";
 import { NextStepGuidance } from "../../help/NextStepGuidance";
 import { useAuth } from "../../auth/AuthContext";
@@ -326,6 +327,14 @@ export function LiveTestIntent() {
     };
   }, []);
 
+  // Milestone 13 Phase 6A (cross-page state synchronization): this
+  // page's own mount already fetches current agents (the effect just
+  // above); this additionally re-fetches if an agent is registered/
+  // activated/suspended/etc. from ANOTHER tab, or if this tab was left
+  // open and is only now being looked at again -- the one real
+  // staleness gap a mount-only fetch can't cover on its own.
+  useResourceSync(["agents"], loadAgents);
+
   // Session identity replaces free-text reviewer entry (Stage I.6): a
   // logged-in user's name is already known server-side (Stage D records
   // resolved_by_user_id from the session regardless of what string this
@@ -482,6 +491,10 @@ export function LiveTestIntent() {
     // outcome (server/app/services/intent_service.py), so it's fetched
     // here immediately rather than waiting for the decision to resolve.
     loadEvidence(submitted.decision.decision_id);
+    // Milestone 13 Phase 6A: a new decision + evidence record now
+    // exists for any already-open Evidence/Assurance page to pick up.
+    notifyResourceChanged("decisions");
+    notifyResourceChanged("evidence");
 
     setCertificateLoading(true);
     agentsApi
@@ -532,6 +545,10 @@ export function LiveTestIntent() {
         resolved_by: resolverName.trim() || "unspecified reviewer",
         reason: resolution === "approved" ? "Reviewed and approved." : "Reviewed and denied.",
       });
+      // Milestone 13 Phase 6A: an already-open Evidence/Assurance page
+      // (this tab or another) depends on this resolution existing.
+      notifyResourceChanged("decisions");
+      notifyResourceChanged("evidence");
       const latest = await apiClient.get<LiveDecision>(`/v1/decisions/${decision.id}`);
       setDecision(latest);
       // Resolution appends a second, separate Evidence record

@@ -1,5 +1,6 @@
 import { apiClient } from "../live/apiClient";
 import type { LiveEvidence } from "../live/types";
+import { notifyResourceChanged } from "../services/resourceSync";
 import type {
   ApiKey,
   BusinessUnit,
@@ -22,7 +23,7 @@ import type {
 export const organizationApi = {
   getSettings: () => apiClient.get<OrganizationSettings>("/v1/organization/settings"),
   updateSettings: (body: Partial<OrganizationSettings>) =>
-    apiClient.patch<OrganizationSettings>("/v1/organization/settings", body),
+    apiClient.patch<OrganizationSettings>("/v1/organization/settings", body).then((r) => { notifyResourceChanged("organization"); return r; }),
   getIntegrations: () => apiClient.get<IntegrationsStatus>("/v1/organization/integrations"),
   getHealth: () => apiClient.get<HealthStatus>("/v1/organization/health"),
   exportEvidence: () => apiClient.get<LiveEvidence[]>("/v1/organization/exports/evidence"),
@@ -38,29 +39,38 @@ export const organizationApi = {
 };
 
 // Phase 5, Release 1: Organisation Structure (Business Units / Departments / Teams).
+// Milestone 13 Phase 6A: every mutation here signals "organization
+// changed" once it succeeds -- Agent registration's business-unit
+// picker, Authority Builder's principal assignment, and any other
+// org-structure-dependent view can pick up the change without a reload.
 export const organizationStructureApi = {
   listBusinessUnits: () => apiClient.get<BusinessUnit[]>("/v1/business-units"),
-  createBusinessUnit: (name: string) => apiClient.post<BusinessUnit>("/v1/business-units", { name }),
+  createBusinessUnit: (name: string) =>
+    apiClient.post<BusinessUnit>("/v1/business-units", { name }).then((r) => { notifyResourceChanged("organization"); return r; }),
   updateBusinessUnit: (id: string, name: string) =>
-    apiClient.patch<BusinessUnit>(`/v1/business-units/${id}`, { name }),
-  deleteBusinessUnit: (id: string) => apiClient.delete<void>(`/v1/business-units/${id}`),
+    apiClient.patch<BusinessUnit>(`/v1/business-units/${id}`, { name }).then((r) => { notifyResourceChanged("organization"); return r; }),
+  deleteBusinessUnit: (id: string) =>
+    apiClient.delete<void>(`/v1/business-units/${id}`).then((r) => { notifyResourceChanged("organization"); return r; }),
 
   listDepartments: (businessUnitId?: string) =>
     apiClient.get<Department[]>(
       `/v1/departments${businessUnitId ? `?business_unit_id=${encodeURIComponent(businessUnitId)}` : ""}`
     ),
   createDepartment: (businessUnitId: string, name: string) =>
-    apiClient.post<Department>("/v1/departments", { business_unit_id: businessUnitId, name }),
+    apiClient.post<Department>("/v1/departments", { business_unit_id: businessUnitId, name }).then((r) => { notifyResourceChanged("organization"); return r; }),
   updateDepartment: (id: string, name: string) =>
-    apiClient.patch<Department>(`/v1/departments/${id}`, { name }),
-  deleteDepartment: (id: string) => apiClient.delete<void>(`/v1/departments/${id}`),
+    apiClient.patch<Department>(`/v1/departments/${id}`, { name }).then((r) => { notifyResourceChanged("organization"); return r; }),
+  deleteDepartment: (id: string) =>
+    apiClient.delete<void>(`/v1/departments/${id}`).then((r) => { notifyResourceChanged("organization"); return r; }),
 
   listTeams: (departmentId?: string) =>
     apiClient.get<Team[]>(`/v1/teams${departmentId ? `?department_id=${encodeURIComponent(departmentId)}` : ""}`),
   createTeam: (departmentId: string, name: string) =>
-    apiClient.post<Team>("/v1/teams", { department_id: departmentId, name }),
-  updateTeam: (id: string, name: string) => apiClient.patch<Team>(`/v1/teams/${id}`, { name }),
-  deleteTeam: (id: string) => apiClient.delete<void>(`/v1/teams/${id}`),
+    apiClient.post<Team>("/v1/teams", { department_id: departmentId, name }).then((r) => { notifyResourceChanged("organization"); return r; }),
+  updateTeam: (id: string, name: string) =>
+    apiClient.patch<Team>(`/v1/teams/${id}`, { name }).then((r) => { notifyResourceChanged("organization"); return r; }),
+  deleteTeam: (id: string) =>
+    apiClient.delete<void>(`/v1/teams/${id}`).then((r) => { notifyResourceChanged("organization"); return r; }),
 };
 
 export const usersApi = {

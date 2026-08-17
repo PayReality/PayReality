@@ -4,6 +4,7 @@ import { policyStudioApi } from "./api";
 import type { RuntimePolicy } from "./types";
 import { PolicyStatusBadge } from "./components/PolicyStatusBadge";
 import { describeApiError } from "../live/format";
+import { useResourceSync } from "../services/resourceSync";
 import { HelpIcon } from "../help/HelpIcon";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
@@ -49,6 +50,9 @@ export function PolicyListPage() {
   }
 
   useEffect(load, []);
+  // Milestone 13 Phase 6A: catches a policy deployed/activated/retired
+  // from another tab, or this tab having been left open and revisited.
+  useResourceSync(["policies"], load);
 
   function selectSort(key: SortKey) {
     setSortKey(key);

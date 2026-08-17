@@ -9,6 +9,7 @@ import { saveAgentKeyPair } from "../live/agentKeyStore";
 import { describeApiError } from "../live/format";
 import { NextStepGuidance } from "../help/NextStepGuidance";
 import type { LiveAgent, LivePrincipal } from "../live/types";
+import { useResourceSync } from "../services/resourceSync";
 import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
@@ -65,6 +66,11 @@ export function AgentDirectoryPage() {
 
   useEffect(loadPrincipals, []);
   useEffect(loadAgents, [q, statusFilter, environmentFilter, offset]);
+  // Milestone 13 Phase 6A: this page's own filters already refetch on
+  // change; this additionally catches an agent mutated from a
+  // different tab (e.g. AgentDetailPage open elsewhere) or this tab
+  // having been left open and revisited.
+  useResourceSync(["agents", "certificates"], loadAgents);
 
   function toggleSelected(id: string) {
     setSelected((prev) => {

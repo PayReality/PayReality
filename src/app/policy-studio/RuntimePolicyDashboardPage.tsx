@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { policyLifecycleApi } from "./lifecycleApi";
 import { PolicyStatusBadge } from "./components/PolicyStatusBadge";
 import { formatStatus, describeApiError } from "../live/format";
+import { useResourceSync } from "../services/resourceSync";
 import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
@@ -41,6 +42,9 @@ export function RuntimePolicyDashboardPage() {
   }
 
   useEffect(loadDashboard, []);
+  // Milestone 13 Phase 6A: catches a policy lifecycle transition made
+  // from another tab, or this tab having been left open and revisited.
+  useResourceSync(["policies"], loadDashboard);
 
   async function runSearch() {
     setSearching(true);

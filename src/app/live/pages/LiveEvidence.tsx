@@ -4,6 +4,7 @@ import { apiClient } from "../apiClient";
 import { describeApiError, formatStatus } from "../format";
 import { HelpIcon } from "../../help/HelpIcon";
 import { trackError } from "../../services/analytics";
+import { useResourceSync } from "../../services/resourceSync";
 import { Card } from "../../components/ui/card";
 import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
@@ -48,6 +49,11 @@ export function LiveEvidence() {
   }
 
   useEffect(load, []);
+  // Milestone 13 Phase 6A: catches a decision/resolution created from
+  // another tab (or this tab's own Decision Center flow, just via the
+  // cross-tab path in case the two are open side by side), or this tab
+  // having been left open and revisited.
+  useResourceSync(["decisions", "evidence"], load);
 
   const verify = async (id: string) => {
     const result = await apiClient.post<{ valid: boolean }>(`/v1/evidence/${id}/verify`);
