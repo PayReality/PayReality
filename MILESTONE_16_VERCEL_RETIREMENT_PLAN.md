@@ -1,9 +1,10 @@
 # Milestone 16: Vercel Rollback and Retirement Plan
 
-**Status: Vercel is untouched and fully intact. Nothing in this plan has been executed yet -- DNS still
-points at Vercel for both in-scope domains, and both Vercel projects remain the live production serving
-path.** This document is the plan for after DNS cutover happens, not a record of retirement already
-performed.
+**Status: DNS cutover is complete -- all three in-scope domains now resolve to Azure and serve correctly
+(see `MILESTONE_16_PRODUCTION_VALIDATION.md`). The observation window described below starts now. Vercel
+remains untouched and fully intact as the rollback target; nothing in the retirement checklist has been
+executed.** This document is the plan for after the observation window passes, not a record of retirement
+already performed.
 
 ## Rollback triggers (objective, decided in advance)
 
@@ -81,6 +82,7 @@ domains, and neither is touched by any step above.
 
 Per this milestone's own explicit rule ("Do NOT delete Vercel before the rollback window") and ordinary
 operational care: retirement depends on a real, multi-day observation window against real cutover
-traffic, which cannot exist inside a single working session. DNS has not even been cut over yet (see
-`MILESTONE_16_COMPLETION_SUMMARY.md` for the exact current blocker), so an observation window has not
-begun, and nothing in this checklist can be truthfully marked complete yet.
+traffic, which cannot exist inside a single working session. DNS cutover is now complete (see
+`MILESTONE_16_COMPLETION_SUMMARY.md`), so the observation window starts from this point, but 48-72 hours
+of real elapsed time have not passed yet, and nothing in this checklist can be truthfully marked complete
+until they do.

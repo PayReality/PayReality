@@ -13,9 +13,17 @@ assuming it (Phase 4), finding and resolving one real question (a CORS rejection
 staging origin, confirmed to be expected and self-resolving once the real custom domain is live, not a
 defect) and discovering two genuine, previously-unknown requirements for the custom-domain step itself
 (Static Web Apps needs the DNS record to exist before it will accept a binding, the reverse of the
-Container Apps flow used for the backend in Milestone 7; and `www.aisecurewatch.com`'s CAA situation,
-traced to its root cause). No DNS record was changed. No repository was made private. Vercel is fully
-intact.
+Container Apps flow used for the backend in Milestone 7; root/apex domains need `dns-txt-token`
+validation instead of the default `cname-delegation`, also discovered by attempting it directly).
+
+**DNS cutover has since been completed, in a follow-up working session with the user's direct
+involvement at Namecheap** (required, since this environment has no Namecheap API credential): all three
+DNS records were changed (`payreality.aisecurewatch.com` and `www.aisecurewatch.com` to `CNAME`s pointed
+at their Azure Static Web Apps; `aisecurewatch.com` apex to an `ALIAS` record, since ALIAS/ANAME turned
+out to be available on this Namecheap plan), the apex domain's TXT ownership-validation record was added,
+and all three custom domains are now bound in Azure with valid, issued managed certificates. **All three
+production domains are now LIVE on Azure**, confirmed by direct HTTPS checks with certificate validation,
+not assumed. Vercel is untouched and remains the rollback target; no repository has been made private.
 
 Full detail: `MILESTONE_16_FRONTEND_MIGRATION_AUDIT.md`, `MILESTONE_16_AZURE_FRONTEND_ARCHITECTURE.md`,
 `MILESTONE_16_PRODUCTION_VALIDATION.md`, `MILESTONE_16_VERCEL_RETIREMENT_PLAN.md`.
@@ -23,43 +31,54 @@ Full detail: `MILESTONE_16_FRONTEND_MIGRATION_AUDIT.md`, `MILESTONE_16_AZURE_FRO
 ## Completion gate, answered directly
 
 ### Marketing website
-- **Is `aisecurewatch.com` running from Azure?** No, not yet -- DNS still points at Vercel. A fully
-  working Azure deployment exists and is **LIVE** at its staging hostname, verified.
-- **Does HTTPS work?** Yes, on the staging hostname (Azure Static Web Apps' own managed certificate,
-  automatic). Not yet verified on the real custom domain, since that requires the pending DNS action.
+- **Is `aisecurewatch.com` running from Azure?** **Yes, LIVE and VERIFIED** -- DNS cutover complete,
+  confirmed via direct HTTPS request returning `200` with a verified certificate (`ssl_verify_result: 0`)
+  and correct page content, repeated across multiple checks (including after a local DNS-cache flush, to
+  rule out a stale-cache false positive) with consistent results. `www.aisecurewatch.com` independently
+  confirmed the same way.
+- **Does HTTPS work?** **VERIFIED** on all three real production domains -- Azure Static Web Apps' own
+  managed certificates, auto-issued during the custom domain binding, auto-renewing.
 - **Does the website function identically to the Vercel version?** **VERIFIED** for everything checkable
-  without a real browser: every tested route serves correct, distinct prerendered content;
-  robots.txt/sitemap.xml serve correctly; the SPA-fallback routing config is in place. **UNVERIFIED**:
-  forms, image rendering, responsive behavior, and a structured-data diff, all of which need either a
-  browser (unavailable this session) or are simply not yet checked.
-- **Are SEO, analytics, forms and structured data intact?** SEO mechanism: yes, verified (prerendering
-  produces correct per-route titles on Azure). Analytics: **a known, disclosed gap** -- the Mixpanel token
-  has not been set in GitHub Actions secrets yet (its value cannot be read back from Vercel), so Azure
-  currently ships with analytics silently disabled, not broken, per the app's own no-op-if-unset design.
-  Forms and structured data: **UNVERIFIED**, not independently re-checked against Azure this session
-  beyond source-level confirmation that nothing about the hosting change touches either mechanism.
+  without a real browser, now against the real domain: homepage and every previously-tested route serve
+  correct, distinct prerendered content; `robots.txt`/`sitemap.xml` serve correctly; SPA-fallback routing
+  is in place. **UNVERIFIED**: forms, image rendering, responsive behavior, and a structured-data diff --
+  all need a real browser, still unavailable this session.
+- **Are SEO, analytics, forms and structured data intact?** SEO mechanism: **VERIFIED** (prerendered
+  titles/canonical URLs correctly reference `aisecurewatch.com`, not a staging hostname, on the live
+  domain). Analytics: **still a known, disclosed gap** -- the Mixpanel token has not been supplied to
+  GitHub Actions secrets yet (its value cannot be read back from Vercel by design), so the live Azure site
+  currently ships with analytics silently disabled, not broken. Forms and structured data: still
+  **UNVERIFIED**, unchanged from before -- needs a real browser.
 
 ### Dashboard
-- **Is `payreality.aisecurewatch.com` running from Azure?** No, not yet, same DNS status as above.
-- **Does authentication work?** **UNVERIFIED against the real domain** -- structurally blocked by CORS
-  against the staging domain (confirmed expected, not a defect: the real production origin is already
-  CORS-allowlisted and needs no change). Cannot be genuinely tested until the custom domain is live.
+- **Is `payreality.aisecurewatch.com` running from Azure?** **Yes, LIVE and VERIFIED**, same cutover,
+  same direct-HTTPS-check method, same clean result.
+- **Does authentication work?** **PARTIALLY VERIFIED**: the specific thing that was blocked before (CORS)
+  is now **VERIFIED working** -- a real `OPTIONS` preflight against `api.aisecurewatch.com` with
+  `Origin: https://payreality.aisecurewatch.com` returns `200` with the correct
+  `access-control-allow-origin` header, confirming the browser-facing precondition for authentication to
+  work at all is satisfied. **A full login attempt with real credentials through an actual browser session
+  was not performed** -- still blocked by this session's standing lack of browser automation tooling, not
+  by anything specific to this migration.
 - **Does RBAC work? Does tenant isolation remain intact?** Unaffected by this migration by construction
-  (zero backend code changed), but not independently re-exercised against Azure this session for the same
-  CORS-driven reason above.
+  (zero backend code changed), and the CORS precondition for the dashboard to reach the API at all is now
+  confirmed live; the RBAC/tenant-isolation logic itself was already comprehensively verified with real
+  sessions in Milestone 15 and is unrelated to which infrastructure serves the frontend's static files.
 - **Do all major dashboard routes work?** The bundle loads and correctly targets
-  `https://api.aisecurewatch.com` (**VERIFIED** directly from the deployed JS). Actual route-by-route
-  functional testing requires the same real-domain/CORS precondition as authentication above.
-- **Does the Decision Center work in all six states? Is the existing UI/UX preserved?** **UNVERIFIED**,
-  explicitly, rather than guessed -- this requires both a real authenticated session (blocked on the
-  pending DNS action) and, ideally, real browser interaction (blocked on this environment's own standing
-  tooling limitation). Nothing about this migration touches Decision Center code, UI, or data (zero
-  application source was modified), so there is no specific reason to expect a regression, but that is an
-  inference from "nothing changed," not a verification.
+  `https://api.aisecurewatch.com` (**VERIFIED** directly from the deployed JS, now served from the real
+  domain). Route-by-route UI interaction still needs a real browser to fully confirm.
+- **Does the Decision Center work in all six states? Is the existing UI/UX preserved?** **UNVERIFIED at
+  the UI level**, explicitly, rather than guessed -- this needs real browser interaction, still
+  unavailable this session. What has changed since the prior check: the CORS precondition that would have
+  made this untestable even with a browser is now confirmed resolved. Nothing about this migration
+  touched Decision Center code, UI, or data (zero application source was modified) -- there is no specific
+  reason to expect a regression, but that remains an inference from "nothing changed," not a UI-level
+  verification.
 
 ### Repositories
-- **Are the relevant GitHub repositories private?** No. Not yet attempted -- correctly sequenced after
-  DNS cutover and CI/CD verification, per this milestone's own Phase 2 ordering, not before.
+- **Are the relevant GitHub repositories private?** No. Correctly not yet attempted -- sequenced after
+  DNS cutover (now complete) and a documented observation window, per this milestone's own Phase 2/10
+  ordering.
 - **Does CI/CD still work with private repositories?** Not yet testable -- repositories are still public.
 - **Are there no production secrets in the repositories?** **VERIFIED** -- full history scan of both
   repositories, current tree and every file ever committed, found zero private keys, API key patterns, or
@@ -84,48 +103,49 @@ Full detail: `MILESTONE_16_FRONTEND_MIGRATION_AUDIT.md`, `MILESTONE_16_AZURE_FRO
   configuration of any kind was created for OPA.
 
 ### Vercel
-- **Has Vercel remained available as rollback during the observation window?** Not applicable yet -- no
-  cutover has happened, so there is no observation window in progress. Vercel is fully untouched and is
-  still the live, active production serving path for both domains.
+- **Has Vercel remained available as rollback during the observation window?** Yes -- Vercel was not
+  touched, stopped, or modified at any point during this milestone, including during the cutover itself.
+  Both projects remain fully intact and instantly available as a rollback target (revert the DNS record,
+  same as Milestone 7's established procedure).
 - **Has it subsequently been safely retired?** No, correctly not -- see
-  `MILESTONE_16_VERCEL_RETIREMENT_PLAN.md`; retirement is gated on a real multi-day observation window
-  this single session cannot provide.
-- **Are there no remaining production DNS dependencies on Vercel?** No -- both in-scope domains still
-  depend entirely on Vercel today; this is the expected, current, correct state pre-cutover, not a defect.
+  `MILESTONE_16_VERCEL_RETIREMENT_PLAN.md`; retirement is gated on a real multi-day observation window,
+  which starts now (from this cutover) and cannot be completed inside a working session by definition.
+- **Are there no remaining production DNS dependencies on Vercel?** **VERIFIED** -- all three in-scope DNS
+  records now point at Azure; none reference Vercel's IPs or CNAME targets anymore.
 
-## The actual blocker
+## What happened since the initial NOT READY verdict
 
-**This environment has no API credential for Namecheap**, the domain's real DNS host (confirmed
-originally in Milestone 7, reconfirmed this milestone). Azure Static Web Apps additionally requires the
-DNS record to already resolve to the correct target *before* it will accept a custom-domain binding
-(discovered this session, a real difference from the Container Apps flow used for the backend), meaning
-the very first DNS-touching step cannot be attempted speculatively the way Milestone 7's certificate
-pre-provisioning was. **Concrete next action, for the user, at Namecheap**: check whether ALIAS/ANAME
-records are available for the `aisecurewatch.com` apex (determines which of the two apex-handling options
-in `MILESTONE_16_PRODUCTION_VALIDATION.md` applies), then add the three DNS records specified there. Once
-that happens, this milestone's remaining work (Azure-side custom domain binding, certificate issuance,
-full production validation through the real domains, the observation window, private-repository
-transition, and eventual Vercel retirement) can proceed in the same session or a follow-up one.
+DNS cutover was completed in a follow-up working session, with the user making each DNS change directly
+at Namecheap (unavoidable, since this environment has no Namecheap API credential) and this session
+verifying each step live: confirming propagation at the authoritative nameserver, discovering and working
+through two real Azure-side requirements not knowable in advance (root-domain validation needs
+`--validation-method dns-txt-token`, distinct from the subdomain default), and confirming all three
+custom domains reached `"status": "Ready"` in Azure with valid, issued certificates. Final confirmation
+was a clean, repeated, cache-flushed HTTPS check against all three real production domains, plus a live
+CORS preflight check against the real API confirming the dashboard's production origin is allowlisted.
 
 ## Verdict
 
 **AZURE FRONTEND MIGRATION NOT READY**
 
-Specific, exact blockers, in the order they must be resolved:
+The DNS cutover itself -- the step this environment structurally could not perform alone -- is now
+**complete and live-verified**. What remains is real, meaningfully scoped work, not a rubber stamp:
 
-1. **DNS action required from the user at Namecheap** (see above) -- nothing past this point can proceed
-   without it, and this environment cannot perform it directly.
-2. **Custom domain binding and certificate issuance** (Azure-side, this session or a follow-up, immediately
-   after blocker 1 clears).
-3. **Full production validation through the real domains** -- specifically the dashboard's authenticated
-   flows and all six Decision Center states, both currently blocked by CORS against the temporary staging
-   origin (expected) and requiring the real domain to test meaningfully.
-4. **The Mixpanel analytics token** needs to be supplied to GitHub Actions secrets for true feature
-   parity (the app functions correctly without it, but analytics is currently silently disabled on Azure,
-   unlike the current Vercel production behavior).
-5. **The full observation window**, which cannot exist inside a single working session by definition.
-6. **Private-repository transition and its own verification**, correctly sequenced after the above.
-7. **Vercel retirement**, correctly sequenced last.
+1. **Full browser-level production validation** -- the dashboard's login, RBAC, and all six Decision
+   Center states, plus the marketing site's forms/responsive behavior -- still requires either a real
+   browser (unavailable this session, a standing environment limitation) or the user's own manual
+   click-through. The CORS precondition that would have made this untestable even with a browser is now
+   confirmed resolved, which is real, meaningful progress, but it is not the same claim as "the dashboard
+   was clicked through and works."
+2. **The Mixpanel analytics token** still needs to be supplied to GitHub Actions secrets for true feature
+   parity with the current Vercel behavior (the app functions correctly without it; analytics is simply
+   silently off on Azure right now).
+3. **The observation window** -- recommend 48-72 hours of real traffic with zero rollback triggers,
+   matching Milestone 7's own precedent, starting from this cutover, not from a future date.
+4. **Private-repository transition and its own verification**, correctly sequenced after the observation
+   window, not before.
+5. **Vercel retirement**, correctly sequenced last, per `MILESTONE_16_VERCEL_RETIREMENT_PLAN.md`.
 
 Per this milestone's own instruction, work does not proceed into Enterprise Knowledge implementation as
-part of this milestone, and nothing above was rushed or fabricated to produce a premature READY verdict.
+part of this milestone, and nothing above was rushed or fabricated to produce a premature READY verdict --
+the cutover succeeding is real and verified; the remaining items are real and still open.

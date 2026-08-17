@@ -67,11 +67,19 @@ analytics silently disabled -- **the application still functions correctly eithe
 existing, deliberate no-op-if-unset design in `analytics.ts`), but this is a real, known parity gap
 against the current Vercel production behavior, not something to claim is already matched.
 
-## Custom domain binding: real findings, not yet completed
+## Custom domain binding: COMPLETE (LIVE, VERIFIED)
 
-Attempting to bind each real domain to its Azure Static Web App this session (Azure-side actions only,
-**no DNS record was changed**) surfaced two concrete, real requirements that were not knowable without
-attempting it:
+**All three custom domains are now bound and serving in production**:
+`az staticwebapp hostname show` reports `"status": "Ready"` for `payreality.aisecurewatch.com`,
+`www.aisecurewatch.com`, and `aisecurewatch.com`, each with a valid, issued managed certificate, and
+direct HTTPS checks against all three confirm `200` with `ssl_verify_result: 0` and correct content (see
+`MILESTONE_16_PRODUCTION_VALIDATION.md`'s "Real production domain validation" section for the full
+results). The findings below, made while working through the binding, are kept as the record of what was
+actually required, not as open items.
+
+Attempting to bind each real domain to its Azure Static Web App (Azure-side actions, before any DNS
+record was changed) surfaced two concrete, real requirements that were not knowable without attempting
+it, plus a third discovered while completing the apex domain after DNS was changed:
 
 1. **Static Web Apps requires the DNS record to already point at the app's default hostname before
    Azure will accept the custom domain binding** -- a different order of operations than Container Apps'
@@ -96,29 +104,28 @@ attempting it:
    separate blocker requiring its own fix. This is **RECOMMENDED as the working assumption**, not yet
    independently confirmed by an actual successful binding, since that requires the DNS change to have
    already happened.
-3. **The apex domain (`aisecurewatch.com`) needs a specific decision, not just a record change**: apex
-   domains cannot be CNAME records by DNS specification, and Azure Static Web Apps' apex-domain support
-   depends on the registrar supporting an ALIAS/ANAME-style record (a CNAME-like record permitted at the
-   zone apex) or an equivalent Azure-specific TXT-validated `A`/`ALIAS` binding. **Whether Namecheap's
-   plan for this domain supports ALIAS/ANAME records is UNVERIFIED** -- this environment has no
-   Namecheap API credential (confirmed in Milestone 7, unchanged), so this can only be checked by the
-   user directly in the Namecheap dashboard. If ALIAS/ANAME is unavailable, the standard, well-established
-   fallback is a registrar-level URL redirect from the bare apex to `https://www.aisecurewatch.com`
-   (making `www` the real Azure-hosted target and the apex a pure redirect) -- common practice for
-   exactly this constraint, and worth deciding now rather than discovering it as a blocker mid-cutover.
+3. **The apex domain (`aisecurewatch.com`) needed a specific decision, resolved**: apex domains cannot be
+   `CNAME` records by DNS specification. **Confirmed live**: Namecheap's plan for this domain does offer
+   `ALIAS` records, so the apex uses `ALIAS -> lemon-bay-06710d110.7.azurestaticapps.net` -- the
+   URL-redirect-to-`www` fallback was not needed.
+4. **Root/apex domains require a different Azure validation method, discovered by attempting the
+   default one first**: `az staticwebapp hostname set --hostname aisecurewatch.com` (no extra flags)
+   returned the same `CNAME Record is invalid` error even after DNS was correctly pointed via the `ALIAS`
+   record above -- because the CLI's default `cname-delegation` validation method doesn't apply to root
+   domains at all (confirmed directly from `az staticwebapp hostname set --help`, which explicitly notes
+   `--hostname` "Only support sub domain in preview" for the default method, and documents
+   `--validation-method dns-txt-token` as the root-domain path). Re-running with
+   `--validation-method dns-txt-token` prompted for a TXT record
+   (`_dnsauth.aisecurewatch.com`, value `_vgb5p7h7faabqioc7ddrf4097nvhd3s`) -- once the user added it,
+   Azure's own validation polling picked it up and the domain reached `"status": "Ready"` without further
+   action.
 
-## Required next action (blocks all further progress on custom domains and DNS cutover)
+## DNS cutover: COMPLETE
 
-This is a genuine, disclosed handoff point, not a task this session's tooling can complete alone --
-**this environment has no API credential for Namecheap** (the domain's actual DNS host), confirmed
-originally in Milestone 7 and reconfirmed by this milestone's own domain inspection. The user must,
-at Namecheap, either:
-- Check whether ALIAS/ANAME record types are available for the `aisecurewatch.com` apex, and report back
-  which option to use (native ALIAS record if available; a URL-redirect-to-www fallback if not), **before**
-  any DNS record for either in-scope domain is changed, so the plan below can be finalized rather than
-  attempted blind; then
-- Add the exact records specified in `MILESTONE_16_PRODUCTION_VALIDATION.md`'s "Pending DNS actions"
-  section once that decision is made.
-
-No further Azure-side custom-domain work can proceed until this happens, since (per finding 1 above)
-Azure will not accept the binding until the DNS record already resolves to the correct target.
+The user changed all three DNS records directly at Namecheap (unavoidable -- this environment has no
+Namecheap API credential, confirmed originally in Milestone 7). Each change was verified live at the
+authoritative nameserver (`dns1`/`dns2.registrar-servers.com`) as it happened, not assumed from the
+Namecheap panel alone. One transient issue during the apex change (an interim redirect-record attempt
+briefly returning `404 Site Not Found` from Namecheap's own forwarding service) was diagnosed and
+resolved by replacing it with the final `ALIAS` record. Full before/after record values are in
+`MILESTONE_16_PRODUCTION_VALIDATION.md`.

@@ -1,9 +1,38 @@
 # Milestone 16: Production Validation
 
-This document distinguishes what has been validated against the **live Azure staging URLs** (the
-`*.azurestaticapps.net` default hostnames, since no custom domain or DNS change has happened yet) from
-what remains to validate **after** the pending DNS action. Nothing here claims a production-domain
-verification that hasn't actually happened.
+**Update: DNS cutover is complete.** All three real production domains (`aisecurewatch.com`,
+`www.aisecurewatch.com`, `payreality.aisecurewatch.com`) now resolve to Azure and serve correctly over
+valid HTTPS -- see "Real production domain validation" below. The staging-hostname validation that
+follows was performed *before* the cutover and is kept here as the historical record of what was checked
+before DNS was touched, per this milestone's own discipline of not claiming a production-domain
+verification before it actually happened.
+
+## Real production domain validation (post-cutover, LIVE, VERIFIED)
+
+Performed after the user changed the three DNS records at Namecheap and this session completed the
+corresponding Azure-side custom domain bindings (`az staticwebapp hostname set`, once for each domain,
+using `--validation-method dns-txt-token` for the apex specifically -- discovered as a real requirement
+only by attempting the default method first and reading Azure's own error/help output, not assumed in
+advance):
+
+| Domain | Result |
+|---|---|
+| `https://aisecurewatch.com/` | `200`, `ssl_verify_result: 0` (certificate chain verifies), correct prerendered title and canonical URL referencing the real domain. Confirmed consistently across repeated checks, including after a local DNS-cache flush, to rule out a transient stale-cache false positive (one earlier check briefly hit a stale cached IP and failed TLS/SNI validation -- this was a local resolver caching artifact, not a server-side issue, and did not recur after the flush). |
+| `https://www.aisecurewatch.com/` | `200`, `ssl_verify_result: 0`, correct content. |
+| `https://payreality.aisecurewatch.com/` | `200`, `ssl_verify_result: 0`, correct content (the dashboard). |
+| CORS preflight, real origin | `OPTIONS https://api.aisecurewatch.com/v1/auth/login` with `Origin: https://payreality.aisecurewatch.com` returns `200` with `access-control-allow-origin: https://payreality.aisecurewatch.com` -- confirms the prediction made before cutover (no backend CORS change would be needed, since the origin string is unaffected by which infrastructure serves the frontend) was correct. |
+
+**What this does and does not prove**: this confirms the domains resolve to Azure, serve valid HTTPS, and
+that the CORS precondition for the dashboard to reach the API is satisfied. It does **not** constitute a
+full login/RBAC/Decision-Center click-through -- that still requires a real browser session (see "Browser
+verification status" below, unchanged) or the user's own manual walkthrough.
+
+## Pre-cutover staging validation (historical record)
+
+This document distinguishes what was validated against the **Azure staging URLs** (the
+`*.azurestaticapps.net` default hostnames, before DNS was touched) from what the section above confirms
+against the real domains now. Nothing here claims a production-domain verification before it actually
+happened.
 
 ## Marketing website -- staging validation (`https://lemon-bay-06710d110.7.azurestaticapps.net`)
 
@@ -69,27 +98,24 @@ addition occurred between the last confirmed check and now). All validation abov
 verification against the real deployed artifacts, the strongest available alternative, not a substitute
 claimed to be equivalent to an actual browser session.
 
-## Pending DNS actions (for the user, at Namecheap -- see architecture doc for why these can't be done from this session)
+## DNS actions actually taken (historical record; ALIAS/ANAME turned out to be available)
 
-**Before any record is changed**, confirm in the Namecheap dashboard whether `ALIAS` or `ANAME` record
-types are offered for this domain (some Namecheap plans support them, some don't) -- this determines
-which of the two apex-domain options below applies.
-
-| Domain | Current record | Target |
+| Domain | Was | Now |
 |---|---|---|
 | `payreality.aisecurewatch.com` | A -> `76.76.21.21` (Vercel) | CNAME -> `nice-beach-0bb78f810.7.azurestaticapps.net` |
 | `www.aisecurewatch.com` | CNAME -> Vercel edge | CNAME -> `lemon-bay-06710d110.7.azurestaticapps.net` |
-| `aisecurewatch.com` (apex) -- **if ALIAS/ANAME is available** | A -> `216.198.79.1` (Vercel) | ALIAS/ANAME -> `lemon-bay-06710d110.7.azurestaticapps.net` |
-| `aisecurewatch.com` (apex) -- **if ALIAS/ANAME is not available** | A -> `216.198.79.1` (Vercel) | Registrar-level URL redirect to `https://www.aisecurewatch.com` (standard fallback; `www` becomes the real Azure-hosted target) |
+| `aisecurewatch.com` (apex) | A -> `216.198.79.1` (Vercel) | `ALIAS` -> `lemon-bay-06710d110.7.azurestaticapps.net` (ALIAS was available on this Namecheap plan; the URL-redirect fallback was not needed) |
+| `_dnsauth.aisecurewatch.com` (new) | did not exist | `TXT` -> `_vgb5p7h7faabqioc7ddrf4097nvhd3s` (Azure's root-domain ownership validation token; must remain in place for certificate renewal, same pattern as `asuid.api`'s role in Milestone 7) |
 
-**Do not touch**: MX records (`mx1`/`mx2.improvmx.com`) or the existing TXT records (SPF, Google site
-verification) -- unrelated to this migration, real production email routing depends on them.
+MX records (`mx1`/`mx2.improvmx.com`) and the existing TXT records (SPF, DMARC, Google/Bing site
+verification, DKIM) were **not touched**, confirmed by direct inspection of the full record list before
+and after -- real production email routing was never at risk.
 
-**Immediately after each record is changed**, this session (or a follow-up one) will run
-`az staticwebapp hostname set` for that domain to complete the Azure-side binding and certificate
-issuance, then re-run this document's full validation suite against the real domain -- matching Milestone
-7's own established cutover discipline (provision/validate with DNS still on the old provider where
-possible, switch, then immediately re-verify through the real hostname).
+One real intermediate finding during cutover, resolved: immediately after the apex `A` record was first
+changed (an earlier attempt, since replaced by the `ALIAS` record above), it briefly resolved to
+Namecheap's own URL-forwarding service IP and returned `404 Site Not Found` -- this was a leftover from
+an interim redirect-record attempt, not a problem with the final `ALIAS`-based configuration, and resolved
+once the `ALIAS` record was the only record present for that host.
 
 ## Backend and API (unaffected, re-confirmed)
 
