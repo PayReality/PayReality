@@ -1,0 +1,45 @@
+# Milestone 16 (Vercel -> Azure Frontend Migration): builds ourselves
+# (rather than letting the Static Web Apps Oryx builder auto-detect and
+# run the build) so the Node version and build-time env vars exactly
+# match what Vercel's production deploys have always used -- VITE_API_URL
+# in particular is baked into the bundle at build time (apiClient.ts
+# reads import.meta.env.VITE_API_URL), so getting this step wrong would
+# silently ship a dashboard that can't reach the real API at all.
+name: Deploy dashboard to Azure Static Web Apps
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - run: npm ci
+
+      - name: Build
+        env:
+          VITE_API_URL: https://api.aisecurewatch.com
+          VITE_MIXPANEL_TOKEN: ${{ secrets.VITE_MIXPANEL_TOKEN }}
+        run: npm run build
+
+      - name: Deploy to Azure Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_key: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_DASHBOARD }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: "dist"
+          api_location: ""
+          output_location: ""
+          skip_app_build: true
