@@ -29,7 +29,7 @@ All six items closed in one pass, each verified against real code/tests/live API
 
 ---
 
-## P2: In progress, 2026-08-19
+## P2: Three of four resolved 2026-08-19
 
 **Runtime Policy Lifecycle live-database status: RESOLVED, live-verified.** Confirmed the unit tests are genuinely fake-session-only (self-disclosed in `test_runtime_policy_lifecycle_service.py`'s own docstring). Ran a real, full lifecycle exercise against staging's actual Postgres + OPA: create, submit-for-review, approve, activate, edit (version bump), submit, approve, re-activate, rollback, re-submit, re-approve, re-activate, schedule a retirement, cancel that schedule, and retire. Every transition succeeded exactly as designed; the timeline endpoint returned all 19 real, persisted events in order. One genuine behavioral finding surfaced along the way: rollback doesn't reactivate the old version directly, it creates a new draft version with the old content (`rollback_of_version` set), which then needs its own submit/approve/activate cycle -- an audit-preserving design choice, not a bug, but worth knowing.
 
@@ -41,9 +41,12 @@ All six items closed in one pass, each verified against real code/tests/live API
 
 **No backend CD pipeline: RESOLVED, live-verified twice.** Added `.github/workflows/azure-backend-deploy.yml`: tests gate build gate deploy gate a real health check against `api.aisecurewatch.com`. Uses the CI/CD managed identity Terraform had already provisioned for exactly this (OIDC federation, no stored secret) -- but its Terraform-granted `AcrPush` alone wasn't enough for `az acr build` (confirmed: that needs ARM-level access to queue a build task, not just push/pull), so added two narrowly-scoped role assignments directly (Contributor on the registry only, Container Apps Contributor on the one Container App only; `az role assignment create` had an unrelated client-side bug for this resource type, worked via the Azure REST API directly). First real run failed with `AADSTS700213`: GitHub had started issuing this repo's OIDC tokens in a new immutable owner-id/repo-id subject format (a real, dated platform change, 2026-04-23 per GitHub's own changelog) that the Terraform-provisioned federated credential's classic-format subject no longer matched. Fixed the live credential with the real IDs from the failure's own error log, updated Terraform so it doesn't drift back, then re-ran the workflow twice (once right after the fix, once on the very next real push) -- both fully green: test, login, build, deploy, health check.
 
+**SDK has no real auth beyond the Operator Key: RESOLVED.** Confirmed the server already supported scoped credentials the SDK simply never used (`POST /v1/auth/login` session tokens, `POST /v1/organization/api-keys` scoped API keys, both resolved identically via `Authorization: Bearer`). Added `Agent(bearer_token=...)` as the preferred alternative to `api_key` for every administrative call (`register`/`rotate_keys`/`retire`/`get_decision`), purely additive so every existing `api_key` integration keeps working unmodified. Renamed `HttpClient`'s internal `operator_auth` flag to `admin_auth`, since it no longer means "operator key specifically." Added real coverage (HttpClient-level header/precedence tests, one full Agent-level end-to-end test with a real `HttpClient` and fake `requests.Session`) and bumped 0.2.0 -> 0.3.0. `SDK_SECURITY.md` previously claimed a scoped-credential system "does not exist yet" -- already false before this change, now corrected and recommending `bearer_token` as the production default.
+
+Three of the four P2 items are now closed. Only the production Postgres restore drill remains (see the table below), plus P3 (deliberately parked).
+
 | Item | Verified current state | Fix |
 |---|---|---|
-| **SDK has no real auth beyond the Operator Key** | Confirmed: zero `Authorization`/`Bearer`/`session_token` references anywhere in `sdk-python/payreality/client.py`. The SDK still predates RBAC entirely; an integrator can only authenticate as the platform-wide admin bypass. | Add session-token/scoped-API-key support alongside the Operator Key path; bump the SDK version once it lands. |
 | **Production Postgres restore drill** | A restore drill was performed and verified on staging (per Milestone-era reports). No repo evidence a production-specific drill has been run since the DNS cutover. Infra-only, **Unverified** from a repo pass; needs a direct check against the actual environment. | Run and document a restore drill against the production resource group specifically. |
 
 ---
@@ -72,5 +75,5 @@ All six items closed in one pass, each verified against real code/tests/live API
 
 1. **P0** is done (Render retired 2026-08-19).
 2. **P1** is done (all six items closed 2026-08-19).
-3. **P2** next. Larger, but still independent of each other: SDK auth modernization, backend CD, lifecycle live-DB confirmation, production restore drill.
+3. **P2** is done except one item: the production Postgres restore drill, which needs a direct check against the actual environment (SDK auth, backend CD, and Terraform state separation all closed 2026-08-19).
 4. **P3** stays deliberately parked until v2 or until a pilot/customer forces the question. Building ahead of real signal here is exactly the kind of premature work the platform's own prior audits have repeatedly warned against.
