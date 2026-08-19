@@ -16,7 +16,7 @@ import { Sheet, SheetContent, SheetTitle } from "./ui/sheet";
 import { useIsMobile } from "./ui/use-mobile";
 import { OperatorKeyField } from "../live/components/OperatorKeyField";
 import { useAuth } from "../auth/AuthContext";
-import { ROLE_LABELS } from "../auth/types";
+import { ROLE_LABELS, type CurrentUser } from "../auth/types";
 import { HelpButton } from "../help/HelpButton";
 import { HelpPanel } from "../help/HelpPanel";
 import { page as trackPage } from "../services/analytics";
@@ -38,7 +38,7 @@ import { TourProvider } from "../demo/tour/TourProvider";
 // routinely saw a nav entry that always dead-ended on "you don't have
 // permission." `undefined` means genuinely no permission is required
 // (Overview is a general landing page).
-const navItems: { path: string; label: string; icon: typeof Bot; permission?: string }[] = [
+export const navItems: { path: string; label: string; icon: typeof Bot; permission?: string }[] = [
   // In the public demo, "/" is the dedicated landing page (DemoLanding),
   // not the real dashboard -- Overview points at the always-present
   // /overview alias instead so the sidebar still reaches it.
@@ -51,17 +51,25 @@ const navItems: { path: string; label: string; icon: typeof Bot; permission?: st
   { path: "/organization", label: "Organisation Settings", icon: Settings, permission: "settings.view" },
 ];
 
+// Extracted so the exact production filter -- not a re-typed copy of it --
+// is what nav-visibility tests exercise (Layout.test.ts). Same
+// permissive-when-unknown rule every other permission gate in this app
+// already follows (ReviewQueuePage.tsx, AgentDetailPage.tsx): with no
+// session (Operator Key bypass still active), show everything rather
+// than guessing; only hide once a real signed-in user is positively
+// known to lack the permission.
+export function selectVisibleNavItems<T extends { permission?: string }>(
+  items: readonly T[],
+  user: CurrentUser | null,
+  hasPermission: (permission: string) => boolean
+): T[] {
+  return items.filter((item) => !item.permission || !user || hasPermission(item.permission));
+}
+
 function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
   const location = useLocation();
   const { user, hasPermission } = useAuth();
-  // Same permissive-when-unknown rule every other permission gate in
-  // this app already follows (ReviewQueuePage.tsx, AgentDetailPage.tsx):
-  // with no session (Operator Key bypass still active), show everything
-  // rather than guessing; only hide once a real signed-in user is
-  // positively known to lack the permission.
-  const visibleNavItems = navItems.filter(
-    (item) => !item.permission || !user || hasPermission(item.permission)
-  );
+  const visibleNavItems = selectVisibleNavItems(navItems, user, hasPermission);
 
   const isActive = (path: string) => {
     if (path === "/") return location.pathname === "/";
