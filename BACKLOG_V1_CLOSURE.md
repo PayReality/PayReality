@@ -16,16 +16,16 @@
 
 ---
 
-## P1: Fix before v2, small-to-medium effort, real user/security impact
+## P1: Resolved 2026-08-19
 
-| Item | Verified current state | Fix |
-|---|---|---|
-| **Homepage/Assurance screens read the retired legacy table** | `PlatformOverview.tsx:72` and `LiveAssurance.tsx:34` both still call `/v1/policies` (and `/v1/agents`), not `/v1/runtime-policies`. Confirmed by direct grep today. These are the two most-viewed screens in the product. | Repoint both to the real Runtime Policy/decision data sources. |
-| **Website SDK code samples are broken** | Confirmed reproducible: the real `agent.authorize()` signature (`sdk-python/payreality/agent.py:268-276`) requires `principal`, `operation`, `resource`, `resource_data` (a dict). Every website sample checked (`developers/Sdks.tsx:63-68`, `developers/GettingStarted.tsx:72-77`) omits `principal`/`operation` entirely and passes `amount`/`currency`/`vendor` as top-level kwargs instead of nested in `resource_data`. Copy-pasted verbatim, this raises `TypeError` on the first call. | Fix every `authorize()` code sample (`Sdks.tsx`, `GettingStarted.tsx`, `IntegrationExamples.tsx`, `IntegrationGuides.tsx`, sweep all files matching `authorize(`) to match the real signature. |
-| **"Sub-millisecond" performance claim is unsubstantiated** | Still present in 7 website files (`Platform.tsx`, `products/RuntimeAuthority.tsx`, `products/RuntimePolicies.tsx`, `products/AuthorityGraph.tsx`, `developers/GettingStarted.tsx`, `developers/RuntimePolicies.tsx`, `resources/TheMissingIamLayer.tsx`). No isolated OPA-evaluation benchmark exists in either repo backing it. | Either produce a real, isolated Rego-evaluation-only benchmark, or soften the claim to something the platform can actually show a number for. |
-| **Authority Graph messaging overstates enforcement** | `products/AuthorityGraph.tsx` still implies the graph is queried at decision time. The platform's own `SPECIFICATION/GLOSSARY.md` defines it as an informational, human-reviewed discovery artifact, distinct from the enforced Authority Model. | Correct the copy to match the platform's own internal definition; a diagram distinguishing "Authority Graph (discovery)" from "Authority Model (enforced)" would close this more durably than prose alone. |
-| **Evidence key-rotation-history / chain-integrity UI doesn't exist** | Confirmed by grep: zero frontend references to `/v1/evidence/verification-keys` or `/v1/evidence/chain/verify` anywhere in `src/`. Both endpoints are real, live, and already tested server-side. | Build a rotation-history view and a chain-integrity-check action in the Evidence page. Backend work is already done, this is UI-only. |
-| **Field-vocabulary validation missing in Compiler V2** | Confirmed: no `is_valid_field`/field-vocabulary check exists anywhere in `domain/compiler_v2/`. A condition authored against a typo'd field name compiles cleanly and simply never matches at runtime, no error, anywhere. | Extend the existing `Vocabulary` protocol (already used for action validation, `compiler_v2.py:36-43`) to also validate condition field names against a known set. |
+All six items closed in one pass, each verified against real code/tests/live API before and after:
+
+- **Homepage/Assurance legacy table** -- `PlatformOverview.tsx`/`LiveAssurance.tsx` now read the real lifecycle dashboard's `counts_by_state`, matching the current multi-policy model instead of the old single-active-policy one.
+- **Website SDK code samples** -- fixed `authorize()` in `Sdks.tsx`/`GettingStarted.tsx` to match the real signature (`principal`, `operation`, `resource`, `resource_data`), verified by binding the exact call against `agent.py`'s real signature. `IntegrationExamples.tsx`/`IntegrationGuides.tsx` only mention `authorize()` in prose, no code block to fix.
+- **"Sub-millisecond" claim** -- ran a real benchmark against a compiled bundle and a live local OPA server rather than guessing: full decision round trip measured 1.4-2.5ms typical (pure Rego evaluation alone is sub-millisecond at the median, but that's not what most of the copy was describing). Removed the claim from all 7 files, kept the real differentiator (deterministic, evaluated before execution).
+- **Authority Graph messaging** -- corrected across `AuthorityGraph.tsx`, `RuntimeAuthority.tsx`, and `Platform.tsx`: the graph is a reviewed discovery artifact, not something queried live; what's actually evaluated at decision time is the compiled Runtime Policy bundle a team publishes from that review.
+- **Evidence rotation/chain UI** -- built both views against the real backend endpoints. Verified response shapes directly against the live production API and backend test assertions before building, which caught a field (`active: bool`) missed on first read of the schema.
+- **Field-vocabulary validation** -- Compiler V2 now validates condition field names, not just actions. A condition against a nonexistent field (real example found: `vendor.approved`, never actually in the OPA intent dict) is now a compile-time `INVALID_FIELD` error instead of silently never matching.
 
 ---
 
@@ -63,6 +63,6 @@
 ## Suggested order
 
 1. **P0** is done (Render retired 2026-08-19).
-2. **P1** items in parallel. All are small-to-medium, independent files, no shared blast radius: legacy-table repoint, SDK doc examples, sub-millisecond claim, Authority Graph copy, Evidence UI, field-vocabulary validation.
-3. **P2** items next. Larger, but still independent of each other: SDK auth modernization, backend CD, lifecycle live-DB confirmation, production restore drill.
+2. **P1** is done (all six items closed 2026-08-19).
+3. **P2** next. Larger, but still independent of each other: SDK auth modernization, backend CD, lifecycle live-DB confirmation, production restore drill.
 4. **P3** stays deliberately parked until v2 or until a pilot/customer forces the question. Building ahead of real signal here is exactly the kind of premature work the platform's own prior audits have repeatedly warned against.
