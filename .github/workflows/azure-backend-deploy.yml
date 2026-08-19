@@ -1,0 +1,92 @@
+# Backend CD: the piece CI never had (BACKLOG_V1_CLOSURE.md's "No
+# backend CD pipeline" item). Authenticates to Azure via OIDC federated
+# identity (AZURE_MIGRATION/terraform/modules/managed-identity's
+# `cicd` identity, pre-provisioned specifically for this, never a
+# stored client secret), builds and pushes the image via ACR Build (so
+# the image is built inside Azure, not uploaded from the runner), then
+# updates the prod Container App to that exact image. Tests gate the
+# build: a red test suite never reaches production.
+#
+# The cicd identity's Terraform-provisioned AcrPush role alone is not
+# enough to run `az acr build` (that queues a build task, an ARM/
+# management-plane operation AcrPush's data-plane push/pull doesn't
+# cover) -- two role assignments were added directly via the Azure
+# REST API, each scoped to exactly one resource, not yet reflected in
+# Terraform pending the state-separation fix (BACKLOG_V1_CLOSURE.md's
+# P2 Terraform item): Contributor on acrprprodtq1k (build), Container
+# Apps Contributor on ca-payreality-api-prod-cus (deploy). Nothing
+# broader was granted.
+name: Deploy backend to Azure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - name: Install OPA
+        run: |
+          curl -fsSL -o /usr/local/bin/opa \
+            "https://openpolicyagent.org/downloads/v1.7.1/opa_linux_amd64_static"
+          chmod +x /usr/local/bin/opa
+      - run: pytest -q
+
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CICD_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Tag strategy per AZURE_MIGRATION/terraform/modules/container-registry's
+      # own README: the git commit SHA that produced the image, so any
+      # deployed revision is traceable to an exact commit. Built via ACR
+      # Build (build happens inside Azure) rather than a local docker
+      # build + push, so this identity only ever needs AcrPush, never a
+      # registry admin credential.
+      - name: Build and push image
+        run: |
+          az acr build \
+            --registry acrprprodtq1k \
+            --image "payreality-api:prod-${{ github.sha }}" \
+            --file server/Dockerfile \
+            server
+
+      - name: Deploy to Container App
+        run: |
+          az containerapp update \
+            --name ca-payreality-api-prod-cus \
+            --resource-group rg-payreality-prod-cus \
+            --image "acrprprodtq1k.azurecr.io/payreality-api:prod-${{ github.sha }}"
+
+      - name: Verify health after deploy
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fsS https://api.aisecurewatch.com/health; then
+              echo "Healthy"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "Deployed revision did not become healthy in time"
+          exit 1

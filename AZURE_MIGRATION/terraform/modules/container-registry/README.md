@@ -18,9 +18,9 @@ One Container Registry, **Standard SKU**, `admin_enabled = false`. Two role assi
 
 Azure AD only, via the two managed identities' RBAC role assignments above. The registry's built-in admin username/password is disabled entirely (`admin_enabled = false`) — there is no static, long-lived registry credential anywhere in this project for anything to leak.
 
-## CI integration (infrastructure assumption only — not implemented this milestone)
+## CI integration
 
-The CI/CD identity (`modules/managed-identity`) is federated to GitHub Actions' OIDC issuer, scoped to one repository and one branch. A future GitHub Actions workflow step would use `azure/login` with this identity's `client_id` (no secret), then `docker push` to `login_server` — that workflow file is explicitly **not created in this milestone** ("Prepare infrastructure for future GitHub Actions deployment. Do not implement deployment yet.").
+**Implemented** (`.github/workflows/azure-backend-deploy.yml`, added 2026-08-19): the CI/CD identity (`modules/managed-identity`) is federated to GitHub Actions' OIDC issuer, scoped to one repository and one branch, and the workflow uses `azure/login` with this identity's `client_id` (no secret), then `az acr build` to build and push in one step. Two role assignments were needed beyond the identity's Terraform-provisioned `AcrPush` (which alone doesn't cover `az acr build`'s ARM/management-plane build-queuing call): `Contributor` on this registry, and `Container Apps Contributor` on the prod Container App -- both added directly via the Azure REST API, each scoped to exactly one resource, not yet reflected in this Terraform module pending a fix to how prod/staging state is separated in this project (see `BACKLOG_V1_CLOSURE.md`).
 
 ## Image promotion strategy
 
