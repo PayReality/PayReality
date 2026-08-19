@@ -34,5 +34,28 @@ export const demoCurrentUser: CurrentUser = {
   mfa_enabled: true,
   must_reset_password: false,
   last_login_at: agoMs(2 * MINUTE),
-  permissions: ["authority.review", "users.manage", "settings.view"],
+  // Must equal server/app/domain/rbac/permissions.py's ROLE_PERMISSIONS
+  // entry for GOVERNANCE_ADMIN exactly, not a hand-picked subset --
+  // Layout.tsx's nav gate and every RequirePermission/hasPermission call
+  // in the app now checks this list the same way it checks a real
+  // session's permissions, so drifting from the real role definition
+  // silently hides real pages (Agents/Governance/Decisions/Evidence/
+  // Assurance disappeared from the demo nav this way once Milestone 15
+  // added permission-gated nav items and this list was never updated to
+  // match). settings.view/users.manage are intentionally absent: a real
+  // governance_admin has neither, so Organisation Settings correctly
+  // does not appear for this identity either.
+  permissions: [
+    "runtime_policy.create",
+    "runtime_policy.edit",
+    "runtime_policy.publish",
+    "runtime_policy.view",
+    "authority.review",
+    "evidence.view",
+    "decisions.view",
+    "decisions.resolve",
+    "assurance.view",
+    "principal.manage",
+    "agent.view",
+  ],
 };
