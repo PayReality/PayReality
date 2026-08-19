@@ -3,13 +3,23 @@ generated -> assembled into one PolicyBundle, or a CompilerDiagnostics
 explaining exactly why not. Never raises for a normal compilation
 failure; see compiler_errors.py.
 
-This module owns the one thing DOMAIN_ABSTRACTION.md scoped as
-"adapter-owned": which action names are valid. It does so through an
-injectable Vocabulary rather than a hardcoded list, so the compiler
-itself stays domain-agnostic even though its one shipped default
+This module owns the two things DOMAIN_ABSTRACTION.md scoped as
+"adapter-owned": which action names are valid, and which condition
+field names are valid. It does so through an injectable Vocabulary
+rather than a hardcoded list, so the compiler itself stays
+domain-agnostic even though its one shipped default
 (FINANCIAL_VOCABULARY) is not. This is the concrete implementation of
-DOMAIN_REFACTOR_PLAN.md's item 2 and item 3, scoped to what this phase
-actually needs.
+DOMAIN_REFACTOR_PLAN.md's item 2 and item 3.
+
+Field validation closes a real, previously silent gap: a condition
+authored against a typo'd or nonexistent field name
+(rego_generator.py's `_dot_path_access` compiles it into a plain Rego
+dot-path access) used to compile cleanly and simply never match at
+evaluation time, with no error anywhere. Direct against
+intent_service.py:507, the only place a real Intent dict is actually
+built, its shape is exactly `{"action", "amount", "currency"}` -- no
+`vendor`, no `memo`, nothing else -- so those are the only top-level
+fields this default vocabulary accepts.
 """
 
 from dataclasses import dataclass
@@ -25,6 +35,7 @@ from app.domain.compiler_v2.bundle_builder import PolicyBundle, build_bundle
 from app.domain.compiler_v2.compiler_errors import (
     CONFLICTING_POLICY_STRUCTURE,
     INVALID_ACTION,
+    INVALID_FIELD,
     INVALID_RESOURCE,
     INVALID_RUNTIME_POLICY,
     CompilerDiagnostics,
@@ -32,15 +43,24 @@ from app.domain.compiler_v2.compiler_errors import (
 )
 from app.domain.compiler_v2.scope_overlap import policies_can_jointly_match
 
+# A condition field prefixed "context." always passes vocabulary
+# validation regardless of what follows: Runtime Authority Context
+# (PHASE_2_RUNTIME_CONTEXT.md) is a caller-extensible, free-form dict
+# (intent_service.py merges the caller's own `context` with `timestamp`
+# and a resolved `authority` block), not a fixed schema this compiler
+# could enumerate in advance without rejecting a real, valid enrichment
+# field the moment a new connector adds one. This mirrors
+# rego_generator.py's own _resolve_base_and_field, which already
+# special-cases this same prefix for the identical reason.
+_CONTEXT_FIELD_PREFIX = "context."
+
 
 class Vocabulary(Protocol):
     """What a domain adapter must answer for Compiler V2 to validate
-    actions against it (DOMAIN_ABSTRACTION.md). Deliberately minimal: this
-    phase does not implement field-vocabulary validation, only action
-    validation, since that's the only vocabulary check this directive's
-    validation list actually asks for."""
+    actions and condition fields against it (DOMAIN_ABSTRACTION.md)."""
 
     def is_valid_action(self, action: str) -> bool: ...
+    def is_valid_field(self, field: str) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -58,9 +78,19 @@ class FinancialVocabulary:
     silently drift apart."""
 
     known_actions: frozenset[str] = KNOWN_SCOPES
+    # Exactly intent_service.py:507's real intent dict shape -- see this
+    # module's own docstring for why. "context" is deliberately absent
+    # here: it's handled separately, as a prefix, not a top-level field.
+    known_intent_fields: frozenset[str] = frozenset({"action", "amount", "currency"})
 
     def is_valid_action(self, action: str) -> bool:
         return action in self.known_actions
+
+    def is_valid_field(self, field: str) -> bool:
+        if field.startswith(_CONTEXT_FIELD_PREFIX):
+            return True
+        top_level = field.split(".", 1)[0]
+        return top_level in self.known_intent_fields
 
 
 FINANCIAL_VOCABULARY = FinancialVocabulary()
@@ -98,6 +128,16 @@ def _validate_policy_against_vocabulary(
                 path="scope.resource",
             )
         )
+    for condition in policy.conditions.all:
+        if not vocabulary.is_valid_field(condition.field):
+            errors.append(
+                CompilerError(
+                    code=INVALID_FIELD,
+                    message=f"'{condition.field}' is not a recognized condition field for this domain",
+                    policy_id=policy.id,
+                    path=f"conditions.{condition.field}",
+                )
+            )
     return errors
 
 
@@ -180,8 +220,8 @@ def compile_bundle(
     returns a CompileResult; bundle is None whenever diagnostics has any
     error. Runs, in order: RuntimePolicy structural validation (reused
     from Phase 1, not reimplemented), vocabulary validation (action,
-    resource), conflict detection, then, only if all of that is clean,
-    Rego generation and bundle assembly."""
+    resource, condition fields), conflict detection, then, only if all
+    of that is clean, Rego generation and bundle assembly."""
     errors: list[CompilerError] = []
 
     for policy in policies:

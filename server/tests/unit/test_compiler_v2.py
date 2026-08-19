@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from app.domain.compiler_v2.compiler_errors import (
     CONFLICTING_POLICY_STRUCTURE,
     INVALID_ACTION,
+    INVALID_FIELD,
     INVALID_RESOURCE,
     INVALID_RUNTIME_POLICY,
 )
@@ -120,7 +121,7 @@ def test_cross_field_conflicts_are_now_detected():
     "different fields are not analyzed"): two policies constraining
     different fields, for the same principal/action, with nothing in
     either policy that actually rules the other out, so a real Intent
-    (any amount <= 100000, vendor.approved true) could satisfy both.
+    (any amount <= 100000, currency == USD) could satisfy both.
     ConditionSet's flat-AND, single-field-per-Condition shape (no cross-
     field relations expressible at all) is what makes this decomposable
     into independent per-field checks rather than a real satisfiability
@@ -132,7 +133,7 @@ def test_cross_field_conflicts_are_now_detected():
     p2 = _policy(
         id="rp-2",
         conditions=ConditionSet(
-            all=(Condition(field="vendor.approved", operator=Operator.EQ, value=True),)
+            all=(Condition(field="currency", operator=Operator.EQ, value="USD"),)
         ),
     )
     result = compile_bundle([p1, p2], "bundle-1", 1, now=FIXED_NOW)
@@ -236,11 +237,11 @@ def test_contains_operator_conservatively_flags_as_a_conflict():
     this compiler."""
     p1 = _policy(
         id="rp-1",
-        conditions=ConditionSet(all=(Condition(field="memo", operator=Operator.CONTAINS, value="refund"),)),
+        conditions=ConditionSet(all=(Condition(field="currency", operator=Operator.CONTAINS, value="refund"),)),
     )
     p2 = _policy(
         id="rp-2",
-        conditions=ConditionSet(all=(Condition(field="memo", operator=Operator.CONTAINS, value="invoice"),)),
+        conditions=ConditionSet(all=(Condition(field="currency", operator=Operator.CONTAINS, value="invoice"),)),
     )
     result = compile_bundle([p1, p2], "bundle-1", 1, now=FIXED_NOW)
     assert not result.ok
@@ -250,6 +251,9 @@ def test_custom_vocabulary_can_be_injected():
     class ToyVocabulary:
         def is_valid_action(self, action: str) -> bool:
             return action == "grant_access"
+
+        def is_valid_field(self, field: str) -> bool:
+            return True
 
     result = compile_bundle(
         [_policy(scope=Scope(principal="prin_1", action="grant_access"))],
@@ -268,3 +272,60 @@ def test_financial_vocabulary_matches_todays_known_scopes():
     from app.domain.decision.scope_vocabulary import KNOWN_SCOPES
 
     assert FinancialVocabulary().known_actions == KNOWN_SCOPES
+
+
+def test_typo_d_condition_field_is_rejected_at_compile_time():
+    """The bug this vocabulary closes: a condition authored against a
+    field that doesn't exist on a real Intent used to compile cleanly
+    and simply never match at evaluation time, with no error anywhere."""
+    result = compile_bundle(
+        [_policy(conditions=ConditionSet(all=(Condition(field="amoutn", operator=Operator.LTE, value=100000),)))],
+        "bundle-1",
+        1,
+        now=FIXED_NOW,
+    )
+    assert not result.ok
+    assert any(e.code == INVALID_FIELD for e in result.diagnostics.errors)
+
+
+def test_recognized_intent_fields_all_pass():
+    for field_name in ("action", "amount", "currency"):
+        result = compile_bundle(
+            [_policy(conditions=ConditionSet(all=(Condition(field=field_name, operator=Operator.EQ, value="x"),)))],
+            "bundle-1",
+            1,
+            now=FIXED_NOW,
+        )
+        assert result.ok, f"{field_name} should be a recognized intent field"
+
+
+def test_context_prefixed_fields_are_always_valid():
+    """context.* is a caller-extensible, free-form enrichment dict
+    (PHASE_2_RUNTIME_CONTEXT.md) -- not a fixed schema this compiler
+    could enumerate without rejecting a real, valid future field."""
+    result = compile_bundle(
+        [
+            _policy(
+                conditions=ConditionSet(
+                    all=(Condition(field="context.authority.department", operator=Operator.EQ, value="Finance"),)
+                )
+            )
+        ],
+        "bundle-1",
+        1,
+        now=FIXED_NOW,
+    )
+    assert result.ok
+
+
+def test_nested_path_on_a_known_top_level_field_is_still_valid():
+    """Only the top-level segment is validated -- a real Intent field
+    that happens to carry nested structure isn't rejected just because
+    this compiler doesn't track its internal shape."""
+    result = compile_bundle(
+        [_policy(conditions=ConditionSet(all=(Condition(field="amount.sub_total", operator=Operator.EQ, value=1),)))],
+        "bundle-1",
+        1,
+        now=FIXED_NOW,
+    )
+    assert result.ok

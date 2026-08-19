@@ -7,7 +7,8 @@ import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
 import { describeApiError } from "../format";
 import { useResourceSync } from "../../services/resourceSync";
-import type { LivePolicy, LiveEvidence } from "../types";
+import { policyLifecycleApi } from "../../policy-studio/lifecycleApi";
+import type { LiveEvidence } from "../types";
 
 interface EvidencePayload {
   authority_outcome?: "ALLOW" | "DENY" | "HUMAN_REVIEW";
@@ -17,7 +18,7 @@ interface EvidencePayload {
 export function LiveAssurance() {
   const [agentTotal, setAgentTotal] = useState(0);
   const [activeAgentTotal, setActiveAgentTotal] = useState(0);
-  const [policies, setPolicies] = useState<LivePolicy[]>([]);
+  const [activePolicyCount, setActivePolicyCount] = useState(0);
   const [evidence, setEvidence] = useState<LiveEvidence[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -31,13 +32,13 @@ export function LiveAssurance() {
     Promise.all([
       apiClient.get<{ total: number }>("/v1/agents?limit=1"),
       apiClient.get<{ total: number }>("/v1/agents?status=active&limit=1"),
-      apiClient.get<LivePolicy[]>("/v1/policies"),
+      policyLifecycleApi.dashboard(),
       apiClient.get<LiveEvidence[]>("/v1/evidence"),
     ])
-      .then(([agentPage, activeAgentPage, p, e]) => {
+      .then(([agentPage, activeAgentPage, dashboard, e]) => {
         setAgentTotal(agentPage.total);
         setActiveAgentTotal(activeAgentPage.total);
-        setPolicies(p);
+        setActivePolicyCount(dashboard.counts_by_state["active"] ?? 0);
         setEvidence(e);
         setLoaded(true);
       })
@@ -53,7 +54,6 @@ export function LiveAssurance() {
   // but had no way to learn any of them changed while it stayed mounted.
   useResourceSync(["agents", "policies", "evidence"], load);
 
-  const activePolicy = policies.find((p) => p.status === "active");
   const activeAgents = activeAgentTotal;
 
   const outcomeCounts = evidence.reduce(
@@ -71,9 +71,9 @@ export function LiveAssurance() {
     { icon: Bot, label: "Active agents", value: activeAgents, total: agentTotal, color: "var(--pr-authority-blue)" },
     {
       icon: FileCheck,
-      label: "Active policy",
-      value: activePolicy ? `v${activePolicy.version}` : "None",
-      color: activePolicy ? "var(--pr-trust-green)" : "var(--pr-warning-amber)",
+      label: "Active policies",
+      value: activePolicyCount,
+      color: activePolicyCount > 0 ? "var(--pr-trust-green)" : "var(--pr-warning-amber)",
     },
     { icon: ShieldCheck, label: "Within delegated authority", value: outcomeCounts.ALLOW ?? 0, color: "var(--pr-trust-green)" },
     { icon: ShieldAlert, label: "Escalated to a human", value: outcomeCounts.HUMAN_REVIEW ?? 0, color: "var(--pr-warning-amber)" },

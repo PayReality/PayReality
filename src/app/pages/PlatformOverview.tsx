@@ -15,7 +15,8 @@ import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
 import { describeApiError } from "../live/format";
 import { useResourceSync } from "../services/resourceSync";
-import type { LiveAgent, LivePolicy } from "../live/types";
+import { policyLifecycleApi } from "../policy-studio/lifecycleApi";
+import type { LiveAgent } from "../live/types";
 
 const WORKFLOW = [
   {
@@ -62,18 +63,18 @@ const WORKFLOW = [
 
 export function PlatformOverview() {
   const [agentCount, setAgentCount] = useState<number | null>(null);
-  const [activePolicy, setActivePolicy] = useState<LivePolicy | null>(null);
+  const [activePolicyCount, setActivePolicyCount] = useState<number | null>(null);
   const [reachable, setReachable] = useState<boolean | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   function load() {
     Promise.all([
       apiClient.get<{ agents: LiveAgent[]; total: number }>("/v1/agents"),
-      apiClient.get<LivePolicy[]>("/v1/policies"),
+      policyLifecycleApi.dashboard(),
     ])
-      .then(([agentPage, policies]) => {
+      .then(([agentPage, dashboard]) => {
         setAgentCount(agentPage.total);
-        setActivePolicy(policies.find((p) => p.status === "active") ?? null);
+        setActivePolicyCount(dashboard.counts_by_state["active"] ?? 0);
         setReachable(true);
       })
       // Loading the overview's own status strip: a 401/403/400 here (an
@@ -154,10 +155,10 @@ export function PlatformOverview() {
             </div>
             <div>
               <div className="text-2xl font-semibold" style={{ color: "var(--pr-text-primary)" }}>
-                {activePolicy ? `v${activePolicy.version}` : "None"}
+                {activePolicyCount ?? "…"}
               </div>
               <div className="text-xs" style={{ color: "var(--pr-text-muted)" }}>
-                Active rule
+                Active policies
               </div>
             </div>
             <div className="flex items-center gap-2 ml-auto text-xs" style={{ color: "var(--pr-text-muted)" }}>
