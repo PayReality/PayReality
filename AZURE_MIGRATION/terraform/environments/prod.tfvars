@@ -29,8 +29,13 @@ container_apps_min_replicas           = 1
 # must consciously set this, no default exists.
 alert_notification_email = "payreality.ceo@gmail.com"
 
-# Redeployed a second time for Milestone 15: adds the Blob/Search
-# tenant-isolation defense-in-depth check (Workstream 11 hardening,
-# code-only, no schema change). No new migration this round. Built and
-# pushed via `az acr build`, tagged with the exact source commit as always.
-container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-0c7672d"
+# As of the backend CD pipeline (.github/workflows/azure-backend-deploy.yml,
+# added 2026-08-19), this value no longer drives what's actually
+# running in prod -- every push to main deploys a new image directly
+# via `az containerapp update`, bypassing Terraform entirely. Kept in
+# sync here manually so `terraform plan` doesn't report false drift on
+# every run; if it ever falls behind, that's a plan noting a
+# container_image change and nothing else, safe to either apply (which
+# only resets this one field, matching whatever the last real CD
+# deploy already put there) or refresh this line to match instead.
+container_image = "acrprprodtq1k.azurecr.io/payreality-api:prod-0f0d236098d318ad324de51786745606fd2157d4"
