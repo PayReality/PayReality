@@ -8,11 +8,11 @@
 
 ---
 
-## P0: Time-boxed, act this week
+## P0: Resolved 2026-08-19
 
-| Item | Why now | Action |
-|---|---|---|
-| **Render's free-tier Postgres expires 2026-08-24** | 5 days out as of today. Render is still live post-DNS-cutover (`render.yaml` still present) and was deliberately kept running as a safety net, but nothing has addressed the expiry itself. If it lapses before a decision is made, whatever still depends on it (even just as a fallback) breaks with no warning. | Decide: upgrade Render's Postgres to a paid tier as a bridge, or confirm Azure Postgres is now sole system of record and let Render's copy lapse deliberately. Either way, a decision recorded beats silence. |
+**Render fully retired.** DNS had already been on Azure exclusively since Milestone 7 (`api.aisecurewatch.com` verified resolving only to `ca-payreality-api-prod-cus`, Render's own `onrender.com` URL confirmed reachable only directly, never via any real client). Before deletion: queried both databases directly and found they had genuinely diverged, not a superset relationship (Render's single original organization had 9 decisions/evidence/policy records with no equivalent in Azure, versus Azure's 6 orgs/24 users from post-cutover RBAC testing). Took a full CSV export of all 41 tables from Render's Postgres, verified row counts matched exactly, saved to a local, uncommitted backup (`C:\Users\user\Downloads\render-db-backup-2026-08-19\`, contains signing-key material, keep it local and never commit or upload it). Then deleted the Render web service (`srv-d9idj8t8nd3s739o5dsg`) and Postgres instance (`payreality-db`) via the Render API; confirmed both gone (empty service/postgres lists, `onrender.com` URL now 404) and production unaffected (`api.aisecurewatch.com` still healthy throughout). `render.yaml` marked historical in place, not deleted.
+
+**Deliberately not done:** migrating Render's one diverged organization's history into Azure as live data. Decision made explicitly: the cold backup is enough, that data doesn't need to be queryable in the live system.
 
 ---
 
@@ -62,7 +62,7 @@
 
 ## Suggested order
 
-1. **P0** this week (Render Postgres decision). Pure calendar risk, costs nothing to decide now.
+1. **P0** is done (Render retired 2026-08-19).
 2. **P1** items in parallel. All are small-to-medium, independent files, no shared blast radius: legacy-table repoint, SDK doc examples, sub-millisecond claim, Authority Graph copy, Evidence UI, field-vocabulary validation.
 3. **P2** items next. Larger, but still independent of each other: SDK auth modernization, backend CD, lifecycle live-DB confirmation, production restore drill.
 4. **P3** stays deliberately parked until v2 or until a pilot/customer forces the question. Building ahead of real signal here is exactly the kind of premature work the platform's own prior audits have repeatedly warned against.

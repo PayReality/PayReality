@@ -1,3 +1,16 @@
+# RETIRED 2026-08-19. Render is no longer part of this platform's
+# infrastructure: the web service (srv-d9idj8t8nd3s739o5dsg) and the
+# Postgres database (payreality-db) were both deleted via the Render
+# API after the DNS cutover (MILESTONE_7) had been stable for its full
+# observation window and a full data backup was taken and verified
+# (see BACKLOG_V1_CLOSURE.md). Production now runs entirely on Azure
+# (ca-payreality-api-prod-cus, rg-payreality-prod-cus). Kept here,
+# unapplied, as a historical record of the original zero-cost pilot
+# topology -- do not re-apply this Blueprint; there is no Render
+# account resource for it to target anymore.
+#
+# Original header follows, describing the topology as it was when live:
+#
 # Render Blueprint for the PayReality backend, zero-additional-cost pilot
 # topology: one free web service only. OPA runs embedded in the same
 # container (see server/entrypoint.sh, server/Dockerfile), bound to
