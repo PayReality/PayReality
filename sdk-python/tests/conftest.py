@@ -70,7 +70,7 @@ class FakeHttpClient:
     def queue_response(self, response):
         self._queue.append(response)
 
-    def request(self, method, path, *, json=None, headers=None, signed_body=None, operator_auth=False):
+    def request(self, method, path, *, json=None, headers=None, signed_body=None, admin_auth=False):
         self.calls.append(
             {
                 "method": method,
@@ -78,7 +78,7 @@ class FakeHttpClient:
                 "json": json,
                 "headers": headers,
                 "signed_body": signed_body,
-                "operator_auth": operator_auth,
+                "admin_auth": admin_auth,
             }
         )
         return self._queue.pop(0)

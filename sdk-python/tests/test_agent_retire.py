@@ -21,7 +21,7 @@ def test_retire_without_registration_raises_configuration_error(credentials_path
         agent.retire()
 
 
-def test_retire_calls_the_retire_endpoint_with_operator_auth(credentials_path, fake_http_client):
+def test_retire_calls_the_retire_endpoint_with_admin_auth(credentials_path, fake_http_client):
     agent = _registered_agent(credentials_path, fake_http_client)
     fake_http_client.queue_response({})
 
@@ -29,7 +29,7 @@ def test_retire_calls_the_retire_endpoint_with_operator_auth(credentials_path, f
 
     call = fake_http_client.calls[-1]
     assert call["path"] == "/v1/agents/a-1/retire"
-    assert call["operator_auth"] is True
+    assert call["admin_auth"] is True
     assert call["json"]["reason"] == "decommissioned"
 
 

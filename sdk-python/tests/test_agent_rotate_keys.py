@@ -31,7 +31,7 @@ def test_rotate_keys_uploads_only_the_new_public_key(credentials_path, fake_http
 
     rotate_call = fake_http_client.calls[-1]
     assert rotate_call["path"] == "/v1/agents/a-1/rotate"
-    assert rotate_call["operator_auth"] is True
+    assert rotate_call["admin_auth"] is True
     assert rotate_call["json"]["new_public_key"].startswith("ed25519:base64:")
     assert old_private_key not in str(rotate_call["json"])
 

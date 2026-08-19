@@ -26,18 +26,24 @@ from .configuration import Configuration, CredentialStore
 from .exceptions import ApiError, ConfigurationError
 from .models import Decision, RegisteredAgent, Resolution
 
-_SDK_VERSION = "0.2.0"  # kept in sync with pyproject.toml / __init__.__version__ by hand;
+_SDK_VERSION = "0.3.0"  # kept in sync with pyproject.toml / __init__.__version__ by hand;
 # not imported from there to avoid a circular import at package init time.
 # Bumped 0.1.0 -> 0.2.0 for organization_id: a real breaking change under
 # semver -- every operator-key call that previously worked now requires
 # it (PayReality Enterprise v1.0, Milestone 2's platform-admin-only
 # operator key).
+# Bumped 0.2.0 -> 0.3.0 for bearer_token (BACKLOG_V1_CLOSURE.md's "SDK
+# has no real auth beyond the Operator Key"): purely additive, not
+# breaking -- every existing api_key-based call keeps working
+# unmodified, this only adds a second, preferred way to authenticate
+# administrative calls as a real, scoped identity.
 
 
 class Agent:
     def __init__(
         self,
         api_key: str | None = None,
+        bearer_token: str | None = None,
         private_key: str | None = None,
         organization_id: str | None = None,
         base_url: str = "https://api.aisecurewatch.com",
@@ -45,8 +51,19 @@ class Agent:
         retry_count: int = 3,
         credentials_path=None,
     ):
+        """`api_key` is the platform-wide Operator Key -- works, but
+        authenticates as the admin bypass, not a real scoped identity.
+        `bearer_token` is the alternative for administrative calls
+        (register/rotate_keys/retire/get_decision): a session token
+        (`POST /v1/auth/login`) or a scoped API key
+        (`POST /v1/organization/api-keys`), either one accepted
+        identically. Prefer `bearer_token` for anything beyond local
+        development -- see Configuration's own docstring for the full
+        reasoning. `authorize()` and `heartbeat()` need neither: they
+        authenticate purely via this agent's own certificate signature."""
         config_kwargs: dict[str, Any] = dict(
             api_key=api_key,
+            bearer_token=bearer_token,
             private_key=private_key,
             organization_id=organization_id,
             base_url=base_url,
@@ -85,14 +102,14 @@ class Agent:
         # this call was never updated to send credentials of any kind,
         # so it 401'd on every real deployment before this fix, masking
         # register()'s own organization_id requirement below (confirmed
-        # in a Milestone-3-era SDK audit). operator_auth=True matches
+        # in a Milestone-3-era SDK audit). admin_auth=True matches
         # the POST call's own, already-correct convention just below.
-        principals = self._client.request("GET", "/v1/principals", operator_auth=True)
+        principals = self._client.request("GET", "/v1/principals", admin_auth=True)
         for p in principals:
             if p["name"] == name:
                 return p["id"], p["name"]
         created = self._client.request(
-            "POST", "/v1/principals", json={"name": name}, operator_auth=True
+            "POST", "/v1/principals", json={"name": name}, admin_auth=True
         )
         return created["id"], created["name"]
 
@@ -147,10 +164,10 @@ class Agent:
                 "owner": owner,
                 "description": description,
             },
-            operator_auth=True,
+            admin_auth=True,
         )
         self._client.request(
-            "POST", f"/v1/agents/{response['id']}/activate", json={}, operator_auth=True
+            "POST", f"/v1/agents/{response['id']}/activate", json={}, admin_auth=True
         )
 
         identity = RegisteredAgent(
@@ -191,7 +208,7 @@ class Agent:
             "POST",
             f"/v1/agents/{self._identity.agent_id}/rotate",
             json={"new_public_key": crypto.encode_public_key_for_wire(new_keypair.public_key_b64)},
-            operator_auth=True,
+            admin_auth=True,
         )
 
         new_identity = RegisteredAgent(
@@ -248,7 +265,7 @@ class Agent:
             )
         self._client.request(
             "POST", f"/v1/agents/{self._identity.agent_id}/retire",
-            json={"reason": reason}, operator_auth=True,
+            json={"reason": reason}, admin_auth=True,
         )
         retired_identity = RegisteredAgent(
             agent_id=self._identity.agent_id,
@@ -359,12 +376,13 @@ class Agent:
         all, matching a corresponding gap on the server side
         (MILESTONE_10_DECISION_SECURITY_AND_CLARITY_SUMMARY.md) that has
         now been closed -- GET /v1/decisions/{id} requires a credential.
-        `operator_auth=True` attaches the same operator-key + organization-id
-        pair every other administrative call in this class already
-        requires (register/activate/revoke/rotate above), so this
-        doesn't introduce any new configuration requirement for an
-        Agent that's already doing any of those."""
-        response = self._client.request("GET", f"/v1/decisions/{decision_id}", operator_auth=True)
+        `admin_auth=True` attaches the same credential every other
+        administrative call in this class already requires
+        (register/activate/rotate/retire above, bearer_token or
+        api_key+organization_id), so this doesn't introduce any new
+        configuration requirement for an Agent that's already doing
+        any of those."""
+        response = self._client.request("GET", f"/v1/decisions/{decision_id}", admin_auth=True)
         resolution = None
         if response.get("resolution"):
             resolution = Resolution(

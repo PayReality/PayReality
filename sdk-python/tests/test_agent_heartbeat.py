@@ -23,7 +23,7 @@ def test_heartbeat_without_registration_raises_configuration_error(credentials_p
         agent.heartbeat()
 
 
-def test_heartbeat_is_signed_not_operator_authenticated(credentials_path, fake_http_client):
+def test_heartbeat_is_signed_not_admin_authenticated(credentials_path, fake_http_client):
     agent = _registered_agent(credentials_path, fake_http_client)
     fake_http_client.queue_response({"agent_id": "a-1", "last_seen_at": "2026-01-01T00:00:00Z", "health": "healthy"})
 
@@ -31,7 +31,7 @@ def test_heartbeat_is_signed_not_operator_authenticated(credentials_path, fake_h
 
     call = fake_http_client.calls[-1]
     assert call["path"] == "/v1/agents/a-1/heartbeat"
-    assert call["operator_auth"] is False
+    assert call["admin_auth"] is False
     assert call["headers"]["X-PayReality-Key-Id"] == "c-1"
     assert "X-PayReality-Signature" in call["headers"]
 
@@ -44,10 +44,12 @@ def test_heartbeat_is_signed_not_operator_authenticated(credentials_path, fake_h
 
 
 def test_heartbeat_defaults_sdk_version_to_this_package(credentials_path, fake_http_client):
+    from payreality.agent import _SDK_VERSION
+
     agent = _registered_agent(credentials_path, fake_http_client)
     fake_http_client.queue_response({"agent_id": "a-1", "last_seen_at": "2026-01-01T00:00:00Z", "health": "healthy"})
 
     agent.heartbeat()
 
     body = json.loads(fake_http_client.calls[-1]["signed_body"])
-    assert body["sdk_version"] == "payreality-python/0.2.0"
+    assert body["sdk_version"] == f"payreality-python/{_SDK_VERSION}"

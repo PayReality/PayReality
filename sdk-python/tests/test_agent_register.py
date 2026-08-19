@@ -8,6 +8,29 @@ def _agent(credentials_path, fake_http_client, private_key=None):
     return agent
 
 
+def test_register_works_end_to_end_with_a_bearer_token_instead_of_the_operator_key(
+    credentials_path, fake_session
+):
+    """Real Agent, real HttpClient, fake requests.Session -- proves
+    bearer_token (a session token or scoped API key) works as a genuine
+    alternative to the Operator Key for the whole register() flow, not
+    just at the HttpClient unit-test level."""
+    agent = Agent(bearer_token="pr_live_abc123", credentials_path=credentials_path)
+    agent._client._session = fake_session
+
+    fake_session.queue_response(200, [])  # GET /v1/principals: none exist yet
+    fake_session.queue_response(201, {"id": "p-1", "name": "Finance Manager"})  # POST /v1/principals
+    fake_session.queue_response(201, {"id": "a-1", "certificate_id": "c-1"})  # POST /v1/agents
+    fake_session.queue_response(200, {})  # POST /v1/agents/a-1/activate
+
+    result = agent.register(name="AP Bot", principal="Finance Manager")
+
+    assert result.agent_id == "a-1"
+    for call in fake_session.calls:
+        assert call["headers"]["Authorization"] == "Bearer pr_live_abc123"
+        assert "X-PayReality-Operator-Key" not in call["headers"]
+
+
 def test_register_creates_principal_if_it_does_not_exist(credentials_path, fake_http_client):
     agent = _agent(credentials_path, fake_http_client)
     fake_http_client.queue_response([])  # GET /v1/principals: none exist yet
@@ -29,21 +52,21 @@ def test_register_creates_principal_if_it_does_not_exist(credentials_path, fake_
     # PayReality Enterprise v1.0 (Milestone 1) gated this GET behind an
     # organization/permission check; this call previously sent no
     # credentials at all and 401'd on every real deployment.
-    assert principal_list_call["operator_auth"] is True
+    assert principal_list_call["admin_auth"] is True
 
     principal_create_call = fake_http_client.calls[1]
     assert principal_create_call["path"] == "/v1/principals"
-    assert principal_create_call["operator_auth"] is True
+    assert principal_create_call["admin_auth"] is True
 
     agent_create_call = fake_http_client.calls[2]
     assert agent_create_call["path"] == "/v1/agents"
     assert agent_create_call["json"]["acting_for_principal_id"] == "p-1"
     assert agent_create_call["json"]["public_key"].startswith("ed25519:base64:")
-    assert agent_create_call["operator_auth"] is True
+    assert agent_create_call["admin_auth"] is True
 
     activate_call = fake_http_client.calls[3]
     assert activate_call["path"] == "/v1/agents/a-1/activate"
-    assert activate_call["operator_auth"] is True
+    assert activate_call["admin_auth"] is True
 
 
 def test_register_reuses_existing_principal_by_name(credentials_path, fake_http_client):

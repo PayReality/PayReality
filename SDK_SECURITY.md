@@ -12,13 +12,14 @@ Two headers carry the result: `X-PayReality-Key-Id` (the registered `certificate
 
 There is no remote key backup, escrow, or recovery path. If `credentials.json` is lost, the agent's registered identity is unrecoverable; the fix is to register a new agent (a new keypair, a new `agent_id`) rather than trying to restore the old one.
 
-## What `api_key` really is, stated plainly
+## What `api_key` really is, and why `bearer_token` is the better choice now
 
-`Agent(api_key=...)` is, today, the same shared operator credential (`X-PayReality-Operator-Key`) used everywhere else in this platform for administrative actions, not a distinct per-developer or per-agent API key. It is only needed for `register()` (creating a new Agent or Principal is an administrative action); `authorize()` never uses it, since a signed Intent authenticates purely through the agent's own ED25519 signature. This means:
+`Agent(api_key=...)` is the same shared operator credential (`X-PayReality-Operator-Key`) used everywhere else in this platform for administrative actions, not a distinct per-developer or per-agent API key. It is only needed for `register()`, `rotate_keys()`, `retire()`, and `get_decision()` (each an administrative action); `authorize()` and `heartbeat()` never use it, since a signed Intent authenticates purely through the agent's own ED25519 signature. This means:
 
-- Handing a developer an `api_key` today is handing them the same level of administrative access every other integration on this platform currently shares, not a scoped-down credential.
-- Compromise of that single key is not isolated to one agent or one developer; it affects every registration action across the platform.
-- A real per-developer API key system (scoped to "can register agents for principal X only," individually revocable) does not exist yet. This SDK cannot manufacture that guarantee on top of an API that doesn't have it; anything claiming otherwise would be the same kind of overclaim already flagged and corrected earlier in this platform's history (the `ANTHROPIC_API_KEY` finding, the "so there is no integration?" conversation). Treat `api_key` as a production secret with the same care as any other administrative credential, and expect it to be replaced by scoped, per-developer credentials in a future phase, not this one.
+- Handing a developer an `api_key` is handing them the same level of administrative access every other integration on this platform currently shares, not a scoped-down credential.
+- Compromise of that single key is not isolated to one agent or one developer; it affects every administrative action across the platform.
+
+**`Agent(bearer_token=...)` is the real, scoped alternative** (added alongside RBAC modernization): a session token (`POST /v1/auth/login`) or, more relevantly for an integrator, a scoped API key created via `POST /v1/organization/api-keys` -- tied to one organization and one role, individually revocable, and attributable in audit logs to that specific key rather than to "the operator key, used by someone." Prefer this for any integration beyond local development; `api_key` remains supported for backward compatibility and quick local setup, not as the recommended production path anymore.
 
 ## Replay protection
 
@@ -26,7 +27,8 @@ Every signed request includes a UTC timestamp and a random nonce. The server rej
 
 ## Practical recommendations
 
-- Do not commit `~/.payreality/credentials.json` or any copy of it. Do not commit `api_key` values; load them from an environment variable or a secrets manager, exactly as you would for a Stripe or OpenAI key.
+- Prefer `bearer_token` (a scoped API key from `POST /v1/organization/api-keys`) over `api_key` for anything beyond local development, for the reasons above.
+- Do not commit `~/.payreality/credentials.json` or any copy of it. Do not commit `api_key`/`bearer_token` values; load them from an environment variable or a secrets manager, exactly as you would for a Stripe or OpenAI key.
 - One registered agent (one keypair) per real-world automation, not one shared across several. Revoking or rotating one agent's access should not require touching any other agent's key.
 - If `PAYREALITY_HOME` is set to a shared or networked location, verify its access permissions independently; this SDK's own `chmod` best-effort is not a substitute for that.
-- Rotate `api_key` on the same schedule you'd rotate any other shared administrative credential, and treat any suspected leak of it as a platform-wide incident, not an isolated one, until a scoped-credential system exists to change that.
+- Rotate whichever credential is in use (`api_key` or `bearer_token`) on the same schedule you'd rotate any other administrative credential. A leaked `api_key` is a platform-wide incident, since it's shared; a leaked scoped `bearer_token` is contained to the one organization and role it was issued for, which is exactly the isolation scoping it that way is meant to buy.

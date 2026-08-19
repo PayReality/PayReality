@@ -10,7 +10,7 @@ def test_health_calls_the_public_health_endpoint(credentials_path, fake_http_cli
 
     assert result == {"status": "ok"}
     assert fake_http_client.calls[0]["path"] == "/health"
-    assert fake_http_client.calls[0]["operator_auth"] is False
+    assert fake_http_client.calls[0]["admin_auth"] is False
 
 
 def test_version_calls_the_public_version_endpoint(credentials_path, fake_http_client):

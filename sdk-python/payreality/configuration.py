@@ -30,9 +30,25 @@ def default_credentials_path() -> Path:
 class Configuration:
     """Every knob `Agent(...)` accepts. `api_key` is the same operator
     credential every administrative action in this platform already
-    uses (SDK_SECURITY.md); it is required only for `register()`, not
-    for `authorize()`, which authenticates purely via the agent's own
-    signature.
+    uses (SDK_SECURITY.md); it is required only for `register()` and
+    the other administrative calls below, not for `authorize()`, which
+    authenticates purely via the agent's own signature.
+
+    `bearer_token` (added alongside RBAC modernization, BACKLOG_V1_
+    CLOSURE.md's "SDK has no real auth beyond the Operator Key"): an
+    alternative to `api_key` for those same administrative calls,
+    letting an integrator authenticate as a real, scoped, auditable
+    identity instead of the platform-wide admin bypass. Accepts either
+    a session token (`POST /v1/auth/login`'s `token`) or a scoped API
+    key (`POST /v1/organization/api-keys`'s `raw_key`) -- the server
+    resolves either transparently from the same `Authorization: Bearer`
+    header (app.services.auth_service.resolve_role_for_token), so this
+    SDK doesn't need to know or care which kind was configured. Checked
+    first if both `bearer_token` and `api_key` are set, since a scoped
+    credential is strictly the more specific, more auditable choice.
+    Unlike `api_key`, no `organization_id` is needed alongside it: a
+    session or API key already resolves to its own organization
+    server-side.
 
     `organization_id`: PayReality Enterprise v1.0 (Milestone 2, Multi-
     Tenant Foundation) made the operator key platform-admin-only -- it
@@ -42,9 +58,11 @@ class Configuration:
     had no concept of "organization" at all (confirmed in
     MULTI_TENANT_ARCHITECTURE_VERIFICATION.md), so every `register()`
     call was silently broken against a real multi-tenant deployment
-    until this field existed to carry it."""
+    until this field existed to carry it. Only relevant to the `api_key`
+    path above, not to `bearer_token`."""
 
     api_key: str | None = None
+    bearer_token: str | None = None
     private_key: str | None = None
     organization_id: str | None = None
     base_url: str = DEFAULT_BASE_URL

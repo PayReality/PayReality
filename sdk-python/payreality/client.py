@@ -34,30 +34,46 @@ class HttpClient:
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         signed_body: bytes | None = None,
-        operator_auth: bool = False,
+        admin_auth: bool = False,
     ) -> dict[str, Any]:
         """`signed_body`, if given, is sent verbatim as the request body
         (the exact bytes that were signed); otherwise `json` is encoded
-        normally. `operator_auth=True` attaches the configured api_key
-        as the operator-key header this platform's administrative
-        endpoints already require (SDK_SECURITY.md), plus (PayReality
-        Enterprise v1.0, Milestone 2) the target organization the
-        operator key is now required to name explicitly -- it is
-        platform-admin-only and has no organization of its own."""
+        normally. `admin_auth=True` attaches whichever administrative
+        credential is configured, in order of preference:
+
+        1. `bearer_token` (a session token or scoped API key) as
+           `Authorization: Bearer <token>` -- the more specific, more
+           auditable choice, and the one that needs no organization_id
+           alongside it, since the token already resolves to its own
+           organization server-side.
+        2. `api_key`, the platform-wide Operator Key, as the
+           `X-PayReality-Operator-Key` header this platform's
+           administrative endpoints already accept (SDK_SECURITY.md),
+           plus (PayReality Enterprise v1.0, Milestone 2) the target
+           organization it must now name explicitly, since it is
+           platform-admin-only and has no organization of its own.
+
+        Raises `AuthenticationError` if neither is configured, before
+        ever attempting the network call."""
         request_headers = dict(headers or {})
-        if operator_auth:
-            if not self._config.api_key:
+        if admin_auth:
+            if self._config.bearer_token:
+                request_headers["Authorization"] = f"Bearer {self._config.bearer_token}"
+            elif self._config.api_key:
+                if not self._config.organization_id:
+                    raise AuthenticationError(
+                        "This call requires an organization_id. Pass Agent(organization_id=...) -- "
+                        "the operator key is platform-admin-only and must name its target organization "
+                        "explicitly on every call."
+                    )
+                request_headers["X-PayReality-Operator-Key"] = self._config.api_key
+                request_headers["X-PayReality-Organization-Id"] = self._config.organization_id
+            else:
                 raise AuthenticationError(
-                    "This call requires an api_key. Pass Agent(api_key=...) or set PAYREALITY_API_KEY."
+                    "This call requires either a bearer_token (a session token or scoped API key) "
+                    "or an api_key (the Operator Key). Pass Agent(bearer_token=...) or "
+                    "Agent(api_key=..., organization_id=...)."
                 )
-            if not self._config.organization_id:
-                raise AuthenticationError(
-                    "This call requires an organization_id. Pass Agent(organization_id=...) -- "
-                    "the operator key is platform-admin-only and must name its target organization "
-                    "explicitly on every call."
-                )
-            request_headers["X-PayReality-Operator-Key"] = self._config.api_key
-            request_headers["X-PayReality-Organization-Id"] = self._config.organization_id
 
         if signed_body is not None:
             body = signed_body

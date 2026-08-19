@@ -21,6 +21,19 @@ if decision.allowed:
 
 No timestamps, nonces, signatures, or headers to build by hand. `register()` generates an ED25519 keypair and stores it locally; `authorize()` signs and submits automatically.
 
+## Authentication
+
+`authorize()` and `heartbeat()` need neither: they authenticate purely via the agent's own certificate signature. `register()`, `rotate_keys()`, `retire()`, and `get_decision()` are administrative and need one of:
+
+- `bearer_token`: a session token (`POST /v1/auth/login`) or a scoped API key (`POST /v1/organization/api-keys`) -- a real, scoped, auditable identity. Preferred for anything beyond local development.
+  ```python
+  agent = Agent(bearer_token="pr_live_...")
+  ```
+- `api_key` + `organization_id`: the platform-wide Operator Key, which authenticates as an admin bypass rather than a scoped identity, and must name its target organization explicitly since it belongs to none.
+  ```python
+  agent = Agent(api_key="your-operator-key", organization_id="org-id")
+  ```
+
 ## Install
 
 ```bash

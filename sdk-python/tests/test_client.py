@@ -25,28 +25,55 @@ def test_empty_2xx_body_returns_empty_dict(fake_session):
     assert client.request("POST", "/v1/decisions/x/resolve") == {}
 
 
-def test_operator_auth_attaches_configured_api_key_and_organization_id_headers(fake_session):
+def test_admin_auth_attaches_configured_api_key_and_organization_id_headers(fake_session):
     fake_session.queue_response(201, {"id": "a-1"})
     client = _client(fake_session, api_key="secret-op-key", organization_id="org-1")
-    client.request("POST", "/v1/agents", json={"name": "x"}, operator_auth=True)
+    client.request("POST", "/v1/agents", json={"name": "x"}, admin_auth=True)
     assert fake_session.calls[0]["headers"]["X-PayReality-Operator-Key"] == "secret-op-key"
     assert fake_session.calls[0]["headers"]["X-PayReality-Organization-Id"] == "org-1"
 
 
-def test_operator_auth_without_api_key_raises_authentication_error(fake_session):
-    client = _client(fake_session, organization_id="org-1")  # no api_key configured
+def test_admin_auth_attaches_configured_bearer_token_as_authorization_header(fake_session):
+    fake_session.queue_response(201, {"id": "a-1"})
+    client = _client(fake_session, bearer_token="pr_live_abc123")
+    client.request("POST", "/v1/agents", json={"name": "x"}, admin_auth=True)
+    assert fake_session.calls[0]["headers"]["Authorization"] == "Bearer pr_live_abc123"
+    assert "X-PayReality-Operator-Key" not in fake_session.calls[0]["headers"]
+
+
+def test_admin_auth_bearer_token_needs_no_organization_id(fake_session):
+    """Unlike api_key, a bearer_token (session token or scoped API key)
+    already resolves to its own organization server-side."""
+    fake_session.queue_response(201, {"id": "a-1"})
+    client = _client(fake_session, bearer_token="pr_live_abc123")  # no organization_id configured
+    client.request("POST", "/v1/agents", json={}, admin_auth=True)
+    assert fake_session.calls[0]["headers"]["Authorization"] == "Bearer pr_live_abc123"
+
+
+def test_admin_auth_prefers_bearer_token_over_api_key_when_both_configured(fake_session):
+    fake_session.queue_response(201, {"id": "a-1"})
+    client = _client(
+        fake_session, bearer_token="pr_live_abc123", api_key="secret-op-key", organization_id="org-1"
+    )
+    client.request("POST", "/v1/agents", json={}, admin_auth=True)
+    assert fake_session.calls[0]["headers"]["Authorization"] == "Bearer pr_live_abc123"
+    assert "X-PayReality-Operator-Key" not in fake_session.calls[0]["headers"]
+
+
+def test_admin_auth_without_any_credential_raises_authentication_error(fake_session):
+    client = _client(fake_session)  # neither bearer_token nor api_key configured
     try:
-        client.request("POST", "/v1/agents", json={}, operator_auth=True)
+        client.request("POST", "/v1/agents", json={}, admin_auth=True)
         assert False, "expected AuthenticationError"
     except AuthenticationError:
         pass
     assert fake_session.calls == []  # never even attempted the network call
 
 
-def test_operator_auth_without_organization_id_raises_authentication_error(fake_session):
+def test_admin_auth_api_key_without_organization_id_raises_authentication_error(fake_session):
     client = _client(fake_session, api_key="secret-op-key")  # no organization_id configured
     try:
-        client.request("POST", "/v1/agents", json={}, operator_auth=True)
+        client.request("POST", "/v1/agents", json={}, admin_auth=True)
         assert False, "expected AuthenticationError"
     except AuthenticationError:
         pass
