@@ -19,7 +19,7 @@ github_repository = "PayReality/PayReality"
 # tagged with the exact source commit it was built from -- see
 # MILESTONE_3_DEPLOYMENT_REPORT.md for the full build record (registry,
 # tag, digest, auth method).
-container_image = "acrprstagingadzg.azurecr.io/payreality-api:staging-15b2114"
+container_image = "acrprstagingadzg.azurecr.io/payreality-api:staging-602de59"
 
 # Milestone 5: closes the "zero alert rules" gap from MILESTONE_4_RISK_REGISTER.md.
 # Same address used throughout this program's tagging (owner, above).
