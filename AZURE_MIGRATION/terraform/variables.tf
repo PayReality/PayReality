@@ -69,6 +69,12 @@ variable "github_repository" {
   default     = ""
 }
 
+variable "github_repository_immutable" {
+  description = "\"owner@ownerId/repo@repoId\", GitHub's immutable-subject-claim format (see modules/managed-identity/variables.tf for the full explanation). Left blank (default) falls back to github_repository's classic format."
+  type        = string
+  default     = ""
+}
+
 variable "container_image" {
   description = "Full image reference (registry/repository:tag) the Container App should run. Left as a variable, not a hardcoded value, because this changes on every deploy -- Milestone 2 provisions the Container App with a placeholder; Milestone 6 is what actually points it at a real, built image."
   type        = string

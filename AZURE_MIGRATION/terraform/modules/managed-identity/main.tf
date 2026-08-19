@@ -56,5 +56,5 @@ resource "azurerm_federated_identity_credential" "github_actions" {
   # a staging branch for staging) -- never "any branch, any workflow,"
   # which would let any contributor's feature-branch CI run push images
   # or deploy with this identity's permissions.
-  subject = "repo:${var.github_repository}:ref:refs/heads/${var.github_deploy_branch}"
+  subject = "repo:${var.github_repository_immutable != "" ? var.github_repository_immutable : var.github_repository}:ref:refs/heads/${var.github_deploy_branch}"
 }

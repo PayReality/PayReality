@@ -36,8 +36,9 @@ module "managed_identity" {
   environment         = var.environment
   tags                = local.common_tags
 
-  github_repository    = var.github_repository
-  github_deploy_branch = var.environment == "prod" ? "main" : "staging"
+  github_repository           = var.github_repository
+  github_repository_immutable = var.github_repository_immutable
+  github_deploy_branch        = var.environment == "prod" ? "main" : "staging"
 }
 
 module "key_vault" {

@@ -12,6 +12,12 @@ owner       = "payreality.ceo@gmail.com"
 cost_center = "engineering"
 
 github_repository = "PayReality/PayReality"
+# Confirmed live 2026-08-19 via a failed azure-backend-deploy.yml run's
+# own AADSTS700213 error log ("subject claim - repo:PayReality@.../
+# PayReality@...") -- GitHub is now issuing this repo's OIDC tokens in
+# the immutable-subject-claim format, so github_repository above no
+# longer matches what actually gets presented.
+github_repository_immutable = "PayReality@282130118/PayReality@1272545093"
 
 # Production gets the durable, always-warm, geo-redundant choices
 # staging deliberately skips.
