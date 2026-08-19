@@ -267,3 +267,24 @@ export interface LiveEvidence {
   status: "VERIFIED" | "PENDING" | "REJECTED";
   created_at: string;
 }
+
+export interface SigningKeyHistoryEntry {
+  key_id: string;
+  algorithm: string;
+  public_key_b64: string;
+  created_at: string;
+  retired_at: string | null;
+  active: boolean;
+}
+
+export interface VerificationKeyHistoryResponse {
+  keys: SigningKeyHistoryEntry[];
+}
+
+export interface ChainVerificationResponse {
+  organization_id: string | null;
+  total: number;
+  intact: boolean;
+  invalid_signatures: string[];
+  broken_links: string[];
+}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CheckCircle2, Database, ShieldCheck, ShieldX } from "lucide-react";
+import { CheckCircle2, Database, KeyRound, Link2, ShieldCheck, ShieldX } from "lucide-react";
 import { apiClient } from "../apiClient";
 import { describeApiError, formatStatus } from "../format";
 import { HelpIcon } from "../../help/HelpIcon";
@@ -11,7 +11,12 @@ import { Button } from "../../components/ui/button";
 import { SkeletonRows } from "../../components/ui/skeleton";
 import { DEMO_MODE } from "../../demo/config";
 import { useNow, formatRelativeTime } from "../../demo/liveClock";
-import type { EvidencePayload, LiveEvidence as LiveEvidenceType } from "../types";
+import type {
+  ChainVerificationResponse,
+  EvidencePayload,
+  LiveEvidence as LiveEvidenceType,
+  VerificationKeyHistoryResponse,
+} from "../types";
 
 const FIELD_LABEL: Record<string, string> = {
   action: "Action",
@@ -30,6 +35,11 @@ export function LiveEvidence() {
   const [verifyResults, setVerifyResults] = useState<Record<string, boolean>>({});
   const [expandedDetails, setExpandedDetails] = useState<Set<string>>(new Set());
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [keyHistory, setKeyHistory] = useState<VerificationKeyHistoryResponse | null>(null);
+  const [keyHistoryError, setKeyHistoryError] = useState<string | null>(null);
+  const [chainResult, setChainResult] = useState<ChainVerificationResponse | null>(null);
+  const [chainChecking, setChainChecking] = useState(false);
+  const [chainError, setChainError] = useState<string | null>(null);
 
   function load() {
     setLoadError(null);
@@ -48,7 +58,16 @@ export function LiveEvidence() {
     });
   }
 
+  function loadKeyHistory() {
+    setKeyHistoryError(null);
+    apiClient
+      .get<VerificationKeyHistoryResponse>("/v1/evidence/verification-keys")
+      .then(setKeyHistory)
+      .catch((e) => setKeyHistoryError(describeApiError(e, "Signing key history")));
+  }
+
   useEffect(load, []);
+  useEffect(loadKeyHistory, []);
   // Milestone 13 Phase 6A: catches a decision/resolution created from
   // another tab (or this tab's own Decision Center flow, just via the
   // cross-tab path in case the two are open side by side), or this tab
@@ -58,6 +77,19 @@ export function LiveEvidence() {
   const verify = async (id: string) => {
     const result = await apiClient.post<{ valid: boolean }>(`/v1/evidence/${id}/verify`);
     setVerifyResults((prev) => ({ ...prev, [id]: result.valid }));
+  };
+
+  const checkChainIntegrity = async () => {
+    setChainChecking(true);
+    setChainError(null);
+    try {
+      const result = await apiClient.get<ChainVerificationResponse>("/v1/evidence/chain/verify");
+      setChainResult(result);
+    } catch (e) {
+      setChainError(describeApiError(e, "Chain integrity check"));
+    } finally {
+      setChainChecking(false);
+    }
   };
 
   return (
@@ -78,6 +110,110 @@ export function LiveEvidence() {
           organisation's rules allowed it, not just what happened. Verify a signature to detect
           any tampering.
         </p>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 mb-8">
+        <Card padding={20} borderColor="var(--pr-overlay-06)">
+          <div className="flex items-center gap-2 mb-3">
+            <KeyRound className="w-4 h-4" style={{ color: "var(--pr-verification-purple)" }} />
+            <h2 className="text-sm font-semibold" style={{ color: "var(--pr-text-primary)" }}>
+              Signing key history
+            </h2>
+          </div>
+          {keyHistoryError && (
+            <Alert severity="warning" className="text-xs">
+              <div className="flex items-center gap-3">
+                <span>{keyHistoryError}</span>
+                <Button variant="ghost" size="sm" onClick={loadKeyHistory}>Retry</Button>
+              </div>
+            </Alert>
+          )}
+          {!keyHistory && !keyHistoryError && <SkeletonRows count={2} height={36} />}
+          {keyHistory && (
+            <div className="space-y-2">
+              {keyHistory.keys.map((k) => (
+                <div key={k.key_id} className="flex items-center justify-between gap-3 text-xs">
+                  <div className="min-w-0">
+                    <p className="font-mono truncate" style={{ color: "var(--pr-text-primary)" }}>{k.key_id}</p>
+                    <p style={{ color: "var(--pr-text-muted)" }}>
+                      {k.algorithm} &middot; issued {new Date(k.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <span
+                    className="px-2 py-0.5 rounded-full font-medium flex-shrink-0"
+                    style={{
+                      backgroundColor: k.active ? "rgba(34,197,94,0.1)" : "var(--pr-overlay-06)",
+                      color: k.active ? "var(--pr-trust-green)" : "var(--pr-text-muted)",
+                    }}
+                  >
+                    {k.active ? "Active" : k.retired_at ? `Retired ${new Date(k.retired_at).toLocaleDateString()}` : "Retired"}
+                  </span>
+                </div>
+              ))}
+              {keyHistory.keys.length === 0 && (
+                <p className="text-xs" style={{ color: "var(--pr-text-muted)" }}>No signing keys recorded yet.</p>
+              )}
+            </div>
+          )}
+          <p className="text-xs mt-3" style={{ color: "var(--pr-text-disabled)" }}>
+            A record signed under a retired key is still independently verifiable: its key stays
+            published here, offline, indefinitely.
+          </p>
+        </Card>
+
+        <Card padding={20} borderColor="var(--pr-overlay-06)">
+          <div className="flex items-center gap-2 mb-3">
+            <Link2 className="w-4 h-4" style={{ color: "var(--pr-authority-blue)" }} />
+            <h2 className="text-sm font-semibold" style={{ color: "var(--pr-text-primary)" }}>
+              Chain integrity check
+            </h2>
+          </div>
+          <p className="text-xs mb-3" style={{ color: "var(--pr-text-muted)" }}>
+            Checks every record's signature and confirms none has been deleted or reordered, not
+            just that individual signatures are valid.
+          </p>
+          <Button variant="ghost" size="sm" onClick={checkChainIntegrity} disabled={chainChecking}>
+            {chainChecking ? "Checking…" : "Run chain integrity check"}
+          </Button>
+          {chainError && (
+            <Alert severity="warning" className="text-xs mt-3">
+              <div className="flex items-center gap-3">
+                <span>{chainError}</span>
+              </div>
+            </Alert>
+          )}
+          {chainResult && (
+            <div
+              className="mt-3 p-3 text-xs"
+              style={{
+                borderLeft: `3px solid ${chainResult.intact ? "var(--pr-trust-green)" : "var(--pr-critical-red)"}`,
+                backgroundColor: "var(--pr-overlay-04)",
+                borderRadius: 6,
+              }}
+            >
+              <p
+                className="font-medium mb-1 flex items-center gap-1.5"
+                style={{ color: chainResult.intact ? "var(--pr-trust-green)" : "var(--pr-critical-red)" }}
+              >
+                {chainResult.intact ? <ShieldCheck className="w-3.5 h-3.5" /> : <ShieldX className="w-3.5 h-3.5" />}
+                {chainResult.intact ? "Chain intact" : "Chain integrity issue found"}
+              </p>
+              <p style={{ color: "var(--pr-text-muted)" }}>{chainResult.total} records checked.</p>
+              {chainResult.invalid_signatures.length > 0 && (
+                <p style={{ color: "var(--pr-critical-red)" }}>
+                  {chainResult.invalid_signatures.length} invalid signature
+                  {chainResult.invalid_signatures.length > 1 ? "s" : ""}.
+                </p>
+              )}
+              {chainResult.broken_links.length > 0 && (
+                <p style={{ color: "var(--pr-critical-red)" }}>
+                  {chainResult.broken_links.length} broken chain link
+                  {chainResult.broken_links.length > 1 ? "s" : ""}.
+                </p>
+              )}
+            </div>
+          )}
+        </Card>
       </div>
 
       {loadError && (
