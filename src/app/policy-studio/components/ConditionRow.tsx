@@ -10,7 +10,11 @@ const inputStyle: React.CSSProperties = {
   fontFamily: "monospace",
 };
 
-function parseValue(raw: string, operator: string): Condition["value"] {
+// Exported for ConditionRow.test.ts: this is what actually decides what
+// value a Runtime Policy condition enforces server-side, so a coercion
+// bug here (e.g. losing a leading zero, or a stray space breaking the
+// "in" split) silently changes rule behavior, not just display.
+export function parseValue(raw: string, operator: string): Condition["value"] {
   if (operator === "exists") return raw === "true";
   if (operator === "in") return raw.split(",").map((s) => s.trim());
   const asNumber = Number(raw);
@@ -20,7 +24,7 @@ function parseValue(raw: string, operator: string): Condition["value"] {
   return raw;
 }
 
-function valueToInputString(value: Condition["value"]): string {
+export function valueToInputString(value: Condition["value"]): string {
   if (Array.isArray(value)) return value.join(", ");
   return String(value);
 }
