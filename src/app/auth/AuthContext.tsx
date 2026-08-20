@@ -4,6 +4,7 @@ import { clearSessionToken, getSessionToken, setSessionToken } from "../live/ses
 import { identify, reset as resetAnalytics } from "../services/analytics";
 import { DEMO_MODE } from "../demo/config";
 import { demoCurrentUser } from "../demo/fixtures/users";
+import { ensureDemoAgentKeysSeeded } from "../demo/seedAgentKeys";
 import type { CurrentUser } from "./types";
 
 interface AuthContextValue {
@@ -25,6 +26,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // token check and /v1/auth/me round-trip below entirely.
   const [user, setUser] = useState<CurrentUser | null>(DEMO_MODE ? demoCurrentUser : null);
   const [loading, setLoading] = useState(!DEMO_MODE);
+
+  // Runs once per app mount, unconditionally in demo builds -- see
+  // seedAgentKeys.ts for why the demo's own fixture agents need this
+  // before LiveTestIntent.tsx's agent picker can show any of them.
+  useEffect(() => {
+    if (DEMO_MODE) ensureDemoAgentKeysSeeded();
+  }, []);
 
   useEffect(() => {
     if (DEMO_MODE) return;
