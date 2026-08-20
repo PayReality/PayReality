@@ -40,3 +40,23 @@ resource "azurerm_static_web_app" "dashboard" {
     App        = "dashboard"
   })
 }
+
+# The public demo: the SAME codebase and SAME repository as `dashboard`
+# above (github_repository_dashboard), just built with
+# VITE_PUBLIC_DEMO_MODE=true instead of a real VITE_API_URL -- not a
+# separate app, so a third Static Web App resource rather than a fourth
+# repository variable. Was on Vercel (`payreality-demo-public`,
+# demo.aisecurewatch.com); this migrates it to the same hosting model
+# already live for `website`/`dashboard` above.
+resource "azurerm_static_web_app" "demo" {
+  name                = "stapp-payreality-demo-prod-${var.location_short}"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  sku_tier            = var.sku_tier
+  sku_size            = var.sku_tier
+
+  tags = merge(var.tags, {
+    Repository = var.github_repository_dashboard
+    App        = "demo"
+  })
+}

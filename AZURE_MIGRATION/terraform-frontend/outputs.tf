@@ -17,3 +17,12 @@ output "dashboard_api_key" {
   value     = azurerm_static_web_app.dashboard.api_key
   sensitive = true
 }
+
+output "demo_default_hostname" {
+  value = azurerm_static_web_app.demo.default_host_name
+}
+
+output "demo_api_key" {
+  value     = azurerm_static_web_app.demo.api_key
+  sensitive = true
+}
