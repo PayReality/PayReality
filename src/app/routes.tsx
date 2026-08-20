@@ -90,6 +90,11 @@ export const router = createBrowserRouter([
           { path: "agents", lazy: () => import("./agents/AgentDirectoryPage").then((m) => ({ Component: m.AgentDirectoryPage })) },
           { path: "agents/:agentId", lazy: () => import("./agents/AgentDetailPage").then((m) => ({ Component: m.AgentDetailPage })) },
           { path: "decisions", lazy: () => import("./live/pages/LiveTestIntent").then((m) => ({ Component: m.LiveTestIntent })) },
+          // The Pending Review queue (GET /v1/decisions): every
+          // HUMAN_REVIEW decision in the organization not yet resolved,
+          // across every agent -- previously undiscoverable without an
+          // exact decision id already in hand.
+          { path: "decisions/queue", lazy: () => import("./live/pages/PendingReviewQueuePage").then((m) => ({ Component: m.PendingReviewQueuePage })) },
           { path: "evidence", lazy: () => import("./live/pages/LiveEvidence").then((m) => ({ Component: m.LiveEvidence })) },
           { path: "assurance", lazy: () => import("./live/pages/LiveAssurance").then((m) => ({ Component: m.LiveAssurance })) },
 

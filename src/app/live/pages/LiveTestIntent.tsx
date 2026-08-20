@@ -644,9 +644,14 @@ export function LiveTestIntent() {
   return (
     <div className="p-8 max-w-7xl mx-auto" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
       <div className="mb-6">
-        <div className="flex items-center gap-1.5 mb-2">
-          <h1 style={{ color: "var(--pr-text-primary)" }}>Runtime Decision Center</h1>
-          <HelpIcon articleId="runtime_decision" />
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <div className="flex items-center gap-1.5">
+            <h1 style={{ color: "var(--pr-text-primary)" }}>Runtime Decision Center</h1>
+            <HelpIcon articleId="runtime_decision" />
+          </div>
+          <Link to="/decisions/queue" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
+            Pending review queue
+          </Link>
         </div>
         <p style={{ color: "var(--pr-text-muted)" }}>
           The moment an AI agent asks permission to act. Submit a signed request and see it checked

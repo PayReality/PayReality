@@ -265,6 +265,15 @@ on("GET", "/v1/evidence", ({ query }) => {
   return decisionId ? records.filter((e) => e.decision_id === decisionId) : records;
 });
 on("POST", "/v1/evidence/:id/verify", () => ({ valid: true }));
+// Pending Review queue: derived the same way the real backend derives
+// it (outcome === HUMAN_REVIEW with no resolution yet), not a fabricated
+// always-full list -- if every scripted demo decision happens to already
+// be resolved, the queue honestly shows empty rather than faking activity.
+on("GET", "/v1/decisions", () => {
+  ensureLiveFeedStarted();
+  const pending = getLiveDecisions().filter((d) => d.outcome === "HUMAN_REVIEW" && d.resolution === null);
+  return { decisions: pending, total: pending.length, limit: 100, offset: 0 };
+});
 on("GET", "/v1/decisions/:id", ({ params }) => findLiveDecision(params.id) ?? notFound("decision"));
 on("POST", "/v1/decisions/:id/resolve", ({ params }) => blocked(findLiveDecision(params.id) ?? notFound("decision")));
 on("POST", "/v1/intents", () => {

@@ -179,12 +179,15 @@ async def test_unauthenticated_decision_read_returns_401(db):
 
 
 async def test_decision_read_denied_for_role_without_decisions_view(db, org_and_agent):
-    """REVIEWER has only AUTHORITY_REVIEW (domain/rbac/permissions.py) --
-    no DECISIONS_VIEW -- so a REVIEWER-role session must be denied here,
-    the exact gap the audit found (before this fix, EVERY role, and no
-    role at all, could reach this endpoint)."""
+    """AGENT_ADMIN has no DECISIONS_VIEW (domain/rbac/permissions.py) --
+    so an AGENT_ADMIN-role session must be denied here, the exact gap
+    the audit found (before this fix, EVERY role, and no role at all,
+    could reach this endpoint). REVIEWER used to be this test's example
+    of a denied role too, until the Pending Review queue work granted
+    Reviewer DECISIONS_VIEW/DECISIONS_RESOLVE -- see
+    test_decision_read_allowed_for_reviewer below for that positive case."""
     org, _, _ = org_and_agent
-    _, session = _user_and_session(db, org.id, "reviewer")
+    _, session = _user_and_session(db, org.id, "agent_admin")
     checker = require_permission(Permission.DECISIONS_VIEW)
     with pytest.raises(HTTPException) as exc:
         await checker(x_payreality_operator_key=None, authorization=f"Bearer {session.id}", db=db)
@@ -196,6 +199,17 @@ async def test_decision_read_allowed_for_role_with_decisions_view(db, org_and_ag
     """GOVERNANCE_ADMIN has DECISIONS_VIEW -- must pass silently."""
     org, _, _ = org_and_agent
     _, session = _user_and_session(db, org.id, "governance_admin")
+    checker = require_permission(Permission.DECISIONS_VIEW)
+    await checker(x_payreality_operator_key=None, authorization=f"Bearer {session.id}", db=db)
+
+
+async def test_decision_read_allowed_for_reviewer(db, org_and_agent):
+    """Reviewer gained DECISIONS_VIEW (and DECISIONS_RESOLVE) alongside
+    the Pending Review queue (GET /v1/decisions) -- this is the role the
+    queue is actually meant for, so it must pass silently here, the same
+    as GOVERNANCE_ADMIN above."""
+    org, _, _ = org_and_agent
+    _, session = _user_and_session(db, org.id, "reviewer")
     checker = require_permission(Permission.DECISIONS_VIEW)
     await checker(x_payreality_operator_key=None, authorization=f"Bearer {session.id}", db=db)
 
@@ -330,3 +344,87 @@ async def test_explanation_allowed_with_runtime_policy_view(db, org_and_agent):
     _, session = _user_and_session(db, org.id, "governance_admin")
     checker = require_permission(Permission.RUNTIME_POLICY_VIEW)
     await checker(x_payreality_operator_key=None, authorization=f"Bearer {session.id}", db=db)
+
+
+# --- I. GET /v1/decisions (the Pending Review queue) -----------------------
+# intent_service.list_pending_decisions_for_organization exercised directly,
+# the same discipline as get_decision_for_organization above: real
+# infrastructure (real ephemeral OPA, real relational models), not mocks.
+
+
+def test_pending_decisions_isolates_organizations(db, opa_url):
+    org_a = Organization(id=uuid.uuid4(), name="Org A")
+    org_b = Organization(id=uuid.uuid4(), name="Org B")
+    db.add_all([org_a, org_b])
+    db.flush()
+    principal_a = Principal(id=uuid.uuid4(), name="alice", organization_id=org_a.id)
+    principal_b = Principal(id=uuid.uuid4(), name="bob", organization_id=org_b.id)
+    db.add_all([principal_a, principal_b])
+    db.flush()
+    agent_a = Agent(id=uuid.uuid4(), name="agent-a", acting_for_principal_id=principal_a.id, status="active")
+    agent_b = Agent(id=uuid.uuid4(), name="agent-b", acting_for_principal_id=principal_b.id, status="active")
+    db.add_all([agent_a, agent_b])
+    db.commit()
+
+    _deploy_policy(db, org_a.id, _policy("alice", "wire_transfer", Condition(field="amount", operator=Operator.GTE, value=10000), Effect.REQUIRE_HUMAN_REVIEW), opa_url)
+    _deploy_policy(db, org_b.id, _policy("bob", "wire_transfer", Condition(field="amount", operator=Operator.GTE, value=10000), Effect.REQUIRE_HUMAN_REVIEW), opa_url)
+    _, decision_a, _ = _submit(db, agent_a, "wire_transfer", 20000.0)
+    _, decision_b, _ = _submit(db, agent_b, "wire_transfer", 20000.0)
+    assert decision_a.outcome == "HUMAN_REVIEW"
+    assert decision_b.outcome == "HUMAN_REVIEW"
+
+    decisions_a, total_a = intent_service.list_pending_decisions_for_organization(db, org_a.id)
+    decisions_b, total_b = intent_service.list_pending_decisions_for_organization(db, org_b.id)
+
+    assert total_a == 1 and [d.id for d in decisions_a] == [decision_a.id]
+    assert total_b == 1 and [d.id for d in decisions_b] == [decision_b.id]
+
+
+def test_pending_decisions_excludes_already_resolved(db, org_and_agent, opa_url):
+    org, _, agent = org_and_agent
+    _deploy_policy(db, org.id, _policy("alice", "wire_transfer", Condition(field="amount", operator=Operator.GTE, value=10000), Effect.REQUIRE_HUMAN_REVIEW), opa_url)
+    _, decision, _ = _submit(db, agent, "wire_transfer", 20000.0)
+    assert decision.outcome == "HUMAN_REVIEW"
+
+    decisions, total = intent_service.list_pending_decisions_for_organization(db, org.id)
+    assert total == 1 and decisions[0].id == decision.id
+
+    from app.services import resolution_service
+
+    resolution_service.resolve_decision(
+        db, decision_id=decision.id, organization_id=org.id,
+        resolution="approved", resolved_by="test-reviewer",
+    )
+
+    decisions, total = intent_service.list_pending_decisions_for_organization(db, org.id)
+    assert total == 0
+    assert decisions == []
+
+
+def test_pending_decisions_excludes_allow_and_deny_outcomes(db, org_and_agent, opa_url):
+    """The queue is a Reviewer's task list, not a general decision feed --
+    an already-final ALLOW/DENY decision was never pending review and
+    must never appear in it."""
+    org, _, agent = org_and_agent
+    _deploy_policy(db, org.id, _policy("alice", "vendor_payment", Condition(field="amount", operator=Operator.LTE, value=50000), Effect.ALLOW), opa_url)
+    _, decision, _ = _submit(db, agent, "vendor_payment", 500.0)
+    assert decision.outcome == "ALLOW"
+
+    decisions, total = intent_service.list_pending_decisions_for_organization(db, org.id)
+    assert total == 0
+    assert decisions == []
+
+
+def test_pending_decisions_pagination_reports_the_true_total(db, org_and_agent, opa_url):
+    org, _, agent = org_and_agent
+    _deploy_policy(db, org.id, _policy("alice", "wire_transfer", Condition(field="amount", operator=Operator.GTE, value=10000), Effect.REQUIRE_HUMAN_REVIEW), opa_url)
+    for _ in range(3):
+        _submit(db, agent, "wire_transfer", 20000.0)
+
+    decisions, total = intent_service.list_pending_decisions_for_organization(db, org.id, limit=2, offset=0)
+    assert total == 3
+    assert len(decisions) == 2
+
+    decisions_page_2, total_page_2 = intent_service.list_pending_decisions_for_organization(db, org.id, limit=2, offset=2)
+    assert total_page_2 == 3
+    assert len(decisions_page_2) == 1

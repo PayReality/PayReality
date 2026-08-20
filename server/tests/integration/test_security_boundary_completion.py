@@ -296,15 +296,28 @@ async def test_resolve_decision_unauthenticated_returns_401(db):
 
 
 async def test_resolve_decision_denied_without_decisions_resolve(db, org_and_agent):
-    """REVIEWER has only AUTHORITY_REVIEW, not DECISIONS_RESOLVE -- must
-    be denied (a pre-existing, unrelated fact about this role's scope,
-    reconfirmed here since it's directly relevant to this endpoint)."""
+    """AGENT_ADMIN has neither AUTHORITY_REVIEW nor DECISIONS_RESOLVE --
+    must be denied. REVIEWER used to be this test's example of a denied
+    role, until the Pending Review queue work granted Reviewer
+    DECISIONS_VIEW/DECISIONS_RESOLVE -- see
+    test_resolve_decision_allowed_for_reviewer below for that positive
+    case."""
     org, _, _ = org_and_agent
-    _, session = _user_and_session(db, org.id, "reviewer")
+    _, session = _user_and_session(db, org.id, "agent_admin")
     checker = require_permission(Permission.DECISIONS_RESOLVE)
     with pytest.raises(HTTPException) as exc:
         await checker(x_payreality_operator_key=None, authorization=f"Bearer {session.id}", db=db)
     assert exc.value.status_code == 403
+
+
+async def test_resolve_decision_allowed_for_reviewer(db, org_and_agent):
+    """Reviewer gained DECISIONS_RESOLVE alongside the Pending Review
+    queue -- resolving a HUMAN_REVIEW decision is the queue's entire
+    purpose, so this must pass silently now."""
+    org, _, _ = org_and_agent
+    _, session = _user_and_session(db, org.id, "reviewer")
+    checker = require_permission(Permission.DECISIONS_RESOLVE)
+    await checker(x_payreality_operator_key=None, authorization=f"Bearer {session.id}", db=db)
 
 
 def test_resolve_decision_same_org_succeeds(db, org_and_agent, opa_url):

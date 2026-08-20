@@ -4,7 +4,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Agent, EnterpriseSystem, Evidence, Organization, Policy, User
+from app.db.models import (
+    Agent,
+    DecisionResolution,
+    EnterpriseSystem,
+    Evidence,
+    Intent,
+    Organization,
+    Policy,
+    User,
+)
 from app.db.session import get_db
 from app.dependencies import (
     get_current_organization,
@@ -16,6 +25,7 @@ from app.domain.auth.signature import check_timestamp_window
 from app.domain.rbac.permissions import Permission
 from app.schemas.intent import (
     DecisionExplanationResponse,
+    DecisionListResponse,
     DecisionPolicyBindingResponse,
     DecisionSummary,
     GetDecisionResponse,
@@ -141,8 +151,14 @@ def get_decision(
     except intent_service.CrossOrganizationAccessError:
         raise HTTPException(status_code=404, detail="decision_not_found")
 
-    from app.db.models import DecisionResolution, Intent
+    return _build_decision_response(db, decision)
 
+
+def _build_decision_response(db: Session, decision) -> GetDecisionResponse:
+    """Shared by get_decision and list_decisions (the Pending Review
+    queue) so both read the exact same fields the exact same way --
+    factored out rather than duplicated when the queue endpoint was
+    added."""
     intent = db.get(Intent, decision.intent_id)
     resolution_row = db.query(DecisionResolution).filter_by(decision_id=decision.id).one_or_none()
 
@@ -190,6 +206,38 @@ def get_decision(
         policy_bundle_hash=evidence_payload.get("policy_bundle_hash"),
         authority_version=evidence_payload.get("authority_version"),
         resolution=resolution,
+    )
+
+
+@router.get(
+    "/decisions",
+    response_model=DecisionListResponse,
+    dependencies=[Depends(require_permission(Permission.DECISIONS_VIEW))],
+)
+def list_decisions(
+    limit: int = 50,
+    offset: int = 0,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    """The Pending Review queue: every HUMAN_REVIEW decision in this
+    organization not yet resolved, so a Reviewer has an actual list to
+    work from instead of needing an exact decision id already in hand
+    (the only other way to reach a decision, via GET /v1/decisions/{id}).
+    Gated by the same Permission.DECISIONS_VIEW the single-decision read
+    already uses. `limit` is capped the same way agents.py's list
+    endpoint caps its own (a caller asking for an unbounded page doesn't
+    get an unbounded query)."""
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    decisions, total = intent_service.list_pending_decisions_for_organization(
+        db, organization.id, limit=limit, offset=offset
+    )
+    return DecisionListResponse(
+        decisions=[_build_decision_response(db, d) for d in decisions],
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 

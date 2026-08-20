@@ -173,6 +173,16 @@ export interface LiveDecision {
   resolution: LiveResolution | null;
 }
 
+// Pending Review queue (GET /v1/decisions): every HUMAN_REVIEW decision
+// in this organization not yet resolved. Matches AgentListResponse's
+// pagination envelope shape (schemas/agent.py), not a new convention.
+export interface LiveDecisionListResponse {
+  decisions: LiveDecision[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 // Runtime Authority Context (PHASE_2_RUNTIME_CONTEXT.md), as assembled by
 // authority_context_service.resolve_runtime_authority_context and carried
 // into Evidence unchanged (Stage C). Every field is additive: a Principal

@@ -58,6 +58,16 @@ def test_reviewer_can_review_but_never_publish():
     assert not has_permission(Role.REVIEWER, Permission.RUNTIME_POLICY_CREATE)
 
 
+def test_reviewer_can_view_and_resolve_decisions():
+    """Added alongside the Pending Review queue (GET /v1/decisions): a
+    Reviewer is the role this queue is actually for, so it needs
+    decisions.view (to see the queue) and decisions.resolve (to act on
+    it) -- previously the Reviewer role had neither, despite its name,
+    and could only review Authority Graphs."""
+    assert has_permission(Role.REVIEWER, Permission.DECISIONS_VIEW)
+    assert has_permission(Role.REVIEWER, Permission.DECISIONS_RESOLVE)
+
+
 def test_auditor_is_strictly_read_only():
     view_permissions = {
         Permission.EVIDENCE_VIEW,

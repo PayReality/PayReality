@@ -106,7 +106,13 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.PRINCIPAL_MANAGE,
         }
     ),
-    Role.REVIEWER: frozenset({Permission.AUTHORITY_REVIEW}),
+    Role.REVIEWER: frozenset(
+        {
+            Permission.AUTHORITY_REVIEW,
+            Permission.DECISIONS_VIEW,
+            Permission.DECISIONS_RESOLVE,
+        }
+    ),
     Role.AUDITOR: frozenset(
         {
             Permission.EVIDENCE_VIEW,

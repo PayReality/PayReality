@@ -105,6 +105,17 @@ class GetDecisionResponse(BaseModel):
     resolution: ResolutionSummary | None = None
 
 
+class DecisionListResponse(BaseModel):
+    """Pagination envelope for GET /v1/decisions (the Pending Review
+    queue), matching AgentListResponse's established shape
+    (schemas/agent.py) rather than inventing a new one."""
+
+    decisions: list[GetDecisionResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 class PolicyManifestEntry(BaseModel):
     """One RuntimePolicy as it was actually compiled into this bundle,
     read from Policy.bundle_manifest (Historical Policy Binding). `id`

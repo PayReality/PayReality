@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -10,6 +10,7 @@ from app.db.models import (
     Agent,
     Certificate,
     Decision,
+    DecisionResolution,
     EnterpriseSystem,
     Evidence,
     Intent,
@@ -625,6 +626,42 @@ def list_decisions_for_agent(db: Session, agent_id: uuid.UUID, limit: int = 20) 
             .limit(limit)
         )
     )
+
+
+def list_pending_decisions_for_organization(
+    db: Session, organization_id: uuid.UUID | None, limit: int = 50, offset: int = 0
+) -> tuple[list[Decision], int]:
+    """The Pending Review queue: every HUMAN_REVIEW decision in this
+    organization with no DecisionResolution row yet -- the actual task
+    list a Reviewer has no way to discover today (GET /v1/decisions/{id}
+    needs an exact id already in hand, list_decisions_for_agent above is
+    scoped to one agent). Org-scoped at the SQL level via the same
+    Decision -> Intent -> Agent -> Principal join chain, matching
+    agent_service.list_agents' join-at-SQL-level pattern rather than the
+    per-row Python resolution get_decision_for_organization uses for a
+    single decision (that approach doesn't scale to filtering a whole
+    table).
+
+    organization_id=None is the same real-but-unreachable scope
+    _resolve_chain_scope documents elsewhere in this module (a Principal
+    with no organisation set yet): a caller authenticated for a real
+    organization never passes None here, so those decisions stay
+    invisible to every real queue, exactly like the single-decision path."""
+    base = (
+        select(Decision)
+        .join(Intent, Decision.intent_id == Intent.id)
+        .join(Agent, Intent.agent_id == Agent.id)
+        .join(Principal, Agent.acting_for_principal_id == Principal.id)
+        .outerjoin(DecisionResolution, DecisionResolution.decision_id == Decision.id)
+        .where(
+            Principal.organization_id == organization_id,
+            Decision.outcome == "HUMAN_REVIEW",
+            DecisionResolution.id.is_(None),
+        )
+    )
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    stmt = base.order_by(Decision.created_at.desc()).limit(limit).offset(offset)
+    return list(db.scalars(stmt)), total
 
 
 def list_evidence_for_agent(db: Session, agent_id: uuid.UUID, limit: int = 20) -> list[Evidence]:
