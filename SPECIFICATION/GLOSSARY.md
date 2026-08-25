@@ -8,11 +8,15 @@ Every term of art used across this specification, defined once. Alphabetical. Ea
 
 **Authority** — The delegated, scoped, time-bounded right to act. Two historical representations exist: the retired Authority/Mandate model, and the current Authority Model (`AuthorityRelationship` with real FKs). [08_RUNTIME_AUTHORITY.md](08_RUNTIME_AUTHORITY.md), [17_LEGACY_COMPONENTS.md](17_LEGACY_COMPONENTS.md)
 
+**Authority Freshness**: The re-attestation lifecycle on a `RuntimePolicyRecord`: `last_attested_at`, `next_review_at`, `review_cadence_days`, and `authority_expires_at`. Re-attesting (`attest_policy`) only updates those fields; it is a label update, never a status change, and it never touches `authority_expires_at` itself. REVIEW DUE (the current time has passed `next_review_at`) is a dashboard reminder that never blocks anything on its own. AUTHORITY EXPIRED (the current time has genuinely passed `authority_expires_at`) is a real decision-time check, but only for a matched policy whose `risk_level` is high or critical, where it downgrades what would otherwise be ALLOW to HUMAN_REVIEW with reason `authority_review_overdue`. A low or medium risk policy past its `authority_expires_at` is a disclosed, accepted trade-off, not silently ignored. [POC_READINESS_REPORT.md](../POC_READINESS_REPORT.md) §4.
+
 **Authority Graph** — The AI Authority Builder's full extraction result for one corpus: policies, principals, resources, operations, relationships, conflicts, gaps, and questions. [09_AI_AUTHORITY_BUILDER.md](09_AI_AUTHORITY_BUILDER.md)
 
 **Authority Model** — Phase 1's real organisational hierarchy (`BusinessUnit → Department → Team`) and delegation graph. [08_RUNTIME_AUTHORITY.md](08_RUNTIME_AUTHORITY.md)
 
 **Bundle / Policy Bundle** — The compiled, versioned Rego module produced by Compiler V2 from a set of `RuntimePolicy` objects; identified by a `bundle_hash` computed over its Rego source and manifest (excluding the compile timestamp, so identical input always hashes identically). [07_RUNTIME_POLICY_ENGINE.md](07_RUNTIME_POLICY_ENGINE.md) §7.6
+
+**Capability Authorization**: A short-lived, signed, single-use token (`domain/capability/token.py`) issued only for an ALLOW decision, binding decision, principal, action, resource, constraints, policy version, fact hashes, audience, nonce, and expiry into one signed payload. Verification and consumption happen atomically, so two concurrent presentations of the same token cannot both succeed. A capability token is explicitly not itself an enforcement mechanism: it is a transport and proof mechanism that only produces real bypass resistance when a genuine downstream Policy Enforcement Point actually requires and checks it before acting, which no production system does today. [POC_READINESS_REPORT.md](../POC_READINESS_REPORT.md) §5.
 
 **Certificate** — An Agent's Ed25519 keypair record (public key only, server-side); status one of `issued/active/rotated/expired/revoked`. At most one `active` per agent, enforced by a partial unique DB index. [11_AGENT_ARCHITECTURE.md](11_AGENT_ARCHITECTURE.md) §11.3
 
@@ -24,7 +28,11 @@ Every term of art used across this specification, defined once. Alphabetical. Ea
 
 **Decision Engine** — `domain/decision/engine.py::evaluate()`, the pure function with exactly one code path to `ALLOW`. [12_DECISION_ENGINE.md](12_DECISION_ENGINE.md) §12.1
 
+**Enforcement**: Not something PayReality performs today. See Policy Decision Point (PDP) and Policy Enforcement Point (PEP) below for the distinction: PayReality decides, it does not gate. [POC_READINESS_REPORT.md](../POC_READINESS_REPORT.md) §8.
+
 **Evidence** — An Ed25519-signed, append-only record of a Decision (or a later resolution of one). Chained per organisation since Phase 5. [13_EVIDENCE_ENGINE.md](13_EVIDENCE_ENGINE.md)
+
+**Fact Source**: The registered signing identity (`FactSource`) a Trusted Enterprise Fact is attested under: its own Ed25519 keypair, an active/revoked lifecycle, and no other state. Distinct from an Agent identity by design, so an agent requesting authorization can never supply a consequential external fact about itself as if it were an independent attestation. [POC_READINESS_REPORT.md](../POC_READINESS_REPORT.md) §3.
 
 **Fail-closed** — The design principle that any ambiguity, error, timeout, or absence of a covering policy resolves to `HUMAN_REVIEW`, never `ALLOW`. [12_DECISION_ENGINE.md](12_DECISION_ENGINE.md) §12.5
 
@@ -39,6 +47,10 @@ Every term of art used across this specification, defined once. Alphabetical. Ea
 **Operator key** — The single shared `ADMIN_API_KEY`; a full, permanent bypass of RBAC, checked first in `require_permission`. [14_SECURITY_MODEL.md](14_SECURITY_MODEL.md) §14.1
 
 **Permission** — A fixed, enumerated capability (e.g. `RUNTIME_POLICY_PUBLISH`); every enforcement point checks a Permission, never a Role directly. [14_SECURITY_MODEL.md](14_SECURITY_MODEL.md) §14.2
+
+**Policy Decision Point (PDP)**: PayReality's actual role today. It evaluates whether a proposed action is authorized under the currently active policy, produces the ALLOW, DENY, or HUMAN_REVIEW Decision and its signed Evidence before the action executes, and can issue a Capability Authorization token for an ALLOW. It does not itself block, gate, or execute anything; it decides. [01_PRODUCT_OVERVIEW.md](01_PRODUCT_OVERVIEW.md) §1.2, [POC_READINESS_REPORT.md](../POC_READINESS_REPORT.md) §8.
+
+**Policy Enforcement Point (PEP)**: The role that does not yet exist in production: a real downstream system, on the only path to a protected action, that actually requires and checks a valid Capability Authorization (or equivalent) before letting that action proceed. `scripts/reference_enforcement_adapter.py` proves the token mechanism (replay, tampering, expiry, and mismatch are all genuinely rejected through it), but is explicitly a reference adapter proving that mechanism, not a production PEP; it cannot prove that no other path to the protected action exists. [POC_READINESS_REPORT.md](../POC_READINESS_REPORT.md) §5, §8.
 
 **Principal** — The person, team, or organisation an Agent acts *for*, and who bears the risk of its actions. [05_DATABASE.md](05_DATABASE.md) §5.1
 
@@ -57,5 +69,7 @@ Every term of art used across this specification, defined once. Alphabetical. Ea
 **Scope (of a RuntimePolicy)** — Who a policy applies to and over what: `principal` and `action` required, `agent` and `resource` optional narrowing. [07_RUNTIME_POLICY_ENGINE.md](07_RUNTIME_POLICY_ENGINE.md) §7.2
 
 **Signing-key registry** — The `SigningKey` table and `signing_key_service.py`, preserving verifiability of records signed under a key that has since been rotated out. [13_EVIDENCE_ENGINE.md](13_EVIDENCE_ENGINE.md) §13.2
+
+**Trusted Enterprise Fact**: A signed external assertion about enterprise reality (a subject, key, and value) attested by a registered Fact Source and bound to one organization, with a mandatory expiry (no fact type ships with an unbounded default). A missing, expired, or contradicting fact all resolve to the same place: unknown, handled by Runtime Authority's existing fail-closed path, never a default-forever trust. Proves only what the attesting source asserted, not that the assertion is objectively true. [POC_READINESS_REPORT.md](../POC_READINESS_REPORT.md) §3.
 
 **Vocabulary** — The injectable protocol (`is_valid_action`) that keeps Compiler V2 domain-agnostic even though its one shipped implementation (`FinancialVocabulary`) is not. [07_RUNTIME_POLICY_ENGINE.md](07_RUNTIME_POLICY_ENGINE.md) §7.4

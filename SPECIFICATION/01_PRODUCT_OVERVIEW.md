@@ -10,8 +10,8 @@ It is not a dashboard that describes governance after the fact. It is the thing 
 
 ## 1.2 What PayReality is not
 
-- **Not a monitoring or observability tool.** Observability describes what already happened. PayReality's enforcement happens before the action, not after.
-- **Not a policy-authoring UI for its own sake.** The authoring pipeline (Runtime Policy Studio, AI Authority Builder, AI Policy Builder) exists because a human must approve what an agent can do before the agent can do it — authoring is instrumental to enforcement, not a feature category on its own.
+- **Not a monitoring or observability tool.** Observability describes what already happened. PayReality evaluates and decides before the action, not after, and produces evidence before execution. It is a Policy Decision Point, not a Policy Enforcement Point: it does not itself block or execute anything, and no production Policy Enforcement Point exists yet (see the Glossary).
+- **Not a policy-authoring UI for its own sake.** The authoring pipeline (Runtime Policy Studio, AI Authority Builder, AI Policy Builder) exists because a human must approve what an agent can do before the agent can do it. Authoring is instrumental to the authorization decision PayReality makes, not a feature category on its own.
 - **Not a general AI-agent orchestration platform.** PayReality does not run agents, schedule them, or manage their workflows. It governs one moment: the financial action itself, and the authority behind it.
 - **Not a multi-tenant, self-service SaaS today.** The schema has an `Organization` concept and Phase 10 added real per-user roles, but routing assumes a single bootstrapped organisation per deployment (see [08_RUNTIME_AUTHORITY.md](08_RUNTIME_AUTHORITY.md) §"Single-tenant today, multi-tenant-shaped schema" and [16_CURRENT_LIMITATIONS.md](16_CURRENT_LIMITATIONS.md)).
 
@@ -42,7 +42,7 @@ A sixth term, **Assurance**, names the live read of what's actually running — 
 1. **Before PayReality:** an enterprise either doesn't let its AI agents touch money at all (leaving ROI on the table), or does, with no deterministic, provable answer to "what stopped this agent from doing something it shouldn't have" beyond "we trust the model" — not an answer a CFO, auditor, or insurer accepts.
 2. **What changes:** every financial action an agent attempts passes through a policy a named human approved, evaluated by a deterministic engine (OPA/Rego, not a second LLM that could itself hallucinate a "yes"), fail-closed on any doubt.
 3. **What the customer holds afterward:** a signed, chained Evidence trail — the artifact that turns "we have a policy" into "we can prove, for this specific transaction, on this date, exactly which authority permitted it, and that the record hasn't been altered or removed since."
-4. **Who this is for, concretely:** a CFO who needs agents to execute payments without personally re-approving every one; a CISO who needs a real enforcement point, not another logging pipe; an internal auditor who needs individually verifiable records instead of a vendor dashboard; an insurer being asked to underwrite "an AI agent that can move money" who has never seen deterministic, signed proof of a control like this.
+4. **Who this is for, concretely:** a CFO who needs agents to execute payments without personally re-approving every one; a CISO who needs a real decision made before the action happens, not another logging pipe; an internal auditor who needs individually verifiable records instead of a vendor dashboard; an insurer being asked to underwrite "an AI agent that can move money" who has never seen deterministic, signed proof of a control like this.
 
 ## 1.6 Why deterministic evaluation, not another model
 
@@ -59,11 +59,12 @@ The Decision Engine is Open Policy Agent evaluating Rego — not an LLM judging 
 | Independently verifiable evidence | **True**, and stronger than originally built: `GET /v1/evidence/verification-key` publishes the current key, `GET /v1/evidence/verification-keys` publishes the full rotation history so a record signed under a retired key is still independently verifiable, and `GET /v1/evidence/chain/verify` verifies both signature validity and chain continuity per organisation. |
 | Real per-user roles and permissions (RBAC) | **True as of Phase 10.** Six roles (`owner`, `governance_admin`, `agent_admin`, `reviewer`, `auditor`, `executive`), enforced by permission (not role identity) at every mutating endpoint. See [14_SECURITY_MODEL.md](14_SECURITY_MODEL.md). |
 | Evidence hash-chaining | **True as of Phase 5.** Superseded the earlier stated gap. |
+| Agent-scoped policy narrowing (Scope.agent) | **True as of Milestone 17.1.** A Runtime Policy authored to apply only to one Agent previously matched every agent identically, because the OPA input never carried a real agent id. `build_opa_input`/`evaluate` now take an explicit `agent_id` keyword argument, so the policy correctly discriminates between the intended agent and any other. |
 | Honest gaps, named as gaps | **Still the operating principle** — see [16_CURRENT_LIMITATIONS.md](16_CURRENT_LIMITATIONS.md) for what remains actually unbuilt or unverified today (AI provider integrations on the hosted demo are fake/simulated; the SDK ships with a shared admin key; several live SDK/Deploy paths are unverified end-to-end). |
 
 ## 1.8 The one-sentence version, for each audience
 
 - **For a CFO:** "Agents can move money only inside limits you approved, and every attempt — allowed or not — leaves a signed, unforgeable receipt."
-- **For a CISO:** "A real enforcement point in the request path, not a log you review after the fact; deterministic, not another model's opinion."
+- **For a CISO:** "A real authorization decision made in the request path before every attempt, not a log you review after the fact; deterministic, not another model's opinion."
 - **For an auditor/insurer:** "Every decision is reproducible by hand from the policy and the request; the record of it is cryptographically chained so a deletion or edit is detectable, not just a forgery."
 - **For an engineer joining the project:** "FastAPI + PostgreSQL + Open Policy Agent, a compiler that turns human-approved authority into Rego, and a signing/chaining layer around every decision it produces." See [02_SYSTEM_ARCHITECTURE.md](02_SYSTEM_ARCHITECTURE.md) next.

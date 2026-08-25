@@ -3,7 +3,7 @@ import { demoDecisions, demoDecisionCreatedAt } from "./fixtures/decisions";
 import { demoEvidence } from "./fixtures/evidence";
 import { AGENT_AP_INVOICE, AGENT_PO_APPROVAL, findDemoAgent } from "./fixtures/agents";
 import { demoAuthorityContextByPrincipal } from "./fixtures/principals";
-import { POLICY_PAY_INVOICE_UNDER_50K, POLICY_PURCHASE_ORDER_APPROVAL, MANDATE_AP_INVOICE_50K } from "./fixtures/policies";
+import { POLICY_VENDOR_PAYMENT_UNDER_50K, POLICY_PURCHASE_ORDER_APPROVAL, MANDATE_AP_INVOICE_50K } from "./fixtures/policies";
 import { ES_SAP, ES_COUPA } from "./fixtures/enterpriseSystems";
 import { SUPPLIERS } from "./fixtures/organization";
 
@@ -20,10 +20,10 @@ let tickCount = 0;
 let started = false;
 
 const NEXT_EVENTS: Array<{ agentId: string; action: string; amount: number; policyId: string; mandateId: string | null; enterpriseSystemId: string; enterpriseSystemName: string }> = [
-  { agentId: AGENT_AP_INVOICE, action: "pay_invoice", amount: 9800, policyId: POLICY_PAY_INVOICE_UNDER_50K, mandateId: MANDATE_AP_INVOICE_50K, enterpriseSystemId: ES_SAP, enterpriseSystemName: "SAP S/4HANA" },
+  { agentId: AGENT_AP_INVOICE, action: "vendor_payment", amount: 9800, policyId: POLICY_VENDOR_PAYMENT_UNDER_50K, mandateId: MANDATE_AP_INVOICE_50K, enterpriseSystemId: ES_SAP, enterpriseSystemName: "SAP S/4HANA" },
   { agentId: AGENT_PO_APPROVAL, action: "approve_purchase_order", amount: 41200, policyId: POLICY_PURCHASE_ORDER_APPROVAL, mandateId: null, enterpriseSystemId: ES_COUPA, enterpriseSystemName: "Coupa" },
-  { agentId: AGENT_AP_INVOICE, action: "pay_invoice", amount: 27650, policyId: POLICY_PAY_INVOICE_UNDER_50K, mandateId: MANDATE_AP_INVOICE_50K, enterpriseSystemId: ES_SAP, enterpriseSystemName: "SAP S/4HANA" },
-  { agentId: AGENT_AP_INVOICE, action: "pay_invoice", amount: 15300, policyId: POLICY_PAY_INVOICE_UNDER_50K, mandateId: MANDATE_AP_INVOICE_50K, enterpriseSystemId: ES_SAP, enterpriseSystemName: "SAP S/4HANA" },
+  { agentId: AGENT_AP_INVOICE, action: "vendor_payment", amount: 27650, policyId: POLICY_VENDOR_PAYMENT_UNDER_50K, mandateId: MANDATE_AP_INVOICE_50K, enterpriseSystemId: ES_SAP, enterpriseSystemName: "SAP S/4HANA" },
+  { agentId: AGENT_AP_INVOICE, action: "vendor_payment", amount: 15300, policyId: POLICY_VENDOR_PAYMENT_UNDER_50K, mandateId: MANDATE_AP_INVOICE_50K, enterpriseSystemId: ES_SAP, enterpriseSystemName: "SAP S/4HANA" },
   { agentId: AGENT_PO_APPROVAL, action: "approve_purchase_order", amount: 68000, policyId: POLICY_PURCHASE_ORDER_APPROVAL, mandateId: null, enterpriseSystemId: ES_COUPA, enterpriseSystemName: "Coupa" },
 ];
 
@@ -41,7 +41,7 @@ function appendNextEvent() {
     id,
     status: "RESOLVED",
     outcome: "ALLOW",
-    reason: spec.action === "pay_invoice"
+    reason: spec.action === "vendor_payment"
       ? `Within David Okonkwo's delegated $50,000 Treasury spending limit for supplier payments (${supplier}).`
       : "Within Elena Ruiz's delegated purchase-order approval authority.",
     agent_id: spec.agentId,

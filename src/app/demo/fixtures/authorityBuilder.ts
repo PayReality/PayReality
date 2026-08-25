@@ -43,7 +43,7 @@ export const demoResources: Resource[] = [
 ];
 
 export const demoOperations: Operation[] = [
-  { id: "authop-pay-invoice", name: "pay_invoice", description: "Disburse funds against a supplier invoice.", confidence: 0.94, source_excerpt: "Paying a supplier invoice requires delegated Treasury authority.", source_location: "Delegation of Authority Policy, p. 3" },
+  { id: "authop-pay-invoice", name: "vendor_payment", description: "Disburse funds against a supplier invoice.", confidence: 0.94, source_excerpt: "Paying a supplier invoice requires delegated Treasury authority.", source_location: "Delegation of Authority Policy, p. 3" },
   { id: "authop-approve-po", name: "approve_purchase_order", description: "Approve a purchase order against budget.", confidence: 0.9, source_excerpt: "Purchase order approval sits with Procurement leadership.", source_location: "Delegation of Authority Policy, p. 4" },
   { id: "authop-onboard-vendor", name: "onboard_vendor", description: "Admit a new supplier after due diligence.", confidence: 0.87, source_excerpt: "New suppliers require a passed sanctions and risk screening before onboarding.", source_location: "Delegation of Authority Policy, p. 5" },
   { id: "authop-grant-access", name: "grant_system_access", description: "Provision a system access request.", confidence: 0.86, source_excerpt: "Access grants below administrative level may be automated.", source_location: "Delegation of Authority Policy, p. 6" },

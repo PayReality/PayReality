@@ -1,4 +1,4 @@
-import { POLICY_PAY_INVOICE_UNDER_50K } from "../fixtures/policies";
+import { POLICY_VENDOR_PAYMENT_UNDER_50K } from "../fixtures/policies";
 
 export interface TourStep {
   path: string;
@@ -24,13 +24,13 @@ export const TOUR_STEPS: TourStep[] = [
     path: "/decisions",
     selector: '[data-tour="decision-outcome"]',
     title: "2. Runtime Authority verifies authority",
-    body: "PayReality intercepts the Intent before anything executes. It resolves exactly which human delegated authority to this agent, and for how much -- not a role name, a real Authority and Mandate.",
+    body: "PayReality evaluates the Intent before anything executes, determining whether this agent is authorized to act. It resolves exactly which human delegated authority to this agent, and for how much -- not a role name, a real Authority and Mandate.",
   },
   {
-    path: `/governance/${POLICY_PAY_INVOICE_UNDER_50K}`,
+    path: `/governance/${POLICY_VENDOR_PAYMENT_UNDER_50K}`,
     selector: '[data-tour="policy-authority-block"]',
     title: "3. Enterprise policies are evaluated",
-    body: "The Intent is checked against this organisation's actual governance rules -- spend limits, delegated-by chains, required evidence -- written once here, enforced everywhere.",
+    body: "The Intent is checked against this organisation's actual governance rules -- spend limits, delegated-by chains, required evidence -- written once here, evaluated the same way for every decision.",
   },
   {
     path: "/decisions",

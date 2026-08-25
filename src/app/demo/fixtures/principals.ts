@@ -17,7 +17,7 @@ const DELEGATION_FROM_CFO = {
   id: "delegation-cfo-to-treasury",
   from_principal_id: PRINCIPAL_CHANDRASEKARAN,
   resource_id: "resource-ap-ledger",
-  operation: "pay_invoice",
+  operation: "vendor_payment",
 };
 
 export const demoAuthorityContextByPrincipal: Record<string, PrincipalAuthorityContext> = {

@@ -5,7 +5,7 @@ import { AGENT_AP_INVOICE, AGENT_PO_APPROVAL, AGENT_VENDOR_ONBOARDING, AGENT_ACC
 import { ES_SAP, ES_COUPA, ES_SERVICENOW } from "./enterpriseSystems";
 
 export const DEMO_ACTIONS = [
-  "pay_invoice",
+  "vendor_payment",
   "approve_purchase_order",
   "onboard_vendor",
   "grant_system_access",
@@ -14,7 +14,7 @@ export const DEMO_ACTIONS = [
   "renew_contract",
 ] as const;
 
-export const POLICY_PAY_INVOICE_UNDER_50K = "pay-invoice-under-50k";
+export const POLICY_VENDOR_PAYMENT_UNDER_50K = "vendor-payment-under-50k";
 export const POLICY_INVOICE_REVIEW_OVER_50K = "invoice-review-over-50k";
 export const POLICY_PURCHASE_ORDER_APPROVAL = "purchase-order-approval";
 export const POLICY_VENDOR_ONBOARDING = "vendor-onboarding-due-diligence";
@@ -27,12 +27,12 @@ export const MANDATE_AP_INVOICE_50K = "mandate-ap-invoice-under-50k";
 
 export const demoPolicies: RuntimePolicy[] = [
   {
-    policy_key: POLICY_PAY_INVOICE_UNDER_50K,
+    policy_key: POLICY_VENDOR_PAYMENT_UNDER_50K,
     version: 3,
     status: "active",
     name: "Invoice payments under $50K — AP delegated authority",
     description: "Allows AP-Invoice-Agent to pay supplier invoices within David Okonkwo's delegated Treasury spending limit.",
-    scope: { principal: PRINCIPAL_OKONKWO, action: "pay_invoice", agent: AGENT_AP_INVOICE, resource: null },
+    scope: { principal: PRINCIPAL_OKONKWO, action: "vendor_payment", agent: AGENT_AP_INVOICE, resource: null },
     conditions: [{ field: "amount", operator: "<=", value: 50000 }],
     effect: "allow",
     constraints: {
@@ -56,7 +56,7 @@ export const demoPolicies: RuntimePolicy[] = [
     status: "active",
     name: "High-value invoice review (>$50K)",
     description: "Routes supplier invoices above the delegated limit to human review instead of auto-approving.",
-    scope: { principal: PRINCIPAL_OKONKWO, action: "pay_invoice", agent: AGENT_AP_INVOICE, resource: null },
+    scope: { principal: PRINCIPAL_OKONKWO, action: "vendor_payment", agent: AGENT_AP_INVOICE, resource: null },
     conditions: [{ field: "amount", operator: ">", value: 50000 }],
     effect: "require_human_review",
     constraints: {
@@ -176,7 +176,7 @@ export const demoPolicies: RuntimePolicy[] = [
     status: "retired",
     name: "Legacy vendor payment rule",
     description: "Superseded by \"Invoice payments under $50K\" — kept for historical audit only.",
-    scope: { principal: PRINCIPAL_OKONKWO, action: "pay_invoice", agent: AGENT_LEGACY_RECON, resource: null },
+    scope: { principal: PRINCIPAL_OKONKWO, action: "vendor_payment", agent: AGENT_LEGACY_RECON, resource: null },
     conditions: [],
     effect: "allow",
     constraints: {

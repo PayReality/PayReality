@@ -1,5 +1,7 @@
 # Product
 
+> **This document's positioning language is superseded.** The current, authoritative product positioning is "The Enterprise AI Authority Infrastructure" (three pillars: Authority Intelligence, Runtime Authority, Verifiable Evidence, see `ENTERPRISE_MESSAGING_GUIDE.md` and `SPECIFICATION/01_PRODUCT_OVERVIEW.md`), and the current, verified architectural boundary is documented in `POC_READINESS_REPORT.md`: PayReality is a Policy Decision Point today. It evaluates and determines authorization and produces evidence; it does not itself enforce, block, or execute anything, and no production Policy Enforcement Point exists. This document's "the thing the action has to pass through" framing below predates that explicit boundary and should not be read as a current-state claim. Kept in place as a design-time record, not deleted or rewritten. See `PAYREALITY_FUTURE_VISION.md` for the fuller reasoning behind the boundary.
+
 ## What PayReality is
 
 PayReality is **runtime trust infrastructure for autonomous AI agents that take financial actions**. It sits between an AI agent and the action it's about to take, and it answers one question deterministically, every single time: *is this agent actually authorized to do this, right now, under the rules an accountable human approved*, and it produces a signed, tamper-evident record of that answer whether the action was allowed, denied, or kicked to a human.

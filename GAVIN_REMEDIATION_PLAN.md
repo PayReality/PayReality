@@ -161,3 +161,31 @@ A precise, versioned integration contract plus a real test harness that plays th
 ---
 
 **Waiting for explicit approval before writing any code**, per the instruction this plan was produced under. The order above (A, then B/D/E in parallel, then C, then H) is the recommended sequence; happy to reorder if a different starting point matters more for the actual next ABSA conversation.
+
+---
+
+## STATUS ADDENDUM (added 2026-08-25, based only on what actually exists in the repository today)
+
+This addendum does not alter the plan above, which remains the original planning record. It maps each of the seven original gaps to its real current status, checked directly against the codebase, not against later milestone names or reports.
+
+**Gap 1, Authorization Receipt has no distinct shipped identity: NOT DONE.** No `AuthorizationReceipt` schema, service, or route exists anywhere in the repository. The substance still lives only in `Evidence`. The website's `products/AuthorizationReceipts.tsx` and `developers/AuthorizationReceipts.tsx` still correctly say "Coming Soon."
+
+**Gap 2, no Authority Graph to Runtime Policy compiler: NOT DONE.** No `graph_gate`, `source_graph_version_id`, or promotion-gating validation step exists. `promote_candidate` is unchanged from what this plan describes as the current state.
+
+**Gap 3, Authority Graph has no real version history: NOT DONE.** No `supersedes_approval_id` field or equivalent was added to `AuthorityGraphApproval`.
+
+**Gap 4, no external enterprise-fact resolution: DONE, by a different, real mechanism than this plan specified.** This plan proposed a generic `FactDefinition`/`EnterpriseSystem`-linked resolver framework with an authenticated-HTTP resolver. What actually shipped is Trusted Enterprise Facts: a distinct `FactSource` registration and identity (Ed25519 key registered separately from any Agent), signed fact ingestion with mandatory expiry, replay protection, and contradiction handling, resolved before OPA evaluation as `enterprise_knowledge.<key>` conditions, fail-closed on any missing, expired, or conflicting fact, and bound into the resulting Evidence record. This satisfies the plan's own underlying acceptance criteria (fail-closed, registry-backed identity, resolved before evaluation, provenance recorded on the evidence) even though the concrete data model differs from what was originally designed. As this plan itself anticipated, only a reference `supplier_approved` scenario exists; no real connector to any actual ABSA or third-party system has been built.
+
+**Gap 5, no UiPath/Maestro-specific integration: NOT DONE.** No integration contract document or simulated orchestrator harness exists.
+
+**Gap 6, PayReality cannot enforce its own decision (no execution gate): PARTIALLY DONE, and still open in the sense that matters most.** This plan's Scope Decision 7 explicitly deferred building a signed authorization grant ("design it, don't build it"). That has since been exceeded: Capability Authorization is now real and shipped, a signed, short-lived, single-use token bound to decision, principal, action, resource, constraints, policy version, fact hashes, audience, expiry, and nonce, verified and consumed atomically, plus a reference enforcement adapter (`scripts/reference_enforcement_adapter.py`) that demonstrably rejects replay, expiry, amount tampering, resource tampering, and audience mismatch. **This does not close Gap 6.** Capability Authorization is an artifact a downstream enforcement point could check; nothing in production actually requires or checks it today. PayReality still cannot enforce its own decision, because no real Policy Enforcement Point exists for any capability token to be presented to. The original gap description, "a queried opinion service, nothing prevents a non-compliant caller from proceeding regardless of the answer," remains accurate as a description of the current production reality.
+
+**Gap 7, human review is pull-based only: NOT DONE, but not overdue.** This plan's own Scope Decision 8 concluded polling was sufficient for this phase and scoped only documentation, not a build, for this gap. No webhook/callback mechanism has been built, matching exactly what this plan itself expected at this stage.
+
+**Milestones F and G (design notes only, no build expected):** F (the signed authorization grant) has been built as Capability Authorization, exceeding this plan's own scope for this phase. G (human review continuation beyond polling) remains an undesigned, unbuilt follow-on, as originally scoped.
+
+**Milestone I (process chains): still SUPERSEDED / not needed.** Confirmed no process chain, process graph, or workflow orchestration concept has been added anywhere in the repository since this plan was written. The original "not needed, no action" verdict still holds.
+
+**One item outside this plan's original scope**: a real, verified bugfix was made to Scope.agent authorization (a policy authored to apply only to a specific Agent previously never actually discriminated between agents, because the runtime input never carried a real agent id; this is now fixed and covered by dedicated regression tests). This is unrelated to any of the seven gaps above and was not anticipated by this plan's dependency map.
+
+**Net effect on the original audit's core finding**: the audit's most fundamental observation, that PayReality is a decision service and not an execution gate, remains true today. What has changed is that the platform now has a real, tested, cryptographically sound artifact (Capability Authorization) that a future real enforcement point could consume, where previously only a design note existed. The gap between "PayReality can produce an authorization a PEP could check" and "a real PEP exists that checks it" is still fully open.

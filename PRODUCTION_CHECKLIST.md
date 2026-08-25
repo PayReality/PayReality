@@ -81,8 +81,8 @@ Every item below is either genuinely done (checked, with where to verify it), or
 
 - [x] ED25519 signing over a canonical (sorted-key, whitespace-free) JSON payload's SHA-256 digest.
 - [x] Public verification key published (`GET /v1/evidence/verification-key`) so a third party never has to trust this server's own `/verify` result.
-- [ ] Signing-key rotation support (a real key registry keyed by `key_id`, not just the currently-configured key). Rotating today would break verification of everything signed before. Scoped in `SECURITY.md` and `VERSION_3_ROADMAP.md`'s Enterprise Pilot phase.
-- [ ] Cryptographic chaining between consecutive Evidence records for the same Decision. Each record is independently tamper-evident; the sequence isn't yet. Scoped in `VERSION_3_ROADMAP.md`'s Seed Ready phase.
+- [x] Signing-key rotation support: a real key registry keyed by `key_id` (the `signing_keys` table, `signing_key_service`), retained forever. Rotating `EVIDENCE_SIGNING_KEY_B64`/`_ID` and redeploying registers the new key and retires the old one automatically, without invalidating anything signed under a prior key. See `SECURITY.md` and `EVIDENCE_KEY_ROTATION.md`.
+- [x] Cryptographic chaining between consecutive Evidence records for the same Decision: every new record embeds `previous_hash`, checked by `evidence_service.verify_chain`, which also detects a deleted or reordered record even when every remaining record's own signature still checks out. See `SECURITY.md`.
 
 ## Overall
 

@@ -19,7 +19,7 @@ export const demoCandidates: Candidate[] = [
     content: {
       name: "Hold payments to high-risk suppliers pending review",
       description: "Blocks invoice payment to any supplier flagged high-risk by Vendor-Risk-Agent until Procurement clears it.",
-      scope: { principal: PRINCIPAL_RUIZ, action: "pay_invoice", agent: AGENT_VENDOR_RISK, resource: null },
+      scope: { principal: PRINCIPAL_RUIZ, action: "vendor_payment", agent: AGENT_VENDOR_RISK, resource: null },
       conditions: [{ field: "supplier_risk_flag", operator: "==", value: "high" }],
       effect: "require_human_review",
       constraints: { delegated_by: "Elena Ruiz, VP Procurement", expires: null, evidence_required: true, risk_level: "HIGH", authority_id: null, mandate_id: null, enterprise_system_id: ES_COUPA },

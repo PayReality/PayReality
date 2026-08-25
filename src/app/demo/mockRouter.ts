@@ -9,7 +9,7 @@ import {
 } from "./liveFeed";
 import { demoAgents, findDemoAgent, AGENT_AP_INVOICE } from "./fixtures/agents";
 import { demoPrincipals, demoAuthorityContextByPrincipal, PRINCIPAL_OKONKWO } from "./fixtures/principals";
-import { demoPolicies, findDemoPolicy, DEMO_ACTIONS, POLICY_PAY_INVOICE_UNDER_50K } from "./fixtures/policies";
+import { demoPolicies, findDemoPolicy, DEMO_ACTIONS, POLICY_VENDOR_PAYMENT_UNDER_50K } from "./fixtures/policies";
 import { demoEnterpriseSystems } from "./fixtures/enterpriseSystems";
 import {
   demoBusinessUnits,
@@ -208,7 +208,7 @@ on("GET", "/v1/runtime-policies/:key/diff", () => ({
   risk_reason: "No material differences between the selected versions in this demo policy.",
 }));
 on("GET", "/v1/runtime-policies/:key", ({ params }) => findDemoPolicy(params.key) ?? notFound("policy"));
-on("POST", "/v1/runtime-policies", ({ body }) => blocked({ ...findDemoPolicy(POLICY_PAY_INVOICE_UNDER_50K)!, policy_key: "policy-new", name: body?.name ?? "New Rule", status: "draft" }));
+on("POST", "/v1/runtime-policies", ({ body }) => blocked({ ...findDemoPolicy(POLICY_VENDOR_PAYMENT_UNDER_50K)!, policy_key: "policy-new", name: body?.name ?? "New Rule", status: "draft" }));
 on("PUT", "/v1/runtime-policies/:key", ({ params }) => blocked(findDemoPolicy(params.key) ?? notFound("policy")));
 on("POST", "/v1/runtime-policies/:key/submit-for-review", ({ params }) => blocked(findDemoPolicy(params.key) ?? notFound("policy")));
 on("POST", "/v1/runtime-policies/:key/approve", ({ params }) => blocked(findDemoPolicy(params.key) ?? notFound("policy")));
@@ -377,7 +377,7 @@ on("GET", `${POLICY_BUILDER}/uploads/:id/candidates`, () => demoCandidates);
 on("GET", `${POLICY_BUILDER}/candidates`, () => demoCandidates);
 on("PUT", `${POLICY_BUILDER}/candidates/:id`, ({ params }) => blocked(demoCandidates.find((c) => c.candidate_id === params.id) ?? demoCandidates[0]));
 on("POST", `${POLICY_BUILDER}/candidates/:id/dismiss`, ({ params }) => blocked(demoCandidates.find((c) => c.candidate_id === params.id) ?? demoCandidates[0]));
-on("POST", `${POLICY_BUILDER}/candidates/:id/promote`, () => blocked({ policy_key: POLICY_PAY_INVOICE_UNDER_50K, version: 1, status: "draft", authority_id: null }));
+on("POST", `${POLICY_BUILDER}/candidates/:id/promote`, () => blocked({ policy_key: POLICY_VENDOR_PAYMENT_UNDER_50K, version: 1, status: "draft", authority_id: null }));
 
 // ---------------------------------------------------------------------
 // Resolver
