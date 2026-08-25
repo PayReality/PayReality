@@ -9,7 +9,15 @@ import {
 } from "./liveFeed";
 import { demoAgents, findDemoAgent, AGENT_AP_INVOICE } from "./fixtures/agents";
 import { demoPrincipals, demoAuthorityContextByPrincipal, PRINCIPAL_OKONKWO } from "./fixtures/principals";
-import { demoPolicies, findDemoPolicy, DEMO_ACTIONS, POLICY_VENDOR_PAYMENT_UNDER_50K } from "./fixtures/policies";
+import {
+  demoPolicies,
+  findDemoPolicy,
+  DEMO_ACTIONS,
+  POLICY_VENDOR_PAYMENT_UNDER_50K,
+  POLICY_SYSTEM_ACCESS,
+  POLICY_VENDOR_ONBOARDING,
+  POLICY_LEGACY_VENDOR_PAYMENT,
+} from "./fixtures/policies";
 import { demoEnterpriseSystems } from "./fixtures/enterpriseSystems";
 import {
   demoBusinessUnits,
@@ -18,6 +26,8 @@ import {
   demoOrganizationSettings,
   demoIntegrationsStatus,
   demoHealthStatus,
+  ORG_ID,
+  ORG_NAME,
 } from "./fixtures/organization";
 import { demoUsers, demoCurrentUser } from "./fixtures/users";
 import {
@@ -241,6 +251,191 @@ on("POST", "/v1/runtime-policies/:key/deploy", ({ params }) => blocked({
 }));
 
 // ---------------------------------------------------------------------
+// Runtime Policy Lifecycle (Phase 5) -- dashboard, timeline, activation
+// preview, search, and the write actions (all `blocked`, per this
+// file's own convention -- see the docstring on `blocked` above).
+// ---------------------------------------------------------------------
+
+/** RuntimePolicy -> PolicyLifecycleSummary, the dashboard/search row
+ * shape (server/app/schemas/runtime_policy_lifecycle.py's
+ * PolicyLifecycleSummary). `effective_status` is "superseded" for the
+ * one demo policy a newer active policy actually replaced, matching
+ * the real read-side label; every other field defaults to "nothing
+ * scheduled/attested" and can be overridden per call site (e.g. the
+ * Authority Freshness fields below). */
+function toLifecycleSummary(p: (typeof demoPolicies)[number], overrides: Record<string, unknown> = {}) {
+  return {
+    policy_key: p.policy_key,
+    version: p.version,
+    name: p.name,
+    status: p.status,
+    effective_status: p.policy_key === POLICY_LEGACY_VENDOR_PAYMENT ? "superseded" : p.status,
+    scope: p.scope,
+    created_at: p.created_at,
+    activated_by: p.status === "active" ? p.metadata.owner : null,
+    activated_at: p.status === "active" ? agoMs(30 * DAY) : null,
+    activation_reason: null,
+    effective_from: null,
+    effective_until: null,
+    deprecated_at: null,
+    deprecation_reason: null,
+    rollback_of_version: null,
+    last_attested_at: null,
+    next_review_at: null,
+    review_cadence_days: null,
+    authority_expires_at: null,
+    ...overrides,
+  };
+}
+
+function buildLifecycleDashboard() {
+  const countsByState: Record<string, number> = {};
+  for (const p of demoPolicies) countsByState[p.status] = (countsByState[p.status] ?? 0) + 1;
+
+  // Authority Freshness (Milestone 17, Part B): two distinct demo rows,
+  // kept deliberately separate the same way the real schema keeps them
+  // separate -- one merely review-due, one with its authority actually
+  // expired (isAuthorityExpired in RuntimePolicyDashboardPage.tsx),
+  // never conflated into a single status.
+  const dueForReattestation = [
+    toLifecycleSummary(findDemoPolicy(POLICY_SYSTEM_ACCESS)!, {
+      last_attested_at: agoMs(100 * DAY),
+      next_review_at: agoMs(5 * DAY),
+      review_cadence_days: 90,
+      authority_expires_at: null,
+    }),
+    toLifecycleSummary(findDemoPolicy(POLICY_VENDOR_ONBOARDING)!, {
+      last_attested_at: agoMs(200 * DAY),
+      next_review_at: agoMs(20 * DAY),
+      review_cadence_days: 180,
+      authority_expires_at: agoMs(10 * DAY),
+    }),
+  ];
+
+  return {
+    counts_by_state: countsByState,
+    pending_approvals: demoPolicies.filter((p) => p.status === "pending_review").map((p) => toLifecycleSummary(p)),
+    upcoming_activations: [],
+    upcoming_expirations: [],
+    upcoming_retirements: [],
+    recently_activated: demoPolicies.filter((p) => p.status === "active").map((p) => toLifecycleSummary(p)),
+    deprecated_policies: [],
+    rollback_history: [],
+    conflict_alerts: [],
+    due_for_reattestation: dueForReattestation,
+  };
+}
+
+on("GET", "/v1/runtime-policy-lifecycle/dashboard", () => buildLifecycleDashboard());
+
+on("GET", "/v1/runtime-policy-lifecycle/search", ({ query }) => {
+  const principal = query.get("principal")?.toLowerCase();
+  const action = query.get("action")?.toLowerCase();
+  const state = query.get("state");
+  const version = query.get("version");
+  let rows = demoPolicies.map((p) => toLifecycleSummary(p));
+  if (principal) rows = rows.filter((r) => r.scope.principal.toLowerCase().includes(principal));
+  if (action) rows = rows.filter((r) => r.scope.action.toLowerCase().includes(action));
+  if (state) rows = rows.filter((r) => r.status === state || r.effective_status === state);
+  if (version) rows = rows.filter((r) => String(r.version) === version);
+  return { results: rows };
+});
+
+on("GET", "/v1/runtime-policies/:key/lifecycle/timeline", ({ params }) => {
+  const p = findDemoPolicy(params.key);
+  if (!p) return { policy_key: params.key, events: [] };
+  const steps: Array<{ type: string; offset: number; actor: string | null }> = [
+    { type: "draft_created", offset: 60 * DAY, actor: p.metadata.created_by },
+    { type: "submitted_for_review", offset: 55 * DAY, actor: p.metadata.created_by },
+  ];
+  if (p.status !== "pending_review" && p.status !== "draft") {
+    const reviewedBy = (p.audit as { last_reviewed_by?: string } | null)?.last_reviewed_by;
+    steps.push({ type: "approved", offset: 50 * DAY, actor: reviewedBy ?? p.metadata.owner });
+    steps.push({ type: "activated", offset: 30 * DAY, actor: p.metadata.owner });
+  }
+  if (p.status === "retired") {
+    steps.push({ type: "retired", offset: 5 * DAY, actor: p.metadata.owner });
+  }
+  return {
+    policy_key: params.key,
+    events: steps.map((s, i) => ({
+      id: `lifecycle-${params.key}-${i}`,
+      policy_key: params.key,
+      version: p.version,
+      event_type: s.type,
+      actor: s.actor ?? null,
+      reason: null,
+      payload: {},
+      event_hash: `sha256:evt${i.toString(16).padStart(4, "0")}${params.key.slice(0, 8)}`,
+      occurred_at: agoMs(s.offset),
+    })),
+  };
+});
+
+on("GET", "/v1/runtime-policies/:key/lifecycle/activation-preview", ({ params }) => {
+  const p = findDemoPolicy(params.key);
+  return {
+    policy_key: params.key,
+    candidate_version: p?.version ?? 1,
+    current_active_version: p?.status === "active" ? p.version : null,
+    diff: null,
+    safety: { ok: true, violations: [] },
+  };
+});
+
+on("POST", "/v1/runtime-policies/:key/lifecycle/activate", ({ params }) => {
+  const p = findDemoPolicy(params.key);
+  return blocked(p ? toLifecycleSummary(p) : notFound("policy"));
+});
+on("POST", "/v1/runtime-policies/:key/lifecycle/schedule-activation", ({ params, body }) => {
+  const p = findDemoPolicy(params.key);
+  return blocked({
+    id: `schedule-${params.key}`,
+    policy_key: params.key,
+    version: p?.version ?? 1,
+    action: "activate",
+    effective_at: body?.effective_at ?? new Date().toISOString(),
+    reason: body?.reason ?? null,
+    status: "pending",
+    created_by: body?.actor ?? null,
+    created_at: new Date().toISOString(),
+    executed_at: null,
+    execution_error: null,
+  });
+});
+on("POST", "/v1/runtime-policies/:key/lifecycle/deprecate", ({ params, body }) => {
+  const p = findDemoPolicy(params.key);
+  return blocked(
+    p
+      ? toLifecycleSummary(p, { deprecated_at: new Date().toISOString(), deprecation_reason: body?.reason ?? null })
+      : notFound("policy")
+  );
+});
+on("POST", "/v1/runtime-policies/:key/lifecycle/retire", ({ params }) => {
+  const p = findDemoPolicy(params.key);
+  return blocked(p ? toLifecycleSummary(p) : notFound("policy"));
+});
+on("POST", "/v1/runtime-policies/:key/lifecycle/archive", ({ params }) => {
+  const p = findDemoPolicy(params.key);
+  return blocked(p ? toLifecycleSummary(p) : notFound("policy"));
+});
+on("POST", "/v1/runtime-policies/:key/lifecycle/rollback", ({ params, body }) => {
+  const p = findDemoPolicy(params.key);
+  return blocked(p ? toLifecycleSummary(p, { rollback_of_version: body?.target_version ?? null }) : notFound("policy"));
+});
+on("POST", "/v1/runtime-policies/:key/lifecycle/attest", ({ params, body }) => {
+  const p = findDemoPolicy(params.key);
+  return blocked(
+    p
+      ? toLifecycleSummary(p, {
+          last_attested_at: new Date().toISOString(),
+          review_cadence_days: body?.review_cadence_days ?? null,
+        })
+      : notFound("policy")
+  );
+});
+
+// ---------------------------------------------------------------------
 // Legacy simplified /v1/policies (PlatformOverview, LiveAssurance)
 // ---------------------------------------------------------------------
 on("GET", "/v1/policies", () =>
@@ -265,6 +460,31 @@ on("GET", "/v1/evidence", ({ query }) => {
   return decisionId ? records.filter((e) => e.decision_id === decisionId) : records;
 });
 on("POST", "/v1/evidence/:id/verify", () => ({ valid: true }));
+// The full signing-key history (EVIDENCE_KEY_ROTATION.md): active plus
+// retired. One active key is enough for the demo -- reuses the same
+// key_id every Evidence/audit record in this demo is already signed
+// under, never a second, disconnected key.
+on("GET", "/v1/evidence/verification-keys", () => ({
+  keys: [
+    {
+      key_id: "key-meridian-signing-2025-q1",
+      algorithm: "ed25519",
+      public_key_b64: "TWVyaWRpYW5EZW1vRGVtb1B1YmxpY0tleUVkMjU1MTk=",
+      created_at: agoMs(90 * DAY),
+      retired_at: null,
+      active: true,
+    },
+  ],
+}));
+// Independent chain verification (PHASE_5_EVIDENCE.md): an honest
+// "intact" result over the demo's own evidence set -- no invalid
+// signatures, no broken links, since none is ever actually introduced
+// in this in-memory demo feed.
+on("GET", "/v1/evidence/chain/verify", () => {
+  ensureLiveFeedStarted();
+  const records = getLiveEvidence();
+  return { organization_id: ORG_ID, total: records.length, intact: true, invalid_signatures: [], broken_links: [] };
+});
 // Pending Review queue: derived the same way the real backend derives
 // it (outcome === HUMAN_REVIEW with no resolution yet), not a fabricated
 // always-full list -- if every scripted demo decision happens to already
@@ -276,6 +496,102 @@ on("GET", "/v1/decisions", () => {
 });
 on("GET", "/v1/decisions/:id", ({ params }) => findLiveDecision(params.id) ?? notFound("decision"));
 on("POST", "/v1/decisions/:id/resolve", ({ params }) => blocked(findLiveDecision(params.id) ?? notFound("decision")));
+// Phase 2B (live per-condition explainability): reconstructs the exact
+// historical policy state a decision was evaluated against, never a
+// live re-evaluation. Built generically from whichever policies the
+// decision itself recorded as evaluated (evaluated_mandates), so it
+// works for the hero ALLOW/DENY/HUMAN_REVIEW decisions and any
+// background one alike, not just one hardcoded case.
+function evalConditionOperator(operator: string, actual: unknown, expected: unknown): boolean {
+  switch (operator) {
+    case "<=":
+      return Number(actual) <= Number(expected);
+    case ">=":
+      return Number(actual) >= Number(expected);
+    case "<":
+      return Number(actual) < Number(expected);
+    case ">":
+      return Number(actual) > Number(expected);
+    case "==":
+      return actual === expected;
+    case "!=":
+      return actual !== expected;
+    default:
+      return true;
+  }
+}
+on("GET", "/v1/decisions/:id/explanation", ({ params }) => {
+  const decision = findLiveDecision(params.id);
+  if (!decision) {
+    return {
+      decision_id: params.id,
+      available: false,
+      unavailable_reason: "No historical policy binding exists for this decision.",
+      outcome: null,
+      reason: null,
+      policy_id: null,
+      bundle_hash: null,
+      bundle_version: null,
+      compiled_at: null,
+      activated_at: null,
+      retired_at: null,
+      evaluated_at: null,
+      causal_policy_id: null,
+      rules: [],
+    };
+  }
+  const rules = decision.evaluated_mandates
+    .map((policyKey) => {
+      const p = findDemoPolicy(policyKey);
+      if (!p) return null;
+      const scopeMatched = p.scope.action === decision.action;
+      const conditions = p.conditions.map((c) => {
+        const actual = c.field === "amount" ? decision.amount : c.value;
+        return {
+          field: c.field,
+          operator: c.operator,
+          expected_value: c.value,
+          actual_value: actual,
+          passed: evalConditionOperator(c.operator, actual, c.value),
+        };
+      });
+      const matched = scopeMatched && conditions.every((c) => c.passed);
+      return {
+        policy_id: p.policy_key,
+        policy_name: p.name,
+        principal: p.scope.principal,
+        action: p.scope.action,
+        effect: p.effect,
+        scope_matched: scopeMatched,
+        conditions,
+        matched,
+        summary: matched
+          ? `Matched: ${p.name}.`
+          : scopeMatched
+            ? "Scope matched, but a condition on this policy did not."
+            : "Scoped to a different principal or action -- not evaluated against this request.",
+      };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null);
+  const causal = rules.find((r) => r.matched) ?? null;
+  const causalPolicy = causal ? findDemoPolicy(causal.policy_id) : undefined;
+  return {
+    decision_id: params.id,
+    available: true,
+    unavailable_reason: null,
+    outcome: decision.outcome,
+    reason: decision.reason,
+    policy_id: causal?.policy_id ?? null,
+    bundle_hash: causalPolicy?.bundle_hash ?? null,
+    bundle_version: causalPolicy?.version ?? null,
+    compiled_at: agoMs(60 * DAY),
+    activated_at: agoMs(30 * DAY),
+    retired_at: null,
+    evaluated_at: decision.created_at,
+    causal_policy_id: causal?.policy_id ?? null,
+    rules,
+  };
+});
 on("POST", "/v1/intents", () => {
   ensureLiveFeedStarted();
   const decision = findLiveDecision(DECISION_HERO_ALLOW)!;
@@ -308,6 +624,71 @@ on("GET", "/v1/organization/exports/evidence", () => getLiveEvidence());
 on("GET", "/v1/organization/api-keys", () => DEMO_API_KEYS);
 on("POST", "/v1/organization/api-keys", () => blocked({ api_key: DEMO_API_KEYS[0], raw_key: "pr_demo_disabled" }));
 on("DELETE", "/v1/organization/api-keys/:id", () => blocked(undefined));
+
+// Milestone 3 (Enterprise Surface Isolation): inviting a member into my
+// own organization. Honestly empty -- this demo's own "Pending Review
+// queue" convention (see the Evidence + Decisions section above):
+// nothing has actually been invited in this session, so the list says
+// so rather than fabricating activity.
+on("GET", "/v1/organization/invitations", () => []);
+on("POST", "/v1/organization/invitations", ({ body }) =>
+  blocked({
+    invitation: {
+      id: "invitation-new",
+      organization_id: ORG_ID,
+      email: body?.email ?? "new.invitee@meridianindustrial.com",
+      role: body?.role ?? "auditor",
+      status: "pending",
+      invited_by: demoCurrentUser.name,
+      created_at: new Date().toISOString(),
+      expires_at: agoMs(-7 * DAY),
+      accepted_at: null,
+    },
+    raw_token: "disabled-in-demo",
+  })
+);
+on("DELETE", "/v1/organization/invitations/:id", ({ params }) =>
+  blocked({
+    id: params.id,
+    organization_id: ORG_ID,
+    email: "revoked@meridianindustrial.com",
+    role: "auditor",
+    status: "revoked",
+    invited_by: demoCurrentUser.name,
+    created_at: agoMs(DAY),
+    expires_at: agoMs(-6 * DAY),
+    accepted_at: null,
+  })
+);
+
+// Milestone 3 (Enterprise Surface Isolation): the platform-admin-only
+// Organization Lifecycle (create/list/deactivate/reactivate/archive an
+// ARBITRARY organization), distinct from the per-tenant `/v1/organization`
+// endpoints above. Only this demo's own Meridian Industrial Group
+// exists -- no second organization is fabricated.
+function demoOrganizationLifecycle() {
+  return {
+    id: ORG_ID,
+    name: ORG_NAME,
+    status: "active",
+    created_at: agoMs(400 * DAY),
+    deactivated_at: null,
+    deactivated_by: null,
+    archived_at: null,
+    archived_by: null,
+  };
+}
+on("GET", "/v1/organizations", () => [demoOrganizationLifecycle()]);
+on("POST", "/v1/organizations", ({ body }) =>
+  blocked({
+    organization: { ...demoOrganizationLifecycle(), name: body?.name ?? ORG_NAME },
+    owner: demoUsers[0],
+    temporary_password: "disabled-in-demo",
+  })
+);
+on("POST", "/v1/organizations/:id/deactivate", () => blocked(demoOrganizationLifecycle()));
+on("POST", "/v1/organizations/:id/reactivate", () => blocked(demoOrganizationLifecycle()));
+on("POST", "/v1/organizations/:id/archive", () => blocked(demoOrganizationLifecycle()));
 
 on("GET", "/v1/enterprise-systems", () => demoEnterpriseSystems);
 on("POST", "/v1/enterprise-systems", ({ body }) => blocked({ ...demoEnterpriseSystems[0], id: "es-new", name: body?.name ?? "New System" }));
@@ -365,6 +746,49 @@ on("POST", `${AUTH_BUILDER}/principals/:id/resolve`, () => blocked(demoAuthority
 on("POST", `${AUTH_BUILDER}/relationships/:id/resolve`, ({ params }) => blocked(demoRelationships.find((r) => r.id === params.id) ?? demoRelationships[0]));
 on("POST", `${AUTH_BUILDER}/relationships/:id/activate`, ({ params }) => blocked(demoRelationships.find((r) => r.id === params.id) ?? demoRelationships[0]));
 
+// Phase 3: Explainability & Human Review (Corpus Review page). Coverage
+// is a deterministic parsing statistic, never an LLM's self-report;
+// missing-information is the deterministic backstop for the model's
+// own self-reported Gaps/Questions (already covered by demoGaps/
+// demoQuestions above) -- a different, complementary finding, not a
+// duplicate of either. Diff and approval history are both honestly
+// empty: this demo corpus has no prior in-force graph to compare
+// against and has not yet been approved.
+on("GET", `${AUTH_BUILDER}/corpora/:id/coverage`, () => ({
+  documents_processed: 3,
+  clauses_analysed: 48,
+  clauses_ignored: 4,
+  tables_extracted: 2,
+  images_skipped: 1,
+  sections_unsupported: 0,
+  coverage_percent: 92.3,
+}));
+on("GET", `${AUTH_BUILDER}/corpora/:id/missing-information`, () => [
+  {
+    category: "unknown_reporting_line",
+    subject: "Elena Ruiz",
+    description: "No document specifies who the VP of Procurement reports to.",
+  },
+]);
+on("GET", `${AUTH_BUILDER}/corpora/:id/diff`, () => ({
+  new_authorities: [],
+  removed_authorities: [],
+  new_thresholds: [],
+  changed_thresholds: [],
+  changed_reporting_lines: [],
+  changed_responsibilities: [],
+}));
+on("GET", `${AUTH_BUILDER}/corpora/:id/approvals`, () => []);
+on("POST", `${AUTH_BUILDER}/corpora/:id/approve`, ({ params, body }) => blocked({
+  id: "approval-demo",
+  corpus_id: params.id,
+  reviewer: demoCurrentUser.name,
+  version: 1,
+  approval_reason: body?.approval_reason ?? null,
+  graph_hash: "sha256:demo-graph-hash",
+  approved_at: new Date().toISOString(),
+}));
+
 // ---------------------------------------------------------------------
 // AI Policy Builder
 // ---------------------------------------------------------------------
@@ -378,6 +802,142 @@ on("GET", `${POLICY_BUILDER}/candidates`, () => demoCandidates);
 on("PUT", `${POLICY_BUILDER}/candidates/:id`, ({ params }) => blocked(demoCandidates.find((c) => c.candidate_id === params.id) ?? demoCandidates[0]));
 on("POST", `${POLICY_BUILDER}/candidates/:id/dismiss`, ({ params }) => blocked(demoCandidates.find((c) => c.candidate_id === params.id) ?? demoCandidates[0]));
 on("POST", `${POLICY_BUILDER}/candidates/:id/promote`, () => blocked({ policy_key: POLICY_VENDOR_PAYMENT_UNDER_50K, version: 1, status: "draft", authority_id: null }));
+
+// ---------------------------------------------------------------------
+// Runtime Policy Simulator (Authority Intelligence Program, Phase 4).
+// Read-only with respect to Runtime Authority itself, same as the real
+// router: nothing here ever edits, compiles, or deploys a policy, or
+// writes a real Decision/Evidence row. Reuses the exact same amount-
+// threshold logic as the existing /v1/runtime-policies/:key/dry-run
+// mock above, not a second, disconnected rule.
+// ---------------------------------------------------------------------
+const POLICY_SIMULATION = "/v1/policy-simulation";
+
+interface DemoScenario {
+  id: string;
+  policy_key: string;
+  name: string;
+  input: Record<string, unknown>;
+  expected_outcome: string;
+  created_by: string | null;
+  created_at: string;
+}
+// In-memory only, the same "seeded, then grows for this session" pattern
+// liveFeed.ts already uses -- never persisted, never shared across tabs.
+const demoScenarios: DemoScenario[] = [];
+
+function buildSimulationResult(policyKey: string, input: Record<string, unknown> | undefined) {
+  const p = findDemoPolicy(policyKey);
+  const amount = Number(input?.amount ?? 0);
+  const overLimit = amount > 50000;
+  const decision = overLimit ? "HUMAN_REVIEW" : "ALLOW";
+  const now = new Date().toISOString();
+  const principal = (input?.principal as string | undefined) ?? p?.scope.principal ?? "";
+  const action = (input?.action as string | undefined) ?? p?.scope.action ?? "";
+  const resource = (input?.resource as string | undefined) ?? null;
+  const rule = p
+    ? {
+        policy_id: p.policy_key,
+        policy_name: p.name,
+        principal,
+        action,
+        effect: p.effect,
+        scope_matched: true,
+        conditions: p.conditions.map((c) => ({
+          field: c.field,
+          operator: c.operator,
+          expected_value: c.value,
+          actual_value: c.field === "amount" ? amount : c.value,
+          passed: c.field === "amount" ? !overLimit : true,
+        })),
+        matched: !overLimit,
+        summary: overLimit
+          ? "Not matched: exceeds the delegated Treasury spending limit."
+          : "Matched: within the delegated Treasury spending limit.",
+      }
+    : null;
+  return {
+    decision,
+    policy_key: policyKey,
+    policy_name: p?.name ?? "Unknown policy",
+    policy_version: p?.version ?? 1,
+    policy_bundle_hash: p?.bundle_hash ?? "sha256:demo",
+    generated_at: now,
+    review_reason: overLimit ? "Exceeds the $50,000 delegated Treasury spending limit." : null,
+    deny_reason: null,
+    rules: rule ? [rule] : [],
+    authority_trace: [
+      { label: "Principal resolved", detail: principal || null },
+      { label: "Policy evaluated", detail: p?.name ?? null },
+      { label: "Decision reached", detail: decision },
+    ],
+    evidence_preview: {
+      decision,
+      policy_version: p?.version ?? 1,
+      policy_bundle_hash: p?.bundle_hash ?? "sha256:demo",
+      principal,
+      action,
+      resource,
+      evaluated_at: now,
+      receipt_hash: `sha256:preview${Math.abs(amount).toString(16)}${policyKey.length}`,
+      preview: true,
+    },
+  };
+}
+
+on("POST", `${POLICY_SIMULATION}/:key/simulate`, ({ params, body }) => buildSimulationResult(params.key, body));
+on("GET", `${POLICY_SIMULATION}/:key/scenarios`, ({ params }) => demoScenarios.filter((s) => s.policy_key === params.key));
+on("POST", `${POLICY_SIMULATION}/:key/scenarios`, ({ params, body }) => {
+  const scenario: DemoScenario = {
+    id: `scenario-${params.key}-${demoScenarios.length}`,
+    policy_key: params.key,
+    name: body?.name ?? "Untitled scenario",
+    input: body?.input ?? {},
+    expected_outcome: body?.expected_outcome ?? "ALLOW",
+    created_by: demoCurrentUser.name,
+    created_at: new Date().toISOString(),
+  };
+  demoScenarios.push(scenario);
+  return scenario;
+});
+on("POST", `${POLICY_SIMULATION}/scenarios/:id/run`, ({ params }) => {
+  const scenario = demoScenarios.find((s) => s.id === params.id);
+  if (!scenario) notFound("scenario");
+  const result = buildSimulationResult(scenario.policy_key, scenario.input);
+  return {
+    scenario_id: scenario.id,
+    scenario_name: scenario.name,
+    expected_outcome: scenario.expected_outcome,
+    actual_outcome: result.decision,
+    passed: result.decision === scenario.expected_outcome,
+    result,
+  };
+});
+// The uploaded CSV's rows aren't inspectable here (multipart form body,
+// never JSON-parsed by this router) -- a short, plausible aggregate
+// consistent with the demo's own AP-Invoice story stands in, the same
+// "plausible, internally-consistent demo data" every other mock in this
+// file already uses instead of a literal replay of the input.
+on("POST", `${POLICY_SIMULATION}/:key/batch`, ({ params }) => {
+  const p = findDemoPolicy(params.key);
+  return {
+    total: 5,
+    allowed: 4,
+    denied: 0,
+    escalated: 1,
+    errors: 0,
+    sample_rows: [
+      { row_number: 1, principal: "David Okonkwo", action: "vendor_payment", decision: "ALLOW", error: null },
+      { row_number: 2, principal: "David Okonkwo", action: "vendor_payment", decision: "ALLOW", error: null },
+      { row_number: 3, principal: "David Okonkwo", action: "vendor_payment", decision: "HUMAN_REVIEW", error: null },
+      { row_number: 4, principal: "David Okonkwo", action: "vendor_payment", decision: "ALLOW", error: null },
+      { row_number: 5, principal: "David Okonkwo", action: "vendor_payment", decision: "ALLOW", error: null },
+    ],
+    sample_truncated: false,
+    policy_version: p?.version ?? 1,
+    policy_bundle_hash: p?.bundle_hash ?? "sha256:demo",
+  };
+});
 
 // ---------------------------------------------------------------------
 // Resolver
