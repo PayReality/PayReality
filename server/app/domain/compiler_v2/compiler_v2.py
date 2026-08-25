@@ -53,6 +53,15 @@ from app.domain.compiler_v2.scope_overlap import policies_can_jointly_match
 # rego_generator.py's own _resolve_base_and_field, which already
 # special-cases this same prefix for the identical reason.
 _CONTEXT_FIELD_PREFIX = "context."
+# Trusted Enterprise Facts (ENTERPRISE_KNOWLEDGE_DECISION_RECORD.md
+# Decision 5): the mirror-image exception to _CONTEXT_FIELD_PREFIX above,
+# for the new `enterprise_knowledge` OPA input section
+# (domain/decision/engine.py's build_opa_input). Also caller-extensible
+# (an org-registered FactSource can attest any fact key), so it can no
+# more be enumerated in advance than `context.` can -- same reasoning,
+# same treatment. rego_generator.py's own _resolve_base_and_field carries
+# the matching prefix so this is a real, not just a permissive, mapping.
+_ENTERPRISE_KNOWLEDGE_FIELD_PREFIX = "enterprise_knowledge."
 
 
 class Vocabulary(Protocol):
@@ -87,7 +96,7 @@ class FinancialVocabulary:
         return action in self.known_actions
 
     def is_valid_field(self, field: str) -> bool:
-        if field.startswith(_CONTEXT_FIELD_PREFIX):
+        if field.startswith(_CONTEXT_FIELD_PREFIX) or field.startswith(_ENTERPRISE_KNOWLEDGE_FIELD_PREFIX):
             return True
         top_level = field.split(".", 1)[0]
         return top_level in self.known_intent_fields

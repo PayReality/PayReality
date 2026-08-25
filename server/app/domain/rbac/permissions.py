@@ -70,6 +70,27 @@ class Permission(str, Enum):
     DECISIONS_RESOLVE = "decisions.resolve"
     ASSURANCE_VIEW = "assurance.view"
 
+    # Trusted Enterprise Facts (PAYREALITY_FUTURE_VISION.md Part A):
+    # registering/revoking a FactSource and reading ingested facts is a
+    # governance action over what the org treats as trusted external
+    # reality -- not the same privilege as viewing a decision
+    # (DECISIONS_VIEW) or managing a Principal (PRINCIPAL_MANAGE), and
+    # deliberately its own permission rather than folded into either,
+    # since a role could plausibly need one without the other. Fact
+    # INGESTION itself is authenticated by the fact's own signature
+    # (fact_service.ingest_fact), never gated by this or any other RBAC
+    # permission -- the same model Intent submission already uses
+    # (verify_agent_signature, not require_permission).
+    FACTS_MANAGE = "facts.manage"
+
+    # Capability Authorization Protocol (PAYREALITY_FUTURE_VISION.md
+    # Part C): deliberately NOT reusing DECISIONS_VIEW. Viewing a
+    # decision and minting an executable, short-lived authorization
+    # capability for it are different privileges -- a role that can see
+    # a decision has not thereby demonstrated it should be able to
+    # authorize the underlying action to actually execute.
+    CAPABILITY_ISSUE = "capability.issue"
+
 
 # The full permission set, used to grant Owner "full platform control"
 # without hand-maintaining a second, parallel list that would drift
@@ -91,6 +112,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.ASSURANCE_VIEW,
             Permission.PRINCIPAL_MANAGE,
             Permission.AGENT_VIEW,
+            Permission.FACTS_MANAGE,
+            Permission.CAPABILITY_ISSUE,
         }
     ),
     Role.AGENT_ADMIN: frozenset(

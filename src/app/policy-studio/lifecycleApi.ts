@@ -47,6 +47,14 @@ export const policyLifecycleApi = {
     apiClient.post<PolicyLifecycleSummary>(`${BASE}/${policyKey}/lifecycle/rollback`, {
       target_version: targetVersion, actor, reason,
     }).then((r) => { notifyResourceChanged("policies"); return r; }),
+  // Authority Freshness (Milestone 17, Part B): a label update
+  // (last_attested_at/next_review_at) on the ACTIVE row, never a status
+  // change -- see runtime_policy_lifecycle_service.attest_policy's own
+  // docstring.
+  attest: (policyKey: string, actor: string, reason?: string, reviewCadenceDays?: number) =>
+    apiClient.post<PolicyLifecycleSummary>(`${BASE}/${policyKey}/lifecycle/attest`, {
+      actor, reason, review_cadence_days: reviewCadenceDays,
+    }).then((r) => { notifyResourceChanged("policies"); return r; }),
   timeline: (policyKey: string) => apiClient.get<PolicyTimeline>(`${BASE}/${policyKey}/lifecycle/timeline`),
   schedules: (policyKey: string, status?: string) =>
     apiClient.get<ActivationSchedule[]>(`${BASE}/${policyKey}/lifecycle/schedules${qs({ status })}`),

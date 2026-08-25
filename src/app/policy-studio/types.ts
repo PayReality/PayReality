@@ -228,6 +228,16 @@ export interface PolicyLifecycleSummary {
   deprecated_at: string | null;
   deprecation_reason: string | null;
   rollback_of_version: number | null;
+  // Authority Freshness (Milestone 17, Part B): last_attested_at/
+  // next_review_at are a re-attestation REMINDER, never an enforcement
+  // mechanism -- review-due alone never disables anything. authority_
+  // expires_at is a materially different, separate concept: an explicit
+  // hard expiry, checked at decision time for high/critical-risk
+  // policies specifically. The UI must never conflate the two.
+  last_attested_at: string | null;
+  next_review_at: string | null;
+  review_cadence_days: number | null;
+  authority_expires_at: string | null;
 }
 
 export interface ConflictAlert {
@@ -246,6 +256,11 @@ export interface LifecycleDashboard {
   deprecated_policies: PolicyLifecycleSummary[];
   rollback_history: PolicyLifecycleSummary[];
   conflict_alerts: ConflictAlert[];
+  // Authority Freshness (Milestone 17, Part B): deliberately separate
+  // from upcoming_expirations above -- that field is an ACTIVE row's
+  // own effective_until date (a scheduled deactivation), an unrelated,
+  // pre-existing concept. This is a review-due REMINDER only.
+  due_for_reattestation: PolicyLifecycleSummary[];
 }
 
 export interface PolicySearchParams {

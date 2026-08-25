@@ -644,6 +644,131 @@ class EnterpriseSystem(Base):
     )
 
 
+class FactSource(Base):
+    """Trusted Enterprise Facts (PAYREALITY_FUTURE_VISION.md Part A):
+    the identity a source system attests facts under, mirroring
+    Agent/Certificate's own registration pattern exactly -- a source
+    generates its own Ed25519 keypair and hands PayReality only the
+    public half, the same trust model already used for Agent identity.
+    `status` deliberately mirrors Certificate's active/revoked pair, not
+    the full Agent lifecycle enum: a fact source has no "suspended" or
+    "retired" state distinct from revoked at this stage, since nothing
+    yet demonstrates a need for one."""
+
+    __tablename__ = "fact_sources"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    revoked_at: Mapped[datetime | None]
+
+    __table_args__ = (
+        CheckConstraint("status IN ('active','revoked')", name="ck_fact_sources_status"),
+        Index("idx_fact_sources_organization", "organization_id"),
+    )
+
+
+class EnterpriseFact(Base):
+    """Trusted Enterprise Facts: a named, typed, time-bound assertion
+    about enterprise reality (ENTERPRISE_KNOWLEDGE_ARCHITECTURE.md's
+    already-decided data model -- subject, key, value, source,
+    timestamp, expiry, optional attestation), implemented here for the
+    first time. `expires_at` is deliberately NOT NULL: no fact type gets
+    an unbounded default, per that document's Decision 4 (stale/missing
+    -> unknown -> fail closed, never a default-forever trust).
+
+    `attestation_type` distinguishes a source-signed attestation
+    (verified against FactSource.public_key via the exact same
+    domain/evidence/signing.py machinery already used for Evidence and
+    Agent Lifecycle audit events) from a merely connector-authenticated
+    one (no signature, trust rests on the caller's own authenticated
+    session instead) -- Decision 3's "attestation-first where possible,
+    connector-identity otherwise."
+
+    Replay protection mirrors Intent's own `UNIQUE(agent_id, nonce)`
+    pattern exactly: a previously accepted attestation cannot be
+    resubmitted as if it were a fresh assertion."""
+
+    __tablename__ = "enterprise_facts"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fact_sources.id"), nullable=False
+    )
+    # Nullable: some facts are org-wide rather than scoped to one
+    # specific subject (e.g. a blanket "maintenance_window_active"
+    # fact), matching the architecture doc's own "each scoped to one
+    # subject" language without forcing a subject where none exists.
+    subject: Mapped[str | None] = mapped_column(Text)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(nullable=False)
+    attestation_type: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str | None] = mapped_column(Text)
+    key_id: Mapped[str | None] = mapped_column(Text)
+    nonce: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "attestation_type IN ('signed','connector_identity')",
+            name="ck_enterprise_facts_attestation_type",
+        ),
+        UniqueConstraint("source_id", "nonce", name="uq_enterprise_facts_source_nonce"),
+        Index("idx_enterprise_facts_organization", "organization_id"),
+        Index("idx_enterprise_facts_lookup", "organization_id", "subject", "key", "expires_at"),
+    )
+
+
+class CapabilityToken(Base):
+    """Capability Authorization Protocol (PAYREALITY_FUTURE_VISION.md
+    Part C): the issuance-and-consumption record for a short-lived,
+    signed capability bound to one ALLOW decision. Deliberately stores
+    only a hash of the full signed token, never the token itself --
+    "prefer hashes/references where storing full cryptographic artifacts
+    would unnecessarily duplicate sensitive material" -- so a leaked
+    database row cannot itself be replayed as a bearer credential.
+
+    `nonce` is unique per row (mirroring Intent's own replay-defense
+    constraint) and `consumed_at` is set exactly once, atomically, by
+    the verify-and-consume path -- this row IS the single-use ledger,
+    not a separate table, since an issuance record with no consumption
+    yet and a consumed one are the same lifecycle object, not two kinds
+    of thing."""
+
+    __tablename__ = "capability_tokens"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    decision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("decisions.id"), nullable=False
+    )
+    audience: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(nullable=False)
+    consumed_at: Mapped[datetime | None]
+    issued_by: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        UniqueConstraint("nonce", name="uq_capability_tokens_nonce"),
+        Index("idx_capability_tokens_decision", "decision_id"),
+        Index("idx_capability_tokens_organization", "organization_id"),
+    )
+
+
 class Intent(Base):
     __tablename__ = "intents"
 
@@ -843,6 +968,19 @@ class RuntimePolicyRecord(Base):
     organization_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("organizations.id")
     )
+    # Authority Freshness (PAYREALITY_FUTURE_VISION.md Part B): all
+    # nullable and additive, same discipline as every other column on
+    # this row. `last_attested_at`/`next_review_at` are a re-attestation
+    # REMINDER, not an enforcement mechanism -- review-due never
+    # disables anything on its own (see attest_policy's own docstring).
+    # `authority_expires_at` is a materially different, separate
+    # concept: an explicit hard expiry, checked at decision time for
+    # high-risk policies specifically (intent_service.submit_intent),
+    # never conflated with next_review_at.
+    last_attested_at: Mapped[datetime | None]
+    next_review_at: Mapped[datetime | None]
+    review_cadence_days: Mapped[int | None]
+    authority_expires_at: Mapped[datetime | None]
 
     __table_args__ = (
         CheckConstraint(
@@ -1417,7 +1555,7 @@ class RuntimePolicyLifecycleEvent(Base):
         CheckConstraint(
             "event_type IN ('created','edited','submitted','approved','rejected',"
             "'compiled','activated','activation_blocked','scheduled','schedule_cancelled',"
-            "'rolled_back','deprecated','archived','retired')",
+            "'rolled_back','deprecated','archived','retired','attested')",
             name="ck_runtime_policy_lifecycle_events_event_type",
         ),
         Index("idx_runtime_policy_lifecycle_events_policy_key", "policy_key"),

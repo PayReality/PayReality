@@ -37,6 +37,12 @@ class RollbackRequest(BaseModel):
     reason: str | None = None
 
 
+class AttestRequest(BaseModel):
+    actor: str
+    reason: str | None = None
+    review_cadence_days: int | None = None
+
+
 class SafetyViolationSchema(BaseModel):
     check: str
     message: str
@@ -120,6 +126,10 @@ class PolicyLifecycleSummary(BaseModel):
     deprecated_at: datetime | None = None
     deprecation_reason: str | None = None
     rollback_of_version: int | None = None
+    last_attested_at: datetime | None = None
+    next_review_at: datetime | None = None
+    review_cadence_days: int | None = None
+    authority_expires_at: datetime | None = None
 
 
 class ConflictAlertSchema(BaseModel):
@@ -138,6 +148,7 @@ class DashboardResponse(BaseModel):
     deprecated_policies: list[PolicyLifecycleSummary]
     rollback_history: list[PolicyLifecycleSummary]
     conflict_alerts: list[ConflictAlertSchema]
+    due_for_reattestation: list[PolicyLifecycleSummary]
 
 
 class SearchResponse(BaseModel):

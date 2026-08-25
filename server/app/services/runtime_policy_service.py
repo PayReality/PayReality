@@ -253,6 +253,76 @@ def resolve_enterprise_system(db: Session, policy_keys: list[str]) -> Enterprise
     return None
 
 
+_ENTERPRISE_KNOWLEDGE_FIELD_PREFIX = "enterprise_knowledge."
+
+
+def list_enterprise_knowledge_keys_for_active_policies(db: Session, organization_id: uuid.UUID | None) -> list[str]:
+    """Trusted Enterprise Facts (PAYREALITY_FUTURE_VISION.md Part A):
+    which fact keys the organization's currently-active Runtime Policies
+    actually reference, so intent_service.submit_intent resolves only
+    what's actually needed rather than every fact ever ingested for the
+    org. Scans the stored content directly (the same "filter in Python,
+    not a JSONB query" approach list_policies_for_principal already
+    takes) -- reading conditions, never executing or compiling anything."""
+    keys: set[str] = set()
+    for row in list_latest_policies(db, organization_id, status="active"):
+        for condition in (row.content.get("conditions") or {}).get("all", []):
+            field = condition.get("field", "")
+            if field.startswith(_ENTERPRISE_KNOWLEDGE_FIELD_PREFIX):
+                keys.add(field[len(_ENTERPRISE_KNOWLEDGE_FIELD_PREFIX):])
+    return sorted(keys)
+
+
+_HIGH_RISK_LEVELS = {"high", "critical"}
+
+
+def find_expired_high_risk_authority(db: Session, policy_keys: list[str], now: datetime | None = None) -> RuntimePolicyRecord | None:
+    """Authority Freshness (PAYREALITY_FUTURE_VISION.md Part B): same
+    shape as resolve_mandate_ids/resolve_enterprise_system above -- reads
+    back a value already stored on the matched policy's own row, never
+    inferred. Returns the first matched ACTIVE policy (in
+    decision_engine.evaluate()'s own `evaluated_mandates` order) whose
+    Constraints.risk_level is high/critical AND whose authority_expires_at
+    has genuinely passed, or None if none of the matched policies are in
+    that state.
+
+    Deliberately distinct from "review due" (next_review_at): a missed
+    re-attestation reminder never affects a Decision on its own (see
+    runtime_policy_lifecycle_service.attest_policy's own docstring) --
+    only an explicit, expired authority_expires_at on a HIGH or CRITICAL
+    risk policy does, and only for that reason. A LOW/MEDIUM-risk expired
+    policy is a disclosed, accepted trade-off (PAYREALITY_FUTURE_VISION.md
+    Part B), not something this function reports."""
+    now = now or datetime.now(timezone.utc)
+    for key in policy_keys:
+        try:
+            policy_key = uuid.UUID(key)
+        except ValueError:
+            continue
+        row = db.scalar(
+            select(RuntimePolicyRecord).where(
+                RuntimePolicyRecord.policy_key == policy_key,
+                RuntimePolicyRecord.status == "active",
+            )
+        )
+        if row is None or row.authority_expires_at is None:
+            continue
+        risk_level = (row.content.get("constraints") or {}).get("risk_level")
+        if not (isinstance(risk_level, str) and risk_level.lower() in _HIGH_RISK_LEVELS):
+            continue
+        expires_at = row.authority_expires_at
+        # SQLite (this codebase's test backend) silently strips tzinfo on
+        # reload even for a TIMESTAMPTZ-mapped column, a well-known
+        # SQLite-only artifact (test_decision_explanation.py hit the same
+        # thing for a different column) -- normalize rather than let a
+        # naive/aware comparison raise in tests but not in real Postgres.
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < now:
+            return row
+    return None
+
+
 def list_versions(
     db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None
 ) -> list[RuntimePolicyRecord]:

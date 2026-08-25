@@ -82,6 +82,19 @@ def _nested_object_get(base: str, field_path: str) -> str:
 
 
 _CONTEXT_FIELD_PREFIX = "context."
+# Trusted Enterprise Facts (ENTERPRISE_KNOWLEDGE_DECISION_RECORD.md
+# Decision 5): the exact same "condition field prefix -> sibling OPA
+# input section" mechanism as _CONTEXT_FIELD_PREFIX above, for the new
+# `enterprise_knowledge` section decision_engine.build_opa_input now
+# emits. Added here deliberately, not left to compiler_v2.py's
+# vocabulary check alone -- that check only gates whether compilation is
+# ALLOWED; this function is what actually determines the generated Rego
+# dot-path, and without this mapping a condition on
+# "enterprise_knowledge.supplier_approved" would compile cleanly but
+# silently resolve to input.intent.enterprise_knowledge.supplier_approved,
+# which never exists -- precisely the class of "compiles, never matches,
+# no error" bug _CONTEXT_FIELD_PREFIX's own precedent was added to close.
+_ENTERPRISE_KNOWLEDGE_FIELD_PREFIX = "enterprise_knowledge."
 
 
 def _resolve_base_and_field(condition_field: str, default_base: str) -> tuple[str, str]:
@@ -98,6 +111,8 @@ def _resolve_base_and_field(condition_field: str, default_base: str) -> tuple[st
     by reasoning about the generator in the abstract."""
     if condition_field.startswith(_CONTEXT_FIELD_PREFIX):
         return "input.context", condition_field[len(_CONTEXT_FIELD_PREFIX):]
+    if condition_field.startswith(_ENTERPRISE_KNOWLEDGE_FIELD_PREFIX):
+        return "input.enterprise_knowledge", condition_field[len(_ENTERPRISE_KNOWLEDGE_FIELD_PREFIX):]
     return default_base, condition_field
 
 

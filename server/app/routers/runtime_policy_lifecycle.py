@@ -39,6 +39,7 @@ from app.schemas.runtime_policy_lifecycle import (
     ActivateRequest,
     ActivationImpactPreviewResponse,
     ActorReasonRequest,
+    AttestRequest,
     ConflictAlertSchema,
     DashboardResponse,
     PolicyLifecycleSummary,
@@ -124,6 +125,8 @@ def _row_to_summary(row, db: Session) -> PolicyLifecycleSummary:
         activation_reason=row.activation_reason, effective_from=row.effective_from,
         effective_until=row.effective_until, deprecated_at=row.deprecated_at,
         deprecation_reason=row.deprecation_reason, rollback_of_version=row.rollback_of_version,
+        last_attested_at=row.last_attested_at, next_review_at=row.next_review_at,
+        review_cadence_days=row.review_cadence_days, authority_expires_at=row.authority_expires_at,
     )
 
 
@@ -236,6 +239,34 @@ def deprecate(
 ):
     try:
         row = lsvc.deprecate_policy(db, policy_key, organization.id, actor=body.actor, reason=body.reason)
+    except RuntimePolicyNotFoundError:
+        raise HTTPException(status_code=404, detail="runtime_policy_not_found")
+    except InvalidTransitionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return _row_to_summary(row, db)
+
+
+@router.post(
+    "/{policy_key}/lifecycle/attest", response_model=PolicyLifecycleSummary,
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
+def attest(
+    policy_key: uuid.UUID,
+    body: AttestRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    """Authority Freshness (PAYREALITY_FUTURE_VISION.md Part B). Gated
+    on Permission.AUTHORITY_REVIEW -- the same permission Approve/Reject
+    already use -- rather than RUNTIME_POLICY_PUBLISH: re-attesting is a
+    review action (confirming existing authority still reflects
+    reality), not a publish action, and Role.REVIEWER holds
+    AUTHORITY_REVIEW but not RUNTIME_POLICY_PUBLISH."""
+    try:
+        row = lsvc.attest_policy(
+            db, policy_key, organization.id, actor=body.actor, reason=body.reason,
+            review_cadence_days=body.review_cadence_days,
+        )
     except RuntimePolicyNotFoundError:
         raise HTTPException(status_code=404, detail="runtime_policy_not_found")
     except InvalidTransitionError as e:
@@ -382,6 +413,7 @@ def dashboard(organization: Organization = Depends(get_current_organization), db
             )
             for a in summary.conflict_alerts
         ],
+        due_for_reattestation=[_row_to_summary(r, db) for r in summary.due_for_reattestation],
     )
 
 

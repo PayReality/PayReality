@@ -48,6 +48,7 @@ ALLOWED_UNGATED = {
     ("GET", "/v1/runtime-policies/vocabulary"): "a fixed, non-organization-scoped reference vocabulary (known action names), no tenant data returned",
     ("GET", "/v1/ai-policy-builder/status"): "returns only a global ai_enabled boolean, no organization-scoped data",
     ("GET", "/v1/ai-authority-builder/status"): "returns only a global ai_enabled boolean, no organization-scoped data",
+    ("POST", "/v1/facts"): "authenticated by the fact's own Ed25519 signature against its registered FactSource, the same machine-to-machine model as POST /v1/intents -- deliberately never trusts the requesting agent's own RBAC role or session to self-attest an external fact",
 }
 
 

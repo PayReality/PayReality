@@ -23,7 +23,7 @@ from app.domain.decision import engine as decision_engine
 from app.domain.decision.scope_vocabulary import is_recognized_scope
 from app.domain.evidence.signing import payload_hash, sign_payload
 from app.opa_client import HttpOpaClient, org_data_path
-from app.services import runtime_policy_service, runtime_truth_service
+from app.services import fact_service, runtime_policy_service, runtime_truth_service
 from app.services.authority_context_service import classify_risk
 
 
@@ -141,6 +141,7 @@ def _build_evidence_payload(
     review_outcome: str | None = None,
     enterprise_system_id: str | None = None,
     enterprise_system_name: str | None = None,
+    facts_evaluated: list[dict] | None = None,
 ) -> dict:
     """spec 17.1's Evidence payload shape, adapted to Phase 1's fields.
 
@@ -247,6 +248,16 @@ def _build_evidence_payload(
     if enterprise_system_id is not None:
         payload["enterprise_system_id"] = enterprise_system_id
         payload["enterprise_system_name"] = enterprise_system_name
+    # Trusted Enterprise Facts (PAYREALITY_FUTURE_VISION.md Part A): the
+    # exact fact snapshot actually relied upon for this decision -- key,
+    # value, subject, source, and when it was observed/expires -- so an
+    # auditor can reconstruct not just what the policy said but what
+    # external reality it was evaluated against, the same discipline
+    # policy_version/policy_bundle_hash already apply to the policy
+    # itself. Absent (not an empty list) whenever no fact was evaluated,
+    # matching every other optional key in this payload.
+    if facts_evaluated:
+        payload["facts_evaluated"] = facts_evaluated
     return payload
 
 
@@ -323,6 +334,7 @@ def append_evidence(
     reviewer: str | None = None,
     review_outcome: str | None = None,
     enterprise_system_id: uuid.UUID | None = None,
+    facts_evaluated: list[dict] | None = None,
 ) -> Evidence:
     organization_id = _resolve_chain_scope(db, agent_id)
     previous_hash = _previous_chain_hash(db, organization_id)
@@ -362,6 +374,7 @@ def append_evidence(
         review_outcome=review_outcome,
         enterprise_system_id=str(enterprise_system.id) if enterprise_system else None,
         enterprise_system_name=enterprise_system.name if enterprise_system else None,
+        facts_evaluated=facts_evaluated,
     )
     signature = sign_payload(
         payload, settings.evidence_signing_key_b64, settings.evidence_signing_key_id
@@ -504,6 +517,30 @@ def submit_intent(
     organization_id = resolved.principal.organization_id if resolved.principal else None
     opa_data_path = org_data_path(organization_id) if organization_id is not None else None
 
+    # Trusted Enterprise Facts (PAYREALITY_FUTURE_VISION.md Part A):
+    # resolve only the fact keys the organization's active policies
+    # actually reference (never every fact ever ingested), scoped to
+    # this Intent's own counterparty as `subject` -- the reference
+    # scenario's "is this supplier approved" shape. A fact with no
+    # matching row (missing, expired, or from a revoked/cross-org
+    # source) simply isn't in the resolved list; the compiled policy's
+    # own `enterprise_knowledge.<key>` condition then evaluates
+    # undefined, so that rule doesn't match, which is this platform's
+    # existing, ordinary fail-closed behavior -- no new mechanism, just
+    # a new kind of input reaching it. A genuine contradiction between
+    # two currently-trusted sources fails closed explicitly instead of
+    # ever picking one arbitrarily.
+    needed_fact_keys = runtime_policy_service.list_enterprise_knowledge_keys_for_active_policies(db, organization_id)
+    resolved_facts = []
+    if needed_fact_keys and organization_id is not None:
+        try:
+            resolved_facts = fact_service.resolve_facts(
+                db, organization_id, [(counterparty, key) for key in needed_fact_keys]
+            )
+        except fact_service.FactConflictError:
+            resolved_facts = []
+    enterprise_knowledge = {f.key: f.value for f in resolved_facts}
+
     engine_decision = decision_engine.evaluate(
         intent={"action": action, "amount": amount, "currency": currency},
         context={
@@ -514,6 +551,12 @@ def submit_intent(
         acting_for_principal_id=resolved.principal_name,
         policy_store=_DbPolicyStore(db, organization_id),
         opa_client=_EngineOpaClient(HttpOpaClient(), data_path=opa_data_path),
+        # Milestone 17.1 remediation: the real Agent's own id, so a
+        # RuntimePolicy authored with Scope.agent narrowing can actually
+        # match it -- see decision_engine.build_opa_input's own comment
+        # for the full root cause.
+        agent_id=str(agent.id),
+        enterprise_knowledge=enterprise_knowledge,
     )
 
     policy_id = uuid.UUID(engine_decision.policy_id) if engine_decision.policy_id else None
@@ -528,11 +571,30 @@ def submit_intent(
     # with a still-real EnterpriseSystem. Null whenever none was
     # configured or the configured one no longer exists -- never guessed.
     enterprise_system = runtime_policy_service.resolve_enterprise_system(db, engine_decision.evaluated_mandates)
+
+    # Authority Freshness (PAYREALITY_FUTURE_VISION.md Part B): a
+    # matched policy whose authority has genuinely expired must not
+    # silently keep auto-allowing, even though the compiled Rego bundle
+    # itself has no notion of this at all -- checked here, after OPA's
+    # own determination, the same "post-hoc enrichment before persisting"
+    # shape resolve_mandate_ids/resolve_enterprise_system already use.
+    # Deliberately does NOT touch a DENY or an already-HUMAN_REVIEW
+    # outcome: this only ever downgrades an ALLOW, never upgrades one.
+    final_outcome = engine_decision.outcome
+    final_reason = engine_decision.reason
+    if engine_decision.outcome == "ALLOW":
+        overdue_policy = runtime_policy_service.find_expired_high_risk_authority(
+            db, engine_decision.evaluated_mandates
+        )
+        if overdue_policy is not None:
+            final_outcome = "HUMAN_REVIEW"
+            final_reason = "authority_review_overdue"
+
     decision = Decision(
         intent_id=intent.id,
         policy_id=policy_id,
-        outcome=engine_decision.outcome,
-        reason=engine_decision.reason,
+        outcome=final_outcome,
+        reason=final_reason,
         evaluated_mandates=engine_decision.evaluated_mandates,
         evaluated_mandate_ids=mandate_ids,
         enterprise_system_id=enterprise_system.id if enterprise_system else None,
@@ -572,6 +634,17 @@ def submit_intent(
         policy_version=engine_decision.policy_version,
         policy_bundle_hash=engine_decision.policy_bundle_hash,
         enterprise_system_id=enterprise_system.id if enterprise_system else None,
+        facts_evaluated=[
+            {
+                "key": f.key,
+                "value": f.value,
+                "subject": f.subject,
+                "source_id": str(f.source_id),
+                "observed_at": f.observed_at.isoformat(),
+                "expires_at": f.expires_at.isoformat(),
+            }
+            for f in resolved_facts
+        ] or None,
     )
     db.commit()
     db.refresh(intent)

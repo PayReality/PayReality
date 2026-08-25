@@ -25,7 +25,7 @@ recorded as an `activation_blocked` lifecycle event.
 import dataclasses
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -327,6 +327,72 @@ def deprecate_policy(
     return row
 
 
+_DEFAULT_REVIEW_CADENCE_DAYS = 90
+
+
+def attest_policy(
+    db: Session,
+    policy_key: uuid.UUID,
+    organization_id: uuid.UUID | None,
+    actor: str,
+    reason: str | None = None,
+    review_cadence_days: int | None = None,
+) -> RuntimePolicyRecord:
+    """Authority Freshness (PAYREALITY_FUTURE_VISION.md Part B): a label
+    update on the ACTIVE row, same shape as deprecate_policy above --
+    NOT a status transition, and deliberately NOT an enforcement
+    mechanism on its own. Re-attesting only ever updates
+    last_attested_at/next_review_at; it never touches `status`,
+    `authority_expires_at`, or anything Runtime Authority actually reads
+    at decision time. REVIEW DUE (now > next_review_at) is a visibility
+    signal, not a block -- see list_due_for_reattestation -- and must
+    never be conflated with authority_expires_at genuinely passing,
+    which IS checked at decision time
+    (runtime_policy_service.find_expired_high_risk_authority) for
+    high/critical-risk policies specifically. Re-attesting does not
+    change authority_expires_at; extending an explicit hard expiry is a
+    distinct, more consequential action this function does not perform."""
+    row = svc.get_latest(db, policy_key, organization_id)
+    if row.status != "active":
+        raise svc.InvalidTransitionError(row.status, "attest")
+    cadence = review_cadence_days if review_cadence_days is not None else (
+        row.review_cadence_days or _DEFAULT_REVIEW_CADENCE_DAYS
+    )
+    now = _now()
+    row.last_attested_at = now
+    row.review_cadence_days = cadence
+    row.next_review_at = now + timedelta(days=cadence)
+    db.commit()
+    db.refresh(row)
+    record_lifecycle_event(
+        db, policy_key, row.version, "attested", actor=actor, reason=reason,
+        payload={"review_cadence_days": cadence, "next_review_at": row.next_review_at.isoformat()},
+        organization_id=organization_id,
+    )
+    return row
+
+
+def list_due_for_reattestation(db: Session, organization_id: uuid.UUID | None, now: datetime | None = None) -> list[RuntimePolicyRecord]:
+    """The `due_for_reattestation` dashboard signal (PAYREALITY_FUTURE_
+    VISION.md Part B) -- deliberately a separate, clearly-named list
+    from get_dashboard's existing `upcoming_expirations` (an ACTIVE row
+    whose own `effective_until` is approaching, an unrelated concept)."""
+    now = now or _now()
+    return [
+        row for row in svc.list_latest_policies(db, organization_id, status="active")
+        if row.next_review_at is not None and _as_aware(row.next_review_at) <= now
+    ]
+
+
+def _as_aware(value: datetime) -> datetime:
+    """Same SQLite-only tzinfo-stripping normalization
+    runtime_policy_service.find_expired_high_risk_authority already
+    applies -- kept local here rather than imported, since it's a
+    two-line defensive normalization, not shared logic worth coupling
+    two service modules over."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 def archive_policy(
     db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None, actor: str, reason: str | None = None
 ) -> RuntimePolicyRecord:
@@ -575,6 +641,11 @@ class DashboardSummary:
     deprecated_policies: list = field(default_factory=list)
     rollback_history: list = field(default_factory=list)
     conflict_alerts: list = field(default_factory=list)
+    # Authority Freshness (PAYREALITY_FUTURE_VISION.md Part B): a
+    # review-due REMINDER, not an expiry -- unrelated to
+    # upcoming_expirations above (that's an ACTIVE row's own
+    # effective_until date, a different, pre-existing concept).
+    due_for_reattestation: list = field(default_factory=list)
 
 
 def get_dashboard(db: Session, organization_id: uuid.UUID | None) -> DashboardSummary:
@@ -617,11 +688,14 @@ def get_dashboard(db: Session, organization_id: uuid.UUID | None) -> DashboardSu
         if not safety.ok:
             conflict_alerts.append({"policy_key": str(row.policy_key), "version": row.version, "violations": safety.violations})
 
+    due_for_reattestation = list_due_for_reattestation(db, organization_id)
+
     return DashboardSummary(
         counts_by_state=counts_by_state,
         pending_approvals=pending_approvals,
         upcoming_activations=upcoming_activations,
         upcoming_expirations=upcoming_expirations,
+        due_for_reattestation=due_for_reattestation,
         upcoming_retirement_schedules=upcoming_retirement_schedules,
         recently_activated=recently_activated,
         deprecated_policies=deprecated_policies,

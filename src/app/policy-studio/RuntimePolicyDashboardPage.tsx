@@ -4,11 +4,55 @@ import { policyLifecycleApi } from "./lifecycleApi";
 import { PolicyStatusBadge } from "./components/PolicyStatusBadge";
 import { formatStatus, describeApiError } from "../live/format";
 import { useResourceSync } from "../services/resourceSync";
+import { useAuth } from "../auth/AuthContext";
 import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { SkeletonRows } from "../components/ui/skeleton";
 import type { LifecycleDashboard, PolicyLifecycleSummary, PolicySearchParams } from "./types";
+
+// Authority Freshness (Milestone 17, Part B): REVIEW DUE and AUTHORITY
+// EXPIRED are deliberately rendered as two distinct, separately-labeled
+// facts about the same row, never merged into one status -- a review-
+// due policy is NOT presented as inactive or expired merely because its
+// re-attestation reminder has passed.
+// Extracted so the exact rule the UI relies on is unit-testable on its
+// own (RuntimePolicyDashboardPage.test.ts), the same "pure function,
+// not a full page render" pattern already used for Layout.tsx's own
+// selectVisibleNavItems. `now` is injectable so a test never depends on
+// the real clock.
+export function isAuthorityExpired(authorityExpiresAt: string | null, now: number = Date.now()): boolean {
+  return !!authorityExpiresAt && new Date(authorityExpiresAt).getTime() < now;
+}
+
+function ReviewDueRow({ p, onAttest, disabled }: { p: PolicyLifecycleSummary; onAttest: (p: PolicyLifecycleSummary) => void; disabled: boolean }) {
+  const authorityExpired = isAuthorityExpired(p.authority_expires_at);
+  return (
+    <div className="flex items-center justify-between gap-3 py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
+      <div className="flex items-center gap-3 min-w-0">
+        <Link to={`/governance/${p.policy_key}`} style={{ color: "var(--pr-authority-blue)" }}>{p.name}</Link>
+        <span style={{ color: "var(--pr-text-muted)" }}>v{p.version}</span>
+        <span style={{ color: "var(--pr-warning-amber)", fontSize: 12 }}>
+          Review due{p.next_review_at ? ` since ${new Date(p.next_review_at).toLocaleDateString()}` : ""}
+        </span>
+        {authorityExpired && (
+          <span style={{ color: "var(--pr-critical-red)", fontSize: 12, fontWeight: 600 }}>
+            Authority expired {new Date(p.authority_expires_at as string).toLocaleDateString()}
+          </span>
+        )}
+      </div>
+      <Button
+        variant="tint-success"
+        size="sm"
+        disabled={disabled}
+        title={disabled ? "Requires Reviewer, Governance Administrator, or Organisation Owner" : undefined}
+        onClick={() => onAttest(p)}
+      >
+        Attest
+      </Button>
+    </div>
+  );
+}
 
 function PolicyRow({ p, note }: { p: PolicyLifecycleSummary; note?: string }) {
   return (
@@ -28,8 +72,28 @@ function PolicyRow({ p, note }: { p: PolicyLifecycleSummary; note?: string }) {
 // the same "related views, one page" pattern already used for Versions+
 // Diff and Compile+DryRun+Deploy elsewhere in Policy Studio.
 export function RuntimePolicyDashboardPage() {
+  const { user, hasPermission } = useAuth();
   const [dashboard, setDashboard] = useState<LifecycleDashboard | null>(null);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const [attestError, setAttestError] = useState<string | null>(null);
+
+  // Same permissive-when-unknown rule every other permission gate in
+  // this app already follows: with no session (Operator Key bypass
+  // still active), stay permissive rather than guessing; only disable
+  // once a real signed-in user is positively known to lack the
+  // permission. Reuses Permission.AUTHORITY_REVIEW -- the same
+  // permission Approve/Reject already require -- rather than a new one.
+  const lacksAttestPermission = !!user && !hasPermission("authority.review");
+
+  async function handleAttest(p: PolicyLifecycleSummary) {
+    setAttestError(null);
+    try {
+      await policyLifecycleApi.attest(p.policy_key, user?.name ?? "unspecified reviewer");
+      loadDashboard();
+    } catch (e) {
+      setAttestError(describeApiError(e, "Attest"));
+    }
+  }
 
   const [filters, setFilters] = useState<PolicySearchParams>({});
   const [results, setResults] = useState<PolicyLifecycleSummary[] | null>(null);
@@ -170,6 +234,23 @@ export function RuntimePolicyDashboardPage() {
             {dashboard.pending_approvals.map((p) => <PolicyRow key={p.policy_key} p={p} />)}
             {dashboard.pending_approvals.length === 0 && (
               <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>Nothing waiting on review.</p>
+            )}
+          </Card>
+
+          <Card style={{ marginBottom: 16 }}>
+            <h2 className="text-sm font-medium mb-2" style={{ color: "var(--pr-text-primary)" }}>
+              Due for re-attestation ({dashboard.due_for_reattestation.length})
+            </h2>
+            <p style={{ fontSize: 12, color: "var(--pr-text-disabled)", marginBottom: 8 }}>
+              A missed review is a reminder, not a block -- these policies keep enforcing normally.
+              Attesting requires: Reviewer, Governance Administrator, or Organisation Owner.
+            </p>
+            {attestError && <Alert severity="warning" style={{ marginBottom: 8 }}>{attestError}</Alert>}
+            {dashboard.due_for_reattestation.map((p) => (
+              <ReviewDueRow key={p.policy_key} p={p} onAttest={handleAttest} disabled={lacksAttestPermission} />
+            ))}
+            {dashboard.due_for_reattestation.length === 0 && (
+              <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>Nothing due for review.</p>
             )}
           </Card>
 

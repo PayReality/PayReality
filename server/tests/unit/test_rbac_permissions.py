@@ -68,6 +68,26 @@ def test_reviewer_can_view_and_resolve_decisions():
     assert has_permission(Role.REVIEWER, Permission.DECISIONS_RESOLVE)
 
 
+def test_governance_admin_can_manage_facts_and_issue_capabilities():
+    """Trusted Enterprise Facts and the Capability Authorization
+    Protocol (PAYREALITY_FUTURE_VISION.md Parts A/C): both new,
+    deliberately narrow permissions -- neither reuses an existing one,
+    since registering a fact source and minting an executable
+    authorization are each distinct privileges from anything already
+    modeled (see permissions.py's own comments on each)."""
+    assert has_permission(Role.GOVERNANCE_ADMIN, Permission.FACTS_MANAGE)
+    assert has_permission(Role.GOVERNANCE_ADMIN, Permission.CAPABILITY_ISSUE)
+
+
+def test_reviewer_cannot_manage_facts_or_issue_capabilities():
+    """Neither new permission is granted to Reviewer -- re-attesting
+    authority (AUTHORITY_REVIEW) is not the same privilege as
+    registering what the org treats as a trusted fact source, or as
+    minting an executable capability for a decision."""
+    assert not has_permission(Role.REVIEWER, Permission.FACTS_MANAGE)
+    assert not has_permission(Role.REVIEWER, Permission.CAPABILITY_ISSUE)
+
+
 def test_auditor_is_strictly_read_only():
     view_permissions = {
         Permission.EVIDENCE_VIEW,
