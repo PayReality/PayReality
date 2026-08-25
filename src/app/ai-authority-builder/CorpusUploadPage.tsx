@@ -26,7 +26,13 @@ export function AIAuthorityBuilderUploadPage() {
   const [justCreated, setJustCreated] = useState<Corpus | null>(null);
 
   function load() {
-    aiAuthorityBuilderApi.listCorpora().then(setCorpora);
+    aiAuthorityBuilderApi
+      .listCorpora()
+      .then(setCorpora)
+      .catch((e) => {
+        setCorpora([]);
+        setMessage(describeApiError(e, "Loading past corpora"));
+      });
   }
 
   useEffect(load, []);
@@ -162,7 +168,11 @@ export function AIAuthorityBuilderUploadPage() {
           {uploading ? "Uploading and analyzing corpus..." : `Analyze corpus (${files.length} file(s))`}
         </Button>
 
-        {message && <p role="alert" style={{ color: "var(--pr-warning-amber)", marginTop: 12 }}>{message}</p>}
+        {message && (
+          <p role="alert" style={{ color: "var(--pr-warning-amber)", marginTop: 12 }}>
+            {message} <button type="button" onClick={load} style={{ color: "var(--pr-authority-blue)", textDecoration: "underline" }}>Retry</button>
+          </p>
+        )}
       </div>
 
       {justCreated && (

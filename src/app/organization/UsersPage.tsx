@@ -19,6 +19,9 @@ export function UsersPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [confirmingDisableId, setConfirmingDisableId] = useState<string | null>(null);
+  const [pendingRoleChange, setPendingRoleChange] = useState<{ userId: string; newRole: string } | null>(null);
+  const [busyUserId, setBusyUserId] = useState<string | null>(null);
+  const [confirmingRevokeId, setConfirmingRevokeId] = useState<string | null>(null);
 
   // Milestone 3 (Enterprise Surface Isolation): the real email-and-accept
   // invite flow "Add a user" above never was -- that path creates the
@@ -59,11 +62,15 @@ export function UsersPage() {
   }
 
   async function revokeInvitation(id: string) {
+    setBusyUserId(id);
     try {
       await invitationsApi.revoke(id);
       load();
     } catch (e) {
       setMessage(describeApiError(e, "Revoke invitation"));
+    } finally {
+      setBusyUserId(null);
+      setConfirmingRevokeId(null);
     }
   }
 
@@ -88,11 +95,15 @@ export function UsersPage() {
   }
 
   async function changeRole(userId: string, newRole: string) {
+    setBusyUserId(userId);
     try {
       await usersApi.updateRole(userId, newRole);
       load();
     } catch (e) {
       setMessage(describeApiError(e, "Change role"));
+    } finally {
+      setBusyUserId(null);
+      setPendingRoleChange(null);
     }
   }
 
@@ -248,9 +259,25 @@ export function UsersPage() {
                     <span style={{ color: "var(--pr-text-secondary)" }}>
                       {inv.email} &middot; {ROLE_LABELS[inv.role as keyof typeof ROLE_LABELS] ?? inv.role}
                     </span>
-                    <button type="button" onClick={() => revokeInvitation(inv.id)} style={{ color: "var(--pr-critical-red)", flexShrink: 0 }}>
-                      Revoke
-                    </button>
+                    {confirmingRevokeId === inv.id ? (
+                      <span className="flex items-center gap-2" style={{ flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          onClick={() => revokeInvitation(inv.id)}
+                          disabled={busyUserId === inv.id}
+                          style={{ color: "var(--pr-critical-red)" }}
+                        >
+                          {busyUserId === inv.id ? "Revoking..." : "Confirm revoke"}
+                        </button>
+                        <button type="button" onClick={() => setConfirmingRevokeId(null)} disabled={busyUserId === inv.id} style={{ color: "var(--pr-text-muted)" }}>
+                          Cancel
+                        </button>
+                      </span>
+                    ) : (
+                      <button type="button" onClick={() => setConfirmingRevokeId(inv.id)} style={{ color: "var(--pr-critical-red)", flexShrink: 0 }}>
+                        Revoke
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -278,8 +305,8 @@ export function UsersPage() {
                   <td className="px-4 py-3">
                     <select
                       value={u.role}
-                      onChange={(e) => changeRole(u.id, e.target.value)}
-                      disabled={u.id === currentUser?.id}
+                      onChange={(e) => setPendingRoleChange({ userId: u.id, newRole: e.target.value })}
+                      disabled={u.id === currentUser?.id || busyUserId === u.id}
                       className="text-xs px-2 py-1 rounded-md"
                       style={{ backgroundColor: "var(--pr-input-bg)", color: "var(--pr-text-primary)", border: "1px solid var(--pr-overlay-08)" }}
                     >
@@ -287,6 +314,24 @@ export function UsersPage() {
                         <option key={r} value={r}>{ROLE_LABELS[r]}</option>
                       ))}
                     </select>
+                    {pendingRoleChange?.userId === u.id && (
+                      <span className="flex items-center gap-2 mt-1 text-xs">
+                        <span style={{ color: "var(--pr-text-muted)" }}>
+                          Change to {ROLE_LABELS[pendingRoleChange.newRole as keyof typeof ROLE_LABELS] ?? pendingRoleChange.newRole}?
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => changeRole(u.id, pendingRoleChange.newRole)}
+                          disabled={busyUserId === u.id}
+                          style={{ color: "var(--pr-authority-blue)" }}
+                        >
+                          {busyUserId === u.id ? "Saving..." : "Confirm"}
+                        </button>
+                        <button type="button" onClick={() => setPendingRoleChange(null)} disabled={busyUserId === u.id} style={{ color: "var(--pr-text-muted)" }}>
+                          Cancel
+                        </button>
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span style={{ color: u.status === "active" ? "var(--pr-trust-green)" : "var(--pr-text-disabled)" }}>

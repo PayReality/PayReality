@@ -8,7 +8,7 @@ import { ORG_NAME } from "./fixtures/organization";
 import { track } from "../services/analytics";
 
 const VALUE_BULLETS = [
-  { icon: ShieldCheck, label: "Prevented unauthorized payments" },
+  { icon: ShieldCheck, label: "Denied unauthorized payments" },
   { icon: Lock, label: "Verified delegated authority" },
   { icon: Building2, label: "Independent Runtime Authority" },
   { icon: FileCheck, label: "Cryptographic Evidence" },
@@ -19,7 +19,7 @@ const EXPLAINERS = [
   {
     key: "architecture",
     title: "Platform Architecture",
-    body: "Runtime Authority sits between every AI agent and the systems it acts on -- ERPs, procurement platforms, identity systems. No agent action reaches production until Runtime Authority has verified it. It is not a logging layer bolted on after the fact; it is the enforcement point itself.",
+    body: "Runtime Authority evaluates every AI agent's requested action before it reaches production systems -- ERPs, procurement platforms, identity systems -- and returns a deterministic Allow, Deny, or Human Review decision. It is not a logging layer bolted on after the fact; it is a decision made in time for an enterprise's own systems to act on it before the consequence exists.",
   },
   {
     key: "runtime-authority",

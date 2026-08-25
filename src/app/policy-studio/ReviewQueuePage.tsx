@@ -27,6 +27,7 @@ export function ReviewQueuePage() {
   const [message, setMessage] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<{ policyKey: string; action: "approve" | "reject" } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   // Only disable when we positively know the signed-in user lacks the
   // permission -- with no session (Operator Key bypass still active),
@@ -142,12 +143,18 @@ export function ReviewQueuePage() {
               {confirming?.policyKey === p.policy_key ? (
                 <>
                   <button
-                    onClick={() => {
-                      if (confirming.action === "approve") handleApprove(p.policy_key);
-                      else handleReject(p.policy_key);
-                      setConfirming(null);
+                    onClick={async () => {
+                      setSubmitting(true);
+                      try {
+                        if (confirming.action === "approve") await handleApprove(p.policy_key);
+                        else await handleReject(p.policy_key);
+                      } finally {
+                        setSubmitting(false);
+                        setConfirming(null);
+                      }
                     }}
-                    className="rounded-lg border"
+                    disabled={submitting}
+                    className="rounded-lg border disabled:opacity-60"
                     style={{
                       color: confirming.action === "approve" ? "var(--pr-trust-green)" : "var(--pr-critical-red)",
                       fontSize: 13,
@@ -155,10 +162,11 @@ export function ReviewQueuePage() {
                       borderColor: confirming.action === "approve" ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)",
                     }}
                   >
-                    Confirm {confirming.action}
+                    {submitting ? "Working..." : `Confirm ${confirming.action}`}
                   </button>
                   <button
                     onClick={() => setConfirming(null)}
+                    disabled={submitting}
                     style={{ color: "var(--pr-text-muted)", fontSize: 13, padding: "6px 12px" }}
                   >
                     Cancel

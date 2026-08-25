@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import { policyStudioApi } from "../api";
-import type { LivePrincipal } from "../../live/types";
+import type { LiveAgent, LivePrincipal } from "../../live/types";
 import type { Scope } from "../types";
 import { FieldLabel } from "../../components/ui/label";
 
@@ -21,6 +21,7 @@ const inputStyle: React.CSSProperties = {
 export function ScopeFields({ scope, onChange }: { scope: Scope; onChange: (next: Scope) => void }) {
   const [actions, setActions] = useState<string[]>([]);
   const [principals, setPrincipals] = useState<LivePrincipal[]>([]);
+  const [agents, setAgents] = useState<LiveAgent[]>([]);
   const formId = useId();
 
   useEffect(() => {
@@ -32,6 +33,10 @@ export function ScopeFields({ scope, onChange }: { scope: Scope; onChange: (next
       .listPrincipals()
       .then(setPrincipals)
       .catch(() => setPrincipals([]));
+    policyStudioApi
+      .listAgents()
+      .then(setAgents)
+      .catch(() => setAgents([]));
   }, []);
 
   return (
@@ -71,13 +76,20 @@ export function ScopeFields({ scope, onChange }: { scope: Scope; onChange: (next
       </div>
       <div>
         <FieldLabel htmlFor={`${formId}-agent`}>Agent (optional)</FieldLabel>
-        <input
+        <select
           id={`${formId}-agent`}
           style={inputStyle}
           value={scope.agent ?? ""}
           onChange={(e) => onChange({ ...scope, agent: e.target.value || null })}
-          placeholder="Any agent for this principal"
-        />
+        >
+          <option value="">Any agent for this principal</option>
+          {agents.map((a) => (
+            <option key={a.id} value={a.id}>{a.name}</option>
+          ))}
+          {scope.agent && !agents.some((a) => a.id === scope.agent) && (
+            <option value={scope.agent}>{scope.agent} (not in the current list)</option>
+          )}
+        </select>
       </div>
       <div>
         <FieldLabel htmlFor={`${formId}-resource`}>Resource (optional)</FieldLabel>

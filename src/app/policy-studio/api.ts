@@ -1,5 +1,5 @@
 import { apiClient } from "../live/apiClient";
-import type { LivePrincipal } from "../live/types";
+import type { LiveAgent, LivePrincipal } from "../live/types";
 import { notifyResourceChanged } from "../services/resourceSync";
 import type {
   CompileResult,
@@ -24,6 +24,15 @@ export const policyStudioApi = {
   // problem #6). Reuses the same /v1/principals list the Agent Directory
   // already shows, so the picker always reflects real principals.
   listPrincipals: () => apiClient.get<LivePrincipal[]>("/v1/principals"),
+  // Scope.agent used to be a free-text field too, and the fix that made
+  // rego_generator.py compile it against the real Agent.id (rather than
+  // never matching anything) only corrected the runtime comparison, not
+  // this authoring UI -- a QA pass found the free-text input still let
+  // an author type an agent's display name, producing a policy that
+  // compiles but silently never matches. Reuses /v1/agents the same way
+  // listPrincipals reuses /v1/principals, so the picker's values are
+  // always real Agent.id values.
+  listAgents: () => apiClient.get<{ agents: LiveAgent[] }>("/v1/agents?limit=200").then((r) => r.agents),
   list: (status?: string) =>
     apiClient.get<RuntimePolicy[]>(`${BASE}${status ? `?status=${encodeURIComponent(status)}` : ""}`),
   get: (policyKey: string) => apiClient.get<RuntimePolicy>(`${BASE}/${policyKey}`),

@@ -33,6 +33,8 @@ export function LiveEvidence() {
   const [records, setRecords] = useState<LiveEvidenceType[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [verifyResults, setVerifyResults] = useState<Record<string, boolean>>({});
+  const [verifyErrors, setVerifyErrors] = useState<Record<string, string>>({});
+  const [verifying, setVerifying] = useState<Set<string>>(new Set());
   const [expandedDetails, setExpandedDetails] = useState<Set<string>>(new Set());
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [keyHistory, setKeyHistory] = useState<VerificationKeyHistoryResponse | null>(null);
@@ -75,8 +77,24 @@ export function LiveEvidence() {
   useResourceSync(["decisions", "evidence"], load);
 
   const verify = async (id: string) => {
-    const result = await apiClient.post<{ valid: boolean }>(`/v1/evidence/${id}/verify`);
-    setVerifyResults((prev) => ({ ...prev, [id]: result.valid }));
+    setVerifying((prev) => new Set(prev).add(id));
+    setVerifyErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    try {
+      const result = await apiClient.post<{ valid: boolean }>(`/v1/evidence/${id}/verify`);
+      setVerifyResults((prev) => ({ ...prev, [id]: result.valid }));
+    } catch (e) {
+      setVerifyErrors((prev) => ({ ...prev, [id]: describeApiError(e, "Verify signature") }));
+    } finally {
+      setVerifying((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
   };
 
   const checkChainIntegrity = async () => {
@@ -327,11 +345,12 @@ export function LiveEvidence() {
               <div className="flex items-center gap-3 mb-2">
                 <button
                   onClick={() => verify(e.evidence_id)}
+                  disabled={verifying.has(e.evidence_id)}
                   data-tour={e === records?.[0] ? "verify-signature" : undefined}
-                  className="px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 border transition-all"
+                  className="px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 border transition-all disabled:opacity-60"
                   style={{ borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-secondary)" }}
                 >
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Verify signature
+                  <CheckCircle2 className="w-3.5 h-3.5" /> {verifying.has(e.evidence_id) ? "Verifying..." : "Verify signature"}
                 </button>
                 {verified === true && (
                   <span className="text-xs flex items-center gap-1" style={{ color: "var(--pr-trust-green)" }}>
@@ -341,6 +360,11 @@ export function LiveEvidence() {
                 {verified === false && (
                   <span className="text-xs flex items-center gap-1" style={{ color: "var(--pr-critical-red)" }}>
                     <ShieldX className="w-3.5 h-3.5" /> Tampered or corrupted
+                  </span>
+                )}
+                {verifyErrors[e.evidence_id] && (
+                  <span className="text-xs flex items-center gap-1" style={{ color: "var(--pr-warning-amber)" }}>
+                    {verifyErrors[e.evidence_id]}
                   </span>
                 )}
                 <button

@@ -110,7 +110,7 @@ export function PlatformOverview() {
           PayReality is Enterprise AI Authority Infrastructure: Runtime Authority checks every AI
           action against the authority your organization has already delegated, before it
           executes. Every enterprise already knows how to delegate authority to people; this
-          platform makes that authority machine-enforceable, deterministically, and every decision
+          platform makes that authority machine-evaluable, deterministically, and every decision
           produces evidence you can verify independently.
         </p>
         <p className="text-sm max-w-2xl mb-8" style={{ color: "var(--pr-text-muted)" }}>

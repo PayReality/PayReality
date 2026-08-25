@@ -207,6 +207,14 @@ export function PolicyWorkspacePage() {
     );
   }
 
+  // QA pass: without this branch, an existing policy still being fetched
+  // rendered the blank EMPTY-form fields (the same shape as authoring a
+  // genuinely new rule) until loadExisting() resolved and overwrote
+  // whatever the reviewer had already started typing, with no warning.
+  if (!isNew && !existing) {
+    return <div className="p-8" style={{ color: "var(--pr-text-muted)" }}>Loading...</div>;
+  }
+
   return (
     <div className="p-8 max-w-3xl" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
       <div className="mb-4 flex items-center justify-between">

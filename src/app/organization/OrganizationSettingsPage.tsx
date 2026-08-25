@@ -138,24 +138,24 @@ function GeneralTab({ settings, onSaved }: { settings: OrganizationSettings; onS
   return (
     <div className="space-y-4 max-w-md">
       <div>
-        <label style={fieldLabelStyle()}>Organisation Name</label>
-        <input style={inputStyle()} value={name} onChange={(e) => setName(e.target.value)} />
+        <label htmlFor="org-settings-name" style={fieldLabelStyle()}>Organisation Name</label>
+        <input id="org-settings-name" style={inputStyle()} value={name} onChange={(e) => setName(e.target.value)} />
       </div>
       <div>
-        <label style={fieldLabelStyle()}>Logo URL</label>
-        <input style={inputStyle()} value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} placeholder="https://..." />
+        <label htmlFor="org-settings-logo-url" style={fieldLabelStyle()}>Logo URL</label>
+        <input id="org-settings-logo-url" style={inputStyle()} value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} placeholder="https://..." />
       </div>
       <div>
-        <label style={fieldLabelStyle()}>Timezone</label>
-        <input style={inputStyle()} value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+        <label htmlFor="org-settings-timezone" style={fieldLabelStyle()}>Timezone</label>
+        <input id="org-settings-timezone" style={inputStyle()} value={timezone} onChange={(e) => setTimezone(e.target.value)} />
       </div>
       <div>
-        <label style={fieldLabelStyle()}>Default Currency</label>
-        <input style={inputStyle()} value={currency} onChange={(e) => setCurrency(e.target.value.toUpperCase())} maxLength={3} />
+        <label htmlFor="org-settings-currency" style={fieldLabelStyle()}>Default Currency</label>
+        <input id="org-settings-currency" style={inputStyle()} value={currency} onChange={(e) => setCurrency(e.target.value.toUpperCase())} maxLength={3} />
       </div>
       <div>
-        <label style={fieldLabelStyle()}>Default Language</label>
-        <input style={inputStyle()} value={language} onChange={(e) => setLanguage(e.target.value)} />
+        <label htmlFor="org-settings-language" style={fieldLabelStyle()}>Default Language</label>
+        <input id="org-settings-language" style={inputStyle()} value={language} onChange={(e) => setLanguage(e.target.value)} />
       </div>
       <SaveButton onClick={save} saving={saving} />
       {message && <p role="alert" className="text-xs" style={{ color: "var(--pr-text-muted)" }}>{message}</p>}
@@ -491,8 +491,9 @@ function SecurityTab({ settings, onSaved }: { settings: OrganizationSettings; on
 
       <div className="max-w-md space-y-4">
         <div>
-          <label style={fieldLabelStyle()}>Session Timeout (minutes)</label>
+          <label htmlFor="org-settings-session-timeout" style={fieldLabelStyle()}>Session Timeout (minutes)</label>
           <input
+            id="org-settings-session-timeout"
             type="number"
             min={5}
             style={inputStyle()}
@@ -524,6 +525,7 @@ function ApiKeysSection() {
   const [rawKey, setRawKey] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [confirmingRevokeId, setConfirmingRevokeId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   function load() {
     organizationApi.listApiKeys().then(setKeys).catch(() => setKeys([]));
@@ -531,7 +533,8 @@ function ApiKeysSection() {
   useEffect(load, []);
 
   async function create() {
-    if (!name.trim()) return;
+    if (!name.trim() || creating) return;
+    setCreating(true);
     try {
       const result = await organizationApi.createApiKey(name, role);
       setRawKey(result.raw_key);
@@ -539,6 +542,8 @@ function ApiKeysSection() {
       load();
     } catch (e) {
       setMessage(describeApiError(e, "Create API key"));
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -578,10 +583,11 @@ function ApiKeysSection() {
         <button
           type="button"
           onClick={create}
-          className="text-sm font-medium px-4 py-2 rounded-lg"
+          disabled={creating}
+          className="text-sm font-medium px-4 py-2 rounded-lg disabled:opacity-60"
           style={{ backgroundColor: "var(--pr-authority-blue)", color: "white" }}
         >
-          Create key
+          {creating ? "Creating..." : "Create key"}
         </button>
       </div>
 
@@ -659,22 +665,22 @@ function RuntimeAuthorityTab({ settings, onSaved }: { settings: OrganizationSett
         rule doesn't cover a case, not a replacement for your own delegated authority and rules.
       </p>
       <div>
-        <label style={fieldLabelStyle()}>Default Human Review Behaviour</label>
-        <select style={inputStyle()} value={reviewBehavior} onChange={(e) => setReviewBehavior(e.target.value)}>
+        <label htmlFor="org-settings-review-behavior" style={fieldLabelStyle()}>Default Human Review Behaviour</label>
+        <select id="org-settings-review-behavior" style={inputStyle()} value={reviewBehavior} onChange={(e) => setReviewBehavior(e.target.value)}>
           <option value="escalate">Escalate to Review Queue</option>
           <option value="deny">Deny by default</option>
         </select>
       </div>
       <div>
-        <label style={fieldLabelStyle()}>Evidence Retention (days)</label>
-        <input type="number" min={1} style={inputStyle()} value={retentionDays} onChange={(e) => setRetentionDays(e.target.value)} />
+        <label htmlFor="org-settings-evidence-retention" style={fieldLabelStyle()}>Evidence Retention (days)</label>
+        <input id="org-settings-evidence-retention" type="number" min={1} style={inputStyle()} value={retentionDays} onChange={(e) => setRetentionDays(e.target.value)} />
         <p className="text-xs mt-1" style={{ color: "var(--pr-text-muted)" }}>
           Recorded as policy today; no automated purge job exists yet.
         </p>
       </div>
       <div>
-        <label style={fieldLabelStyle()}>Default Policy Behaviour</label>
-        <select style={inputStyle()} value={policyBehavior} onChange={(e) => setPolicyBehavior(e.target.value)}>
+        <label htmlFor="org-settings-policy-behavior" style={fieldLabelStyle()}>Default Policy Behaviour</label>
+        <select id="org-settings-policy-behavior" style={inputStyle()} value={policyBehavior} onChange={(e) => setPolicyBehavior(e.target.value)}>
           <option value="deny">Fail closed (deny)</option>
           <option value="review">Fail to human review</option>
         </select>
@@ -691,9 +697,16 @@ function RuntimeAuthorityTab({ settings, onSaved }: { settings: OrganizationSett
 
 function IntegrationsTab() {
   const [status, setStatus] = useState<IntegrationsStatus | null>(null);
-  useEffect(() => {
-    organizationApi.getIntegrations().then(setStatus);
-  }, []);
+  const [error, setError] = useState<string | null>(null);
+
+  function load() {
+    setError(null);
+    organizationApi
+      .getIntegrations()
+      .then(setStatus)
+      .catch((e) => setError(describeApiError(e, "Loading integration status")));
+  }
+  useEffect(load, []);
 
   const rows: Array<{ key: keyof IntegrationsStatus; label: string }> = [
     { key: "azure_ai_foundry", label: "Azure AI Foundry" },
@@ -711,12 +724,19 @@ function IntegrationsTab() {
         protects, the ERP, CRM, procurement, and finance systems an agent's action ultimately
         reaches, are registered separately under the Enterprise Systems tab.
       </p>
+      {error && (
+        <p role="alert" className="text-xs mb-3" style={{ color: "var(--pr-warning-amber)" }}>
+          {error} <button type="button" onClick={load} style={{ color: "var(--pr-authority-blue)", textDecoration: "underline" }}>Retry</button>
+        </p>
+      )}
       <div className="space-y-3">
         {rows.map((row) => (
           <div key={row.key} className="flex items-center justify-between gap-3">
             <span className="text-sm" style={{ color: "var(--pr-text-primary)" }}>{row.label}</span>
             {status ? (
               <Pill label={humanize(status[row.key])} color={INTEGRATION_COLORS[status[row.key]]} />
+            ) : error ? (
+              <span className="text-xs" style={{ color: "var(--pr-text-muted)" }}>Unknown</span>
             ) : (
               <span className="text-xs" style={{ color: "var(--pr-text-muted)" }}>Checking...</span>
             )}
@@ -852,8 +872,8 @@ function NotificationsTab({ settings, onSaved }: { settings: OrganizationSetting
         <input type="checkbox" checked={teams} onChange={(e) => setTeams(e.target.checked)} /> Microsoft Teams
       </label>
       <div>
-        <label style={fieldLabelStyle()}>Webhook URL</label>
-        <input style={inputStyle()} value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://..." />
+        <label htmlFor="org-settings-webhook-url" style={fieldLabelStyle()}>Webhook URL</label>
+        <input id="org-settings-webhook-url" style={inputStyle()} value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://..." />
       </div>
       <SaveButton onClick={save} saving={saving} />
       {message && <p role="alert" className="text-xs" style={{ color: "var(--pr-text-muted)" }}>{message}</p>}
@@ -905,8 +925,8 @@ function AuditTab({ settings, onSaved }: { settings: OrganizationSettings; onSav
   return (
     <div className="max-w-md space-y-4">
       <div>
-        <label style={fieldLabelStyle()}>Audit Retention (days)</label>
-        <input type="number" min={1} style={inputStyle()} value={retentionDays} onChange={(e) => setRetentionDays(e.target.value)} />
+        <label htmlFor="org-settings-audit-retention" style={fieldLabelStyle()}>Audit Retention (days)</label>
+        <input id="org-settings-audit-retention" type="number" min={1} style={inputStyle()} value={retentionDays} onChange={(e) => setRetentionDays(e.target.value)} />
       </div>
       <SaveButton onClick={save} saving={saving} />
       {message && <p role="alert" className="text-xs" style={{ color: "var(--pr-text-muted)" }}>{message}</p>}
@@ -1010,9 +1030,11 @@ export function OrganizationSettingsPage() {
   const [settings, setSettings] = useState<OrganizationSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function load() {
+    setError(null);
     organizationApi.getSettings().then(setSettings).catch((e) => setError(describeApiError(e, "Load settings")));
-  }, []);
+  }
+  useEffect(load, []);
 
   return (
     <RequirePermission permission="settings.view">
@@ -1063,11 +1085,15 @@ export function OrganizationSettingsPage() {
           ))}
         </div>
 
-        {error && <p role="alert" className="text-xs mb-4" style={{ color: "var(--pr-critical-red)" }}>{error}</p>}
+        {error && (
+          <p role="alert" className="text-xs mb-4" style={{ color: "var(--pr-critical-red)" }}>
+            {error} <button type="button" onClick={load} style={{ color: "var(--pr-authority-blue)", textDecoration: "underline" }}>Retry</button>
+          </p>
+        )}
 
-        {!settings ? (
+        {!settings && !error ? (
           <p className="text-sm" style={{ color: "var(--pr-text-muted)" }}>Loading...</p>
-        ) : (
+        ) : settings ? (
           <div role="tabpanel" id={`org-tabpanel-${tab}`} aria-labelledby={`org-tab-${tab}`}>
             {tab === "General" && <GeneralTab settings={settings} onSaved={setSettings} />}
             {tab === "Organisation Structure" && <OrganisationStructureTab settings={settings} />}
@@ -1080,7 +1106,7 @@ export function OrganizationSettingsPage() {
             {tab === "Organisation Health" && <OrganisationHealthTab />}
             {tab === "About" && <AboutTab />}
           </div>
-        )}
+        ) : null}
       </div>
     </RequirePermission>
   );

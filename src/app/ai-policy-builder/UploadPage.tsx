@@ -21,7 +21,13 @@ export function AIPolicyBuilderUploadPage() {
   const [justUploaded, setJustUploaded] = useState<Upload | null>(null);
 
   function load() {
-    aiPolicyBuilderApi.listUploads().then(setUploads);
+    aiPolicyBuilderApi
+      .listUploads()
+      .then(setUploads)
+      .catch((e) => {
+        setUploads([]);
+        setMessage(describeApiError(e, "Loading past uploads"));
+      });
   }
 
   useEffect(load, []);
@@ -86,7 +92,11 @@ export function AIPolicyBuilderUploadPage() {
         />
       </label>
 
-      {message && <p role="alert" style={{ color: "var(--pr-warning-amber)", marginBottom: 16 }}>{message}</p>}
+      {message && (
+        <p role="alert" style={{ color: "var(--pr-warning-amber)", marginBottom: 16 }}>
+          {message} <button type="button" onClick={load} style={{ color: "var(--pr-authority-blue)", textDecoration: "underline" }}>Retry</button>
+        </p>
+      )}
 
       {justUploaded && (
         <NextStepGuidance

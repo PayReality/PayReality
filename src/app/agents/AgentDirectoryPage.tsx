@@ -15,6 +15,7 @@ import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { SkeletonRows } from "../components/ui/skeleton";
 import { useToast } from "../components/ui/toast";
+import { ConfirmButton } from "../components/ui/confirm-button";
 
 const BULK_ACTION_LABEL: Record<"suspend" | "activate" | "retire" | "rotate", string> = {
   suspend: "suspend",
@@ -40,6 +41,7 @@ export function AgentDirectoryPage() {
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmingBulkAction, setConfirmingBulkAction] = useState<"suspend" | "activate" | "retire" | "rotate" | null>(null);
+  const [pendingRowId, setPendingRowId] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [principalId, setPrincipalId] = useState("");
@@ -132,6 +134,7 @@ export function AgentDirectoryPage() {
   }
 
   async function runRowAction(action: "activate" | "suspend" | "retire", agentId: string) {
+    setPendingRowId(agentId);
     try {
       if (action === "activate") {
         await agentsApi.activate(agentId);
@@ -142,6 +145,8 @@ export function AgentDirectoryPage() {
       loadAgents();
     } catch (e) {
       notify(describeApiError(e, "Action"), "error");
+    } finally {
+      setPendingRowId(null);
     }
   }
 
@@ -399,13 +404,25 @@ export function AgentDirectoryPage() {
                   </td>
                   <td className="p-3"><HealthDot health={a.health} /></td>
                   <td className="p-3">
-                    {rowAction && (
-                      <button
-                        onClick={() => runRowAction(rowAction.action, a.id)}
+                    {rowAction && rowAction.action === "suspend" ? (
+                      <ConfirmButton
+                        size="sm"
+                        confirmLabel="Confirm"
+                        disabled={!!pendingRowId}
                         className="text-xs px-2.5 py-1 rounded-md"
                         style={{ backgroundColor: "var(--pr-overlay-06)", color: "var(--pr-text-secondary)" }}
+                        onConfirm={() => runRowAction(rowAction.action, a.id)}
                       >
                         {rowAction.label}
+                      </ConfirmButton>
+                    ) : rowAction && (
+                      <button
+                        onClick={() => runRowAction(rowAction.action, a.id)}
+                        disabled={!!pendingRowId}
+                        className="text-xs px-2.5 py-1 rounded-md disabled:opacity-40"
+                        style={{ backgroundColor: "var(--pr-overlay-06)", color: "var(--pr-text-secondary)" }}
+                      >
+                        {pendingRowId === a.id ? "Working..." : rowAction.label}
                       </button>
                     )}
                   </td>

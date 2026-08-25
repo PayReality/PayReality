@@ -16,6 +16,7 @@ import { Card } from "../components/ui/card";
 import { FieldLabel } from "../components/ui/label";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
+import { ConfirmButton } from "../components/ui/confirm-button";
 import { DEMO_MODE } from "../demo/config";
 import { useNow, formatRelativeTime } from "../demo/liveClock";
 
@@ -158,43 +159,50 @@ export function AgentDetailPage() {
           </Button>
         )}
         {agent.status === "active" && (
-          <button
-            onClick={() => runAction(() => agentsApi.suspend(agentId!), "Suspend")}
+          <ConfirmButton
+            size="sm"
+            confirmLabel="Confirm suspend"
             disabled={!!pendingAction || lacksPermission("agent.suspend")}
-            className="px-3 py-1.5 rounded-lg text-xs disabled:opacity-40"
+            className="disabled:opacity-40"
             style={{ backgroundColor: "rgba(245,158,11,0.1)", color: "var(--pr-warning-amber)" }}
+            onConfirm={() => runAction(() => agentsApi.suspend(agentId!), "Suspend")}
           >
-            {pendingAction === "Suspend" ? "Suspending..." : "Suspend"}
-          </button>
+            Suspend
+          </ConfirmButton>
         )}
         {(agent.status === "active" || agent.status === "suspended") && (
-          <button
-            onClick={handleRotate}
+          <ConfirmButton
+            size="sm"
+            confirmLabel="Confirm rotate"
             disabled={!!pendingAction || lacksPermission("agent.rotate")}
-            className="px-3 py-1.5 rounded-lg text-xs disabled:opacity-40"
+            className="disabled:opacity-40"
             style={{ backgroundColor: "rgba(77,124,254,0.1)", color: "var(--pr-authority-blue)" }}
+            onConfirm={handleRotate}
           >
-            {pendingAction === "Rotate certificate" ? "Rotating..." : "Rotate certificate"}
-          </button>
+            Rotate certificate
+          </ConfirmButton>
         )}
         {(agent.status === "registered" || agent.status === "active" || agent.status === "suspended") && (
           <>
-            <button
-              onClick={() => runAction(() => agentsApi.retire(agentId!), "Retire")}
+            <ConfirmButton
+              size="sm"
+              confirmLabel="Confirm retire"
               disabled={!!pendingAction || lacksPermission("agent.retire")}
-              className="px-3 py-1.5 rounded-lg text-xs disabled:opacity-40"
+              className="disabled:opacity-40"
               style={{ backgroundColor: "var(--pr-overlay-06)", color: "var(--pr-text-secondary)" }}
+              onConfirm={() => runAction(() => agentsApi.retire(agentId!), "Retire")}
             >
-              {pendingAction === "Retire" ? "Retiring..." : "Retire"}
-            </button>
-            <Button
+              Retire
+            </ConfirmButton>
+            <ConfirmButton
               variant="tint-danger"
               size="sm"
+              confirmLabel="Confirm revoke"
               disabled={!!pendingAction || lacksPermission("agent.revoke")}
-              onClick={() => runAction(() => agentsApi.revoke(agentId!), "Revoke")}
+              onConfirm={() => runAction(() => agentsApi.revoke(agentId!), "Revoke")}
             >
-              {pendingAction === "Revoke" ? "Revoking..." : "Revoke"}
-            </Button>
+              Revoke
+            </ConfirmButton>
           </>
         )}
       </div>
