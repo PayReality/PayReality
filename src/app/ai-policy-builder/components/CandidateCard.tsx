@@ -1,7 +1,7 @@
 import { useId, useState } from "react";
 import { Link } from "react-router";
 import { aiPolicyBuilderApi } from "../api";
-import type { Candidate, PromoteResult, ValidationErrorItem } from "../types";
+import type { Candidate, GraphGateError, PromoteResult, ValidationErrorItem } from "../types";
 import type { RuntimePolicyRequest } from "../../policy-studio/types";
 import { ScopeFields } from "../../policy-studio/components/ScopeFields";
 import { ConditionRow } from "../../policy-studio/components/ConditionRow";
@@ -30,9 +30,15 @@ export function CandidateCard({ candidate, onChanged }: { candidate: Candidate; 
   // show here (that durable view is Policy Studio's Workspace/List,
   // Stage I.5a), so this stays undefined rather than fabricating one.
   const [promoteResult, setPromoteResult] = useState<PromoteResult | null>(null);
+  const [graphErrors, setGraphErrors] = useState<GraphGateError[]>([]);
   const formId = useId();
 
   const readOnly = candidate.status !== "pending_review";
+  // Authority Graph -> RuntimePolicy Compilation Gate (issue #6):
+  // undefined/null for a standalone (non-corpus) candidate -- no graph
+  // to be ready or not ready against, so no gate to show at all.
+  const graphGated = candidate.corpus_id != null;
+  const graphReady = candidate.graph_readiness?.ready ?? true;
 
   async function save() {
     setSaving(true);
@@ -63,6 +69,7 @@ export function CandidateCard({ candidate, onChanged }: { candidate: Candidate; 
     setSaving(true);
     setMessage(null);
     setErrors([]);
+    setGraphErrors([]);
     const startedAt = Date.now();
     try {
       await aiPolicyBuilderApi.editCandidate(candidate.candidate_id, content);
@@ -74,13 +81,22 @@ export function CandidateCard({ candidate, onChanged }: { candidate: Candidate; 
       });
       setPromoteResult(result);
       setMessage(
-        result.authority_id
-          ? `Promoted to Policy Studio as a draft (v${result.version}). Linked to Authority ${result.authority_id}.`
-          : `Promoted to Policy Studio as a draft (v${result.version}). No resolved authority -- delegated_by kept as free text.`
+        result.source_graph_version
+          ? `Promoted to Policy Studio as a draft (v${result.version}), generated from Authority Graph v${result.source_graph_version}.`
+          : result.authority_id
+            ? `Promoted to Policy Studio as a draft (v${result.version}). Linked to Authority ${result.authority_id}.`
+            : `Promoted to Policy Studio as a draft (v${result.version}). No resolved authority -- delegated_by kept as free text.`
       );
       onChanged();
     } catch (e) {
-      if (e instanceof ApiError && e.body && typeof e.body === "object" && "errors" in (e.body as object)) {
+      if (e instanceof ApiError && e.body && typeof e.body === "object" && "error" in (e.body as object) && (e.body as { error: string }).error === "graph_not_ready") {
+        setGraphErrors((e.body as { errors: GraphGateError[] }).errors);
+        trackError("Runtime Policy Generation Failed", {
+          error_type: "graph_not_ready",
+          component: "ai_candidate_promote",
+          duration_ms: Date.now() - startedAt,
+        });
+      } else if (e instanceof ApiError && e.body && typeof e.body === "object" && "errors" in (e.body as object)) {
         setErrors((e.body as { errors: ValidationErrorItem[] }).errors);
         trackError("Runtime Policy Generation Failed", {
           error_type: "validation_error",
@@ -155,6 +171,23 @@ export function CandidateCard({ candidate, onChanged }: { candidate: Candidate; 
         >
           "{candidate.source_excerpt}" ({candidate.source_location})
         </p>
+      )}
+
+      {graphGated && candidate.status === "pending_review" && (
+        <div
+          className="flex items-center gap-2 mb-3"
+          style={{
+            fontSize: 12,
+            padding: "6px 10px",
+            borderRadius: 8,
+            backgroundColor: graphReady ? "rgba(34,197,94,0.08)" : "rgba(245,158,11,0.1)",
+            color: graphReady ? "var(--pr-trust-green)" : "var(--pr-warning-amber)",
+          }}
+        >
+          {graphReady
+            ? "Grounded in the corpus's latest approved Authority Graph version -- ready to compile."
+            : "Compilation blocked: this candidate is not yet grounded in an approved Authority Graph version."}
+        </div>
       )}
 
       {candidate.missing_fields.length > 0 && (
@@ -323,6 +356,16 @@ export function CandidateCard({ candidate, onChanged }: { candidate: Candidate; 
         </div>
       )}
 
+      {graphErrors.length > 0 && (
+        <div role="alert" className="mb-3">
+          {graphErrors.map((err, i) => (
+            <p key={i} style={{ fontSize: 12, color: "var(--pr-critical-red)" }}>
+              Compilation blocked: {err.message}
+            </p>
+          ))}
+        </div>
+      )}
+
       {message && (
         <p role="alert" style={{ fontSize: 13, color: "var(--pr-text-secondary)", marginBottom: 8 }}>{message}</p>
       )}
@@ -345,8 +388,13 @@ export function CandidateCard({ candidate, onChanged }: { candidate: Candidate; 
           >
             Dismiss
           </button>
-          <Button variant="primary" onClick={promote} disabled={saving}>
-            Promote to Policy Studio
+          <Button
+            variant="primary"
+            onClick={promote}
+            disabled={saving || (graphGated && !graphReady)}
+            title={graphGated && !graphReady ? "This candidate is not yet grounded in an approved Authority Graph version." : undefined}
+          >
+            {graphGated ? "Compile to Runtime Policy" : "Promote to Policy Studio"}
           </Button>
         </div>
       ) : candidate.status === "promoted" && candidate.promoted_policy_key ? (
@@ -366,6 +414,20 @@ export function CandidateCard({ candidate, onChanged }: { candidate: Candidate; 
               }}
             >
               Linked to Authority {promoteResult.authority_id}
+            </span>
+          )}
+          {promoteResult?.source_graph_version && (
+            <span
+              style={{
+                fontSize: 11,
+                fontFamily: "monospace",
+                color: "var(--pr-trust-green)",
+                backgroundColor: "var(--pr-bg-hover)",
+                borderRadius: 999,
+                padding: "2px 8px",
+              }}
+            >
+              Generated from Authority Graph v{promoteResult.source_graph_version}
             </span>
           )}
         </div>

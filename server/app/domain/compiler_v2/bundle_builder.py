@@ -178,6 +178,31 @@ def build_bundle(
                     "agent": p.scope.agent,
                     "resource": p.scope.resource,
                 },
+                # Authority Graph -> RuntimePolicy Compilation Gate
+                # (issue #6): only present for a graph-derived policy
+                # (p.metadata.source_type set) -- omitted entirely for a
+                # manually-authored or standalone-candidate policy, never
+                # present-but-null, so this manifest entry's shape stays
+                # exactly what every existing reader already expects
+                # unless a policy is actually graph-derived. This is
+                # what makes the source graph version survive into
+                # Policy.bundle_manifest and, from there, into a
+                # historical Decision's own bound Policy row and the
+                # Authorization Receipt (PolicyManifestEntry reused
+                # unchanged by both).
+                **(
+                    {
+                        "source": {
+                            "type": p.metadata.source_type,
+                            "corpus_id": p.metadata.source_corpus_id,
+                            "graph_approval_id": p.metadata.source_graph_approval_id,
+                            "graph_version": p.metadata.source_graph_version,
+                            "candidate_id": p.metadata.source_candidate_id,
+                        }
+                    }
+                    if p.metadata.source_type
+                    else {}
+                ),
             }
             for p in policies
         ],

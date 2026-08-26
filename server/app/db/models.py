@@ -1007,6 +1007,23 @@ class RuntimePolicyRecord(Base):
     next_review_at: Mapped[datetime | None]
     review_cadence_days: Mapped[int | None]
     authority_expires_at: Mapped[datetime | None]
+    # Authority Graph -> RuntimePolicy Compilation Gate: nullable and
+    # additive, same discipline as every column above. Set once, at
+    # create_policy time, only when this draft was produced by
+    # ai_policy_builder_service.promote_candidate gating on a specific
+    # AuthorityGraphApproval -- never set, and never backfilled, for a
+    # manually-authored policy (Policy Studio's own create endpoint) or
+    # a standalone (non-corpus) AI Policy Builder candidate. Pulled out
+    # as a real, indexed column rather than left buried in `content`
+    # JSONB (where the same fact is ALSO recorded on Metadata, for the
+    # domain object's own self-containment) specifically so reverse
+    # traceability ("which policies did this graph approval produce")
+    # is a real, efficient query, not a JSONB scan -- the same
+    # "pull out only what's filtered/queried on" convention policy_key/
+    # version/status/bundle_hash already follow.
+    source_graph_approval_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("authority_graph_approvals.id")
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -1019,6 +1036,7 @@ class RuntimePolicyRecord(Base):
         Index("idx_runtime_policy_records_policy_key", "policy_key"),
         Index("idx_runtime_policy_records_status", "status"),
         Index("idx_runtime_policy_records_organization", "organization_id"),
+        Index("idx_runtime_policy_records_source_graph_approval", "source_graph_approval_id"),
     )
 
 

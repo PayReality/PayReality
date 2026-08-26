@@ -42,6 +42,18 @@ class MetadataSchema(BaseModel):
     owner: str | None = None
     created_by: str | None = None
     tags: list[str] = []
+    # Authority Graph -> RuntimePolicy Compilation Gate (issue #6):
+    # additive, read-only in practice (set only by promote_candidate's
+    # graph-gated path, never by a client submitting a
+    # RuntimePolicyRequest by hand) -- present here so
+    # _record_to_response's existing **content["metadata"] unpacking
+    # surfaces them without a separate response shape, the same
+    # precedent Constraints.authority_id/mandate_id already established.
+    source_type: str | None = None
+    source_corpus_id: str | None = None
+    source_graph_approval_id: str | None = None
+    source_graph_version: int | None = None
+    source_candidate_id: str | None = None
 
 
 class RuntimePolicyRequest(BaseModel):

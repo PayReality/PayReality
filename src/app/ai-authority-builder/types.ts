@@ -200,3 +200,14 @@ export interface GraphApproval {
   graph_hash: string;
   approved_at: string;
 }
+
+// Authority Graph -> RuntimePolicy Compilation Gate (issue #6), reverse
+// traceability: one RuntimePolicy version whose lineage originates at a
+// specific approved graph version.
+export interface CompiledPolicySummary {
+  policy_key: string;
+  version: number;
+  name: string;
+  status: string;
+  created_at: string;
+}

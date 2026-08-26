@@ -69,6 +69,11 @@ def to_dict(policy: RuntimePolicy) -> dict[str, Any]:
             "owner": policy.metadata.owner,
             "created_by": policy.metadata.created_by,
             "tags": list(policy.metadata.tags),
+            "source_type": policy.metadata.source_type,
+            "source_corpus_id": policy.metadata.source_corpus_id,
+            "source_graph_approval_id": policy.metadata.source_graph_approval_id,
+            "source_graph_version": policy.metadata.source_graph_version,
+            "source_candidate_id": policy.metadata.source_candidate_id,
         },
         "audit": (
             {
@@ -127,6 +132,11 @@ def from_dict(data: dict[str, Any]) -> RuntimePolicy:
             owner=metadata_data.get("owner"),
             created_by=metadata_data.get("created_by"),
             tags=tuple(metadata_data.get("tags", [])),
+            source_type=metadata_data.get("source_type"),
+            source_corpus_id=metadata_data.get("source_corpus_id"),
+            source_graph_approval_id=metadata_data.get("source_graph_approval_id"),
+            source_graph_version=metadata_data.get("source_graph_version"),
+            source_candidate_id=metadata_data.get("source_candidate_id"),
         ),
         audit=(
             AuditTrail(
@@ -212,6 +222,11 @@ JSON_SCHEMA: dict[str, Any] = {
                 "owner": {"type": ["string", "null"]},
                 "created_by": {"type": ["string", "null"]},
                 "tags": {"type": "array", "items": {"type": "string"}},
+                "source_type": {"type": ["string", "null"]},
+                "source_corpus_id": {"type": ["string", "null"]},
+                "source_graph_approval_id": {"type": ["string", "null"]},
+                "source_graph_version": {"type": ["integer", "null"]},
+                "source_candidate_id": {"type": ["string", "null"]},
             },
         },
         "audit": {

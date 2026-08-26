@@ -220,6 +220,21 @@ class DecisionHistoryResponse(BaseModel):
     offset: int
 
 
+class PolicyManifestEntrySource(BaseModel):
+    """Authority Graph -> RuntimePolicy Compilation Gate (issue #6):
+    present only for a graph-derived policy -- see
+    domain/compiler_v2/bundle_builder.py's manifest construction. This
+    is what makes the source graph version survive into a historical
+    Decision's bound Policy row and, unchanged, into the Authorization
+    Receipt's `authority.policies` list."""
+
+    type: str
+    corpus_id: str
+    graph_approval_id: str
+    graph_version: int
+    candidate_id: str
+
+
 class PolicyManifestEntry(BaseModel):
     """One RuntimePolicy as it was actually compiled into this bundle,
     read from Policy.bundle_manifest (Historical Policy Binding). `id`
@@ -232,6 +247,7 @@ class PolicyManifestEntry(BaseModel):
     version: int
     effect: str
     scope: dict[str, Any]
+    source: PolicyManifestEntrySource | None = None
 
 
 class DecisionPolicyBindingResponse(BaseModel):

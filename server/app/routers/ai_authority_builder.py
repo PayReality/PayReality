@@ -28,6 +28,7 @@ from app.domain.rbac.permissions import Permission
 from app.schemas.ai_authority_builder import (
     AnswerQuestionRequest,
     ApproveGraphRequest,
+    CompiledPolicySummaryResponse,
     ConflictResponse,
     CorpusResponse,
     CoverageResponse,
@@ -46,6 +47,7 @@ from app.schemas.ai_authority_builder import (
     ResourceResponse,
 )
 from app.services import ai_authority_builder_service as svc
+from app.services import runtime_policy_service
 from app.services.ai_authority_builder_service import (
     AlreadyResolvedError,
     AuthorityPrincipalNotFoundError,
@@ -609,4 +611,33 @@ def list_approvals(
             approval_reason=a.approval_reason, graph_hash=a.graph_hash, approved_at=a.approved_at,
         )
         for a in svc.list_approvals(db, corpus_id)
+    ]
+
+
+@router.get(
+    "/corpora/{corpus_id}/approvals/{approval_id}/policies",
+    response_model=list[CompiledPolicySummaryResponse],
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
+def list_policies_compiled_from_approval(
+    corpus_id: uuid.UUID,
+    approval_id: uuid.UUID,
+    _: AuthorityCorpus = Depends(_authorized_corpus),
+    db: Session = Depends(get_db),
+):
+    """Authority Graph -> RuntimePolicy Compilation Gate (issue #6),
+    reverse traceability: every RuntimePolicy version whose lineage
+    originates at this specific approval. 404s (not an empty list) if
+    the approval doesn't exist or belongs to a different corpus than
+    the one this URL names -- the same "path segments must agree"
+    discipline every other nested read here already applies."""
+    approval = svc.get_approval_by_id(db, approval_id)
+    if approval is None or approval.corpus_id != corpus_id:
+        raise HTTPException(status_code=404, detail="approval_not_found")
+    return [
+        CompiledPolicySummaryResponse(
+            policy_key=str(p.policy_key), version=p.version,
+            name=p.content.get("name", ""), status=p.status, created_at=p.created_at,
+        )
+        for p in runtime_policy_service.list_policies_compiled_from_approval(db, approval_id)
     ]

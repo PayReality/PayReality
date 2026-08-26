@@ -16,6 +16,8 @@ from app.domain.rbac.permissions import Permission
 from app.schemas.ai_policy_builder import (
     CandidateResponse,
     EditCandidateRequest,
+    GraphGateErrorSchema,
+    GraphReadinessSchema,
     ProviderStatusResponse,
     PromoteCandidateResponse,
     UploadResponse,
@@ -27,6 +29,7 @@ from app.services.ai_policy_builder_service import (
     CandidateNotPendingReviewError,
     CandidateValidationError,
     CrossOrganizationPromotionError,
+    GraphNotReadyError,
     UploadNotFoundError,
 )
 
@@ -77,7 +80,8 @@ def _authorized_upload(
     return upload
 
 
-def candidate_to_response(candidate: PolicyExtractionCandidate) -> CandidateResponse:
+def candidate_to_response(candidate: PolicyExtractionCandidate, db: Session) -> CandidateResponse:
+    readiness = svc.compute_graph_readiness_for_candidate(db, candidate)
     return CandidateResponse(
         candidate_id=str(candidate.id),
         upload_id=str(candidate.upload_id) if candidate.upload_id else None,
@@ -90,6 +94,16 @@ def candidate_to_response(candidate: PolicyExtractionCandidate) -> CandidateResp
         status=candidate.status,
         promoted_policy_key=str(candidate.promoted_policy_key) if candidate.promoted_policy_key else None,
         created_at=candidate.created_at,
+        graph_readiness=(
+            GraphReadinessSchema(
+                ready=readiness.ready,
+                errors=[
+                    GraphGateErrorSchema(code=e.code, message=e.message, path=e.path) for e in readiness.errors
+                ],
+            )
+            if readiness is not None
+            else None
+        ),
     )
 
 
@@ -164,7 +178,7 @@ def list_candidates_for_upload(
     upload: PolicyExtractionUpload = Depends(_authorized_upload),
     db: Session = Depends(get_db),
 ):
-    return [candidate_to_response(c) for c in svc.list_candidates(db, upload.organization_id, upload_id=upload_id)]
+    return [candidate_to_response(c, db) for c in svc.list_candidates(db, upload.organization_id, upload_id=upload_id)]
 
 
 @router.get(
@@ -179,7 +193,7 @@ def list_candidates(
     db: Session = Depends(get_db),
 ):
     return [
-        candidate_to_response(c)
+        candidate_to_response(c, db)
         for c in svc.list_candidates(db, organization.id, upload_id=upload_id, corpus_id=corpus_id, status=status)
     ]
 
@@ -197,7 +211,7 @@ def get_candidate(
         row = svc.get_candidate(db, candidate_id, organization.id)
     except CandidateNotFoundError:
         raise HTTPException(status_code=404, detail="candidate_not_found")
-    return candidate_to_response(row)
+    return candidate_to_response(row, db)
 
 
 @router.put(
@@ -217,7 +231,7 @@ def edit_candidate(
         raise HTTPException(status_code=404, detail="candidate_not_found")
     except CandidateNotPendingReviewError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    return candidate_to_response(row)
+    return candidate_to_response(row, db)
 
 
 @router.post(
@@ -236,7 +250,7 @@ def dismiss_candidate(
         raise HTTPException(status_code=404, detail="candidate_not_found")
     except CandidateNotPendingReviewError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    return candidate_to_response(row)
+    return candidate_to_response(row, db)
 
 
 @router.post(
@@ -280,7 +294,21 @@ def promote_candidate(
                 ],
             },
         )
+    except GraphNotReadyError as e:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "graph_not_ready",
+                "errors": [
+                    GraphGateErrorSchema(code=err.code, message=err.message, path=err.path).model_dump()
+                    for err in e.errors
+                ],
+            },
+        )
+    metadata = created.content.get("metadata") or {}
     return PromoteCandidateResponse(
         policy_key=str(created.policy_key), version=created.version, status=created.status,
         authority_id=authority_id,
+        source_graph_approval_id=metadata.get("source_graph_approval_id"),
+        source_graph_version=metadata.get("source_graph_version"),
     )

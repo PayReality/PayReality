@@ -499,7 +499,10 @@ def get_version(
 
 
 def create_policy(
-    db: Session, policy: RuntimePolicy, organization_id: uuid.UUID | None
+    db: Session,
+    policy: RuntimePolicy,
+    organization_id: uuid.UUID | None,
+    source_graph_approval_id: uuid.UUID | None = None,
 ) -> RuntimePolicyRecord:
     """Always version 1, status draft, a fresh policy_key. `policy.id` is
     used as-is for policy_key if it parses as a UUID, otherwise one is
@@ -512,7 +515,17 @@ def create_policy(
     the latest existing row, not from a new caller-supplied value) --
     the organization a policy belongs to is fixed at creation, the same
     immutability discipline this table already holds every other field
-    to across versions."""
+    to across versions.
+
+    Authority Graph -> RuntimePolicy Compilation Gate (issue #6):
+    `source_graph_approval_id` is additive and optional, defaulting to
+    None for every existing caller (Policy Studio's own manual-create
+    endpoint, and ai_policy_builder_service.promote_candidate for a
+    standalone/non-corpus candidate) -- only
+    ai_policy_builder_service.promote_candidate's graph-gated path
+    passes a real value, once, at creation. Never set on a later
+    edit_policy version; provenance describes where a policy_key's
+    lineage *originated*, not its current version."""
     try:
         policy_key = uuid.UUID(policy.id)
     except ValueError:
@@ -525,12 +538,29 @@ def create_policy(
         status="draft",
         content=to_dict(policy),
         organization_id=organization_id,
+        source_graph_approval_id=source_graph_approval_id,
     )
     db.add(row)
     db.commit()
     db.refresh(row)
     record_lifecycle_event(db, row.policy_key, row.version, "created", actor=policy.metadata.created_by)
     return row
+
+
+def list_policies_compiled_from_approval(
+    db: Session, approval_id: uuid.UUID
+) -> list[RuntimePolicyRecord]:
+    """Reverse traceability (issue #6, section 6): every RuntimePolicy
+    version whose lineage originates at this specific AuthorityGraphApproval
+    -- a real, indexed relational query, not a JSONB scan, reusing the
+    same `source_graph_approval_id` column create_policy stamps."""
+    return list(
+        db.scalars(
+            select(RuntimePolicyRecord)
+            .where(RuntimePolicyRecord.source_graph_approval_id == approval_id)
+            .order_by(RuntimePolicyRecord.created_at)
+        )
+    )
 
 
 def edit_policy(

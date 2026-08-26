@@ -835,3 +835,22 @@ def list_approvals(db: Session, corpus_id: uuid.UUID) -> list[AuthorityGraphAppr
             .order_by(AuthorityGraphApproval.version.desc())
         )
     )
+
+
+def get_latest_approval_for_corpus(db: Session, corpus_id: uuid.UUID) -> AuthorityGraphApproval | None:
+    """Authority Graph -> RuntimePolicy Compilation Gate (issue #6): the
+    single-row fetch `list_approvals` never provided (that function
+    always returns the full history). The compilation gate always
+    compiles against the latest approved version for a corpus -- there
+    is no UI or API today to pin promotion to an older, superseded
+    approval, and this milestone does not add one."""
+    return db.scalar(
+        select(AuthorityGraphApproval)
+        .where(AuthorityGraphApproval.corpus_id == corpus_id)
+        .order_by(AuthorityGraphApproval.version.desc())
+        .limit(1)
+    )
+
+
+def get_approval_by_id(db: Session, approval_id: uuid.UUID) -> AuthorityGraphApproval | None:
+    return db.get(AuthorityGraphApproval, approval_id)

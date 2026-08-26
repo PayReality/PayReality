@@ -1,5 +1,6 @@
 import { apiClient } from "../live/apiClient";
 import type {
+  CompiledPolicySummary,
   Conflict,
   Corpus,
   Coverage,
@@ -58,4 +59,9 @@ export const aiAuthorityBuilderApi = {
   approveGraph: (corpusId: string, approvalReason?: string) =>
     apiClient.post<GraphApproval>(`${BASE}/corpora/${corpusId}/approve`, { approval_reason: approvalReason ?? null }),
   getApprovals: (corpusId: string) => apiClient.get<GraphApproval[]>(`${BASE}/corpora/${corpusId}/approvals`),
+  // Authority Graph -> RuntimePolicy Compilation Gate (issue #6),
+  // reverse traceability: every RuntimePolicy compiled from this
+  // specific approved graph version.
+  getPoliciesCompiledFromApproval: (corpusId: string, approvalId: string) =>
+    apiClient.get<CompiledPolicySummary[]>(`${BASE}/corpora/${corpusId}/approvals/${approvalId}/policies`),
 };

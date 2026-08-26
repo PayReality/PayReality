@@ -197,6 +197,18 @@ class GraphApprovalResponse(BaseModel):
     approved_at: datetime
 
 
+class CompiledPolicySummaryResponse(BaseModel):
+    """Authority Graph -> RuntimePolicy Compilation Gate (issue #6),
+    reverse traceability: one RuntimePolicy version whose lineage
+    originates at a specific approved graph version."""
+
+    policy_key: str
+    version: int
+    name: str
+    status: str
+    created_at: datetime
+
+
 class GapResponse(BaseModel):
     id: str
     description: str

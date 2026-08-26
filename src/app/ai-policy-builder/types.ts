@@ -19,9 +19,28 @@ export interface Upload {
   uploaded_at: string;
 }
 
+// Authority Graph -> RuntimePolicy Compilation Gate (issue #6): one
+// structured reason promotion would be (or was) blocked -- mirrors
+// domain/authority_graph/compilation_gate.GraphGateError exactly.
+export interface GraphGateError {
+  code: string;
+  message: string;
+  path: string | null;
+}
+
+// A read-only preview of whether promoting this candidate would
+// succeed against its corpus's latest approved Authority Graph version
+// -- undefined/null for a standalone (non-corpus) candidate, which has
+// no graph to be ready or not ready against.
+export interface GraphReadiness {
+  ready: boolean;
+  errors: GraphGateError[];
+}
+
 export interface Candidate {
   candidate_id: string;
   upload_id: string;
+  corpus_id?: string | null;
   content: RuntimePolicyRequest;
   confidence: number;
   missing_fields: string[];
@@ -30,6 +49,7 @@ export interface Candidate {
   status: CandidateStatus;
   promoted_policy_key: string | null;
   created_at: string;
+  graph_readiness?: GraphReadiness | null;
 }
 
 export interface ValidationErrorItem {
@@ -45,4 +65,9 @@ export interface PromoteResult {
   // Authority-as-a-continuous-object, Stage I.4: non-null only when
   // promotion actually created a real Authority row for this candidate.
   authority_id: string | null;
+  // Authority Graph -> RuntimePolicy Compilation Gate (issue #6):
+  // non-null only when this promotion was gated on, and succeeded
+  // against, a specific approved Authority Graph version.
+  source_graph_approval_id?: string | null;
+  source_graph_version?: number | null;
 }

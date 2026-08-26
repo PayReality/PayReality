@@ -33,6 +33,7 @@ from app.db.models import (
 )
 from app.domain.ai_policy_builder.provider import CandidateRuntimePolicy, RuntimePolicyExtractionProvider
 from app.domain.ai_policy_builder.text_extraction import extract_text
+from app.domain.authority_graph.compilation_gate import GraphProvenance, check_graph_readiness
 from app.domain.runtime_policy.conditions import Condition, ConditionSet, Operator
 from app.domain.runtime_policy.constraints import Constraints, RiskLevel
 from app.domain.runtime_policy.effects import Effect
@@ -58,6 +59,21 @@ class CandidateValidationError(Exception):
     def __init__(self, result: ValidationResult):
         self.result = result
         super().__init__("candidate failed RuntimePolicy validation: " + "; ".join(e.message for e in result.errors))
+
+
+class GraphNotReadyError(Exception):
+    """Authority Graph -> RuntimePolicy Compilation Gate (issue #6):
+    raised instead of promoting when the candidate's corpus has no
+    approved Authority Graph version, or the approved version doesn't
+    resolve/ground this specific candidate's authority. The candidate
+    stays pending_review -- nothing is committed. Carries the exact
+    structured diagnostics (domain/authority_graph/compilation_gate.py)
+    so the router/UI can explain precisely what blocked it, never just
+    'promotion failed.'"""
+
+    def __init__(self, errors):
+        self.errors = errors
+        super().__init__("; ".join(f"{e.code}: {e.message}" for e in errors))
 
 
 class CrossOrganizationPromotionError(Exception):
@@ -265,7 +281,11 @@ def dismiss_candidate(
     return row
 
 
-def build_runtime_policy_from_candidate(content: dict, authority_id: str | None = None) -> RuntimePolicy:
+def build_runtime_policy_from_candidate(
+    content: dict,
+    authority_id: str | None = None,
+    graph_provenance: GraphProvenance | None = None,
+) -> RuntimePolicy:
     """RUNTIME_POLICY_MAPPING.md's "stored candidate content -> RuntimePolicy"
     table. Stamps a fresh AuditTrail(created=now()) up front: the exact
     field whose omission caused a real, since-fixed production bug in
@@ -276,7 +296,13 @@ def build_runtime_policy_from_candidate(content: dict, authority_id: str | None 
     Authority-as-a-continuous-object, Stage G: `authority_id`, when the
     caller (promote_candidate) resolved one, is stamped onto the new
     policy's constraints alongside the existing free-text `delegated_by`
-    -- never instead of it."""
+    -- never instead of it.
+
+    Authority Graph -> RuntimePolicy Compilation Gate (issue #6):
+    `graph_provenance`, when the caller's gate check succeeded, stamps
+    Metadata.source_type="authority_graph" plus the specific corpus/
+    approval/version/candidate ids -- never fabricated, never present
+    for a manually-authored or standalone (non-corpus) candidate."""
     scope_data = content["scope"]
     constraints_data = content.get("constraints") or {}
     metadata_data = content.get("metadata") or {}
@@ -312,9 +338,29 @@ def build_runtime_policy_from_candidate(content: dict, authority_id: str | None 
             owner=metadata_data.get("owner"),
             created_by=metadata_data.get("created_by") or "ai_policy_builder",
             tags=tuple(metadata_data.get("tags", [])),
+            source_type="authority_graph" if graph_provenance is not None else None,
+            source_corpus_id=graph_provenance.corpus_id if graph_provenance is not None else None,
+            source_graph_approval_id=graph_provenance.approval_id if graph_provenance is not None else None,
+            source_graph_version=graph_provenance.graph_version if graph_provenance is not None else None,
+            source_candidate_id=graph_provenance.candidate_id if graph_provenance is not None else None,
         ),
         audit=AuditTrail(created=datetime.now(timezone.utc)),
     )
+
+
+def compute_graph_readiness_for_candidate(db: Session, row: PolicyExtractionCandidate):
+    """Authority Graph -> RuntimePolicy Compilation Gate (issue #6): a
+    read-only preview of what promote_candidate would decide -- reuses
+    the exact same pure check, never a second, drifting copy of the
+    validation logic. None for a standalone (non-corpus) candidate,
+    which has no graph to be ready or not ready against. Local import
+    for the same circular-import reason promote_candidate itself uses."""
+    if row.corpus_id is None:
+        return None
+    from app.services import ai_authority_builder_service
+
+    approval = ai_authority_builder_service.get_latest_approval_for_corpus(db, row.corpus_id)
+    return check_graph_readiness(row.content, approval.evidence_snapshot if approval is not None else None)
 
 
 def _infer_amount_limit(content: dict) -> float | None:
@@ -437,7 +483,20 @@ def promote_candidate(
     already rejects the mismatch first, with the same "cross-
     organization access looks like not-found" 404 every other endpoint
     in this codebase uses); left in place as defense in depth rather
-    than removed, since it costs nothing to keep correct."""
+    than removed, since it costs nothing to keep correct.
+
+    Authority Graph -> RuntimePolicy Compilation Gate (issue #6): a
+    corpus-scoped candidate (row.corpus_id is not None) now additionally
+    requires the corpus to have an approved Authority Graph version
+    whose snapshot resolves and grounds this candidate's authority
+    (domain/authority_graph/compilation_gate.check_graph_readiness) --
+    raises GraphNotReadyError, committing nothing, otherwise. A
+    standalone (non-corpus) AI Policy Builder candidate has no graph to
+    gate against and is completely unaffected, exactly as before. This
+    is a real behavior change for corpus-scoped candidates (previously
+    unguarded), not merely additive -- deliberately, since the entire
+    point of this gate is to close a real bypass, not to add an
+    optional extra check a caller could ignore."""
     row = get_candidate(db, candidate_id, organization_id)
     if row.status != "pending_review":
         raise CandidateNotPendingReviewError(f"cannot promote a candidate in status '{row.status}'")
@@ -453,18 +512,44 @@ def promote_candidate(
                 )
             policy_organization_id = corpus.organization_id
 
+    # Authority Graph -> RuntimePolicy Compilation Gate (issue #6):
+    # local import to avoid a circular import (ai_authority_builder_service
+    # already imports from this module at module load time).
+    from app.services import ai_authority_builder_service
+
+    graph_provenance: GraphProvenance | None = None
+    source_graph_approval_id = None
+    if row.corpus_id is not None:
+        approval = ai_authority_builder_service.get_latest_approval_for_corpus(db, row.corpus_id)
+        readiness = check_graph_readiness(
+            row.content, approval.evidence_snapshot if approval is not None else None
+        )
+        if not readiness.ready:
+            raise GraphNotReadyError(readiness.errors)
+        graph_provenance = GraphProvenance(
+            corpus_id=str(row.corpus_id),
+            approval_id=str(approval.id),
+            graph_version=approval.version,
+            candidate_id=str(candidate_id),
+        )
+        source_graph_approval_id = approval.id
+
     authority_id: str | None = None
     principal = _find_resolved_principal_for_candidate(db, row)
     if principal is not None:
         authority = _create_authority_for_candidate(db, row, principal, reviewer_id=promoted_by)
         authority_id = str(authority.id)
 
-    policy = build_runtime_policy_from_candidate(row.content, authority_id=authority_id)
+    policy = build_runtime_policy_from_candidate(
+        row.content, authority_id=authority_id, graph_provenance=graph_provenance
+    )
     result = validate(policy)
     if not result.ok:
         raise CandidateValidationError(result)
 
-    created = runtime_policy_service.create_policy(db, policy, policy_organization_id)
+    created = runtime_policy_service.create_policy(
+        db, policy, policy_organization_id, source_graph_approval_id=source_graph_approval_id
+    )
 
     row.status = "promoted"
     row.promoted_policy_key = created.policy_key

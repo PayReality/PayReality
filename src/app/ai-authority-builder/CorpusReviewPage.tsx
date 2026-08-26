@@ -159,6 +159,38 @@ function Section({
   );
 }
 
+// Authority Graph -> RuntimePolicy Compilation Gate (issue #6), reverse
+// traceability: a small, self-fetching count -- not a second dashboard,
+// just answering "did anything get compiled from this version" inline
+// in the approval history this page already renders.
+function CompiledPoliciesLink({ corpusId, approvalId }: { corpusId: string; approvalId: string }) {
+  const [policies, setPolicies] = useState<{ policy_key: string; name: string }[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    aiAuthorityBuilderApi
+      .getPoliciesCompiledFromApproval(corpusId, approvalId)
+      .then((result) => { if (!cancelled) setPolicies(result); })
+      .catch(() => { if (!cancelled) setPolicies([]); });
+    return () => {
+      cancelled = true;
+    };
+  }, [corpusId, approvalId]);
+
+  if (!policies || policies.length === 0) return null;
+  return (
+    <p style={{ fontSize: 12, color: "var(--pr-authority-blue)", marginTop: 6 }}>
+      Compiled into {policies.length} RuntimePolic{policies.length === 1 ? "y" : "ies"}:{" "}
+      {policies.map((p, i) => (
+        <span key={p.policy_key}>
+          {i > 0 && ", "}
+          <Link to={`/governance/${p.policy_key}`} style={{ color: "var(--pr-authority-blue)" }}>{p.name}</Link>
+        </span>
+      ))}
+    </p>
+  );
+}
+
 const CONFLICT_TYPE_LABEL: Record<string, string> = {
   authority: "Authority conflict",
   threshold: "Threshold conflict",
@@ -850,6 +882,7 @@ export function AIAuthorityBuilderCorpusReviewPage() {
                 <p style={{ fontSize: 11, color: "var(--pr-text-muted)", marginTop: 4, fontFamily: "monospace" }}>
                   {a.graph_hash}
                 </p>
+                {corpusId && <CompiledPoliciesLink corpusId={corpusId} approvalId={a.id} />}
               </div>
             ))}
           </Section>

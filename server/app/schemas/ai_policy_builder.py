@@ -37,6 +37,24 @@ class UploadResponse(BaseModel):
     uploaded_at: datetime
 
 
+class GraphGateErrorSchema(BaseModel):
+    code: str
+    message: str
+    path: str | None = None
+
+
+class GraphReadinessSchema(BaseModel):
+    """Authority Graph -> RuntimePolicy Compilation Gate (issue #6): a
+    read-only preview of whether promoting this candidate would succeed
+    against its corpus's latest approved Authority Graph version, and
+    exactly why not if it wouldn't -- computed fresh on every request,
+    reusing promote_candidate's own gate check, never a separate
+    approximation of it."""
+
+    ready: bool
+    errors: list[GraphGateErrorSchema] = []
+
+
 class CandidateResponse(BaseModel):
     candidate_id: str
     upload_id: str | None = None
@@ -49,6 +67,9 @@ class CandidateResponse(BaseModel):
     status: str
     promoted_policy_key: str | None
     created_at: datetime
+    # None for a standalone (non-corpus) candidate, which has no
+    # Authority Graph to be ready or not ready against.
+    graph_readiness: GraphReadinessSchema | None = None
 
 
 class EditCandidateRequest(BaseModel):
@@ -66,6 +87,11 @@ class PromoteCandidateResponse(BaseModel):
     # policy was created with only the free-text delegated_by, exactly as
     # it always has been.
     authority_id: str | None = None
+    # Authority Graph -> RuntimePolicy Compilation Gate (issue #6):
+    # additive. Non-null only when this promotion was gated on, and
+    # succeeded against, a specific approved Authority Graph version.
+    source_graph_approval_id: str | None = None
+    source_graph_version: int | None = None
 
 
 class ValidationErrorSchema(BaseModel):
