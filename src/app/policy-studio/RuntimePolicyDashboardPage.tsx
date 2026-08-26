@@ -9,6 +9,7 @@ import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { SkeletonRows } from "../components/ui/skeleton";
+import { HelpIcon } from "../help/HelpIcon";
 import type { LifecycleDashboard, PolicyLifecycleSummary, PolicySearchParams } from "./types";
 
 // Authority Freshness (Milestone 17, Part B): REVIEW DUE and AUTHORITY
@@ -238,8 +239,9 @@ export function RuntimePolicyDashboardPage() {
           </Card>
 
           <Card style={{ marginBottom: 16 }}>
-            <h2 className="text-sm font-medium mb-2" style={{ color: "var(--pr-text-primary)" }}>
+            <h2 className="text-sm font-medium mb-2 flex items-center gap-1.5" style={{ color: "var(--pr-text-primary)" }}>
               Due for re-attestation ({dashboard.due_for_reattestation.length})
+              <HelpIcon articleId="authority_freshness" />
             </h2>
             <p style={{ fontSize: 12, color: "var(--pr-text-disabled)", marginBottom: 8 }}>
               A missed review is a reminder, not a block -- these policies keep enforcing normally.

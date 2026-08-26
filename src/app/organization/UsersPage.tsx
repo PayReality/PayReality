@@ -6,6 +6,7 @@ import { useAuth } from "../auth/AuthContext";
 import { describeApiError } from "../live/format";
 import { ASSIGNABLE_ROLES, ROLE_LABELS } from "../auth/types";
 import { Card } from "../components/ui/card";
+import { HelpIcon } from "../help/HelpIcon";
 import type { Invitation, OrgUser } from "./types";
 
 export function UsersPage() {
@@ -126,10 +127,13 @@ export function UsersPage() {
           <Link to="/organization" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
             ← Organisation Settings
           </Link>
-          <h1 className="mt-2 mb-2" style={{ color: "var(--pr-text-primary)" }}>Users</h1>
+          <h1 className="mt-2 mb-2 flex items-center gap-1.5" style={{ color: "var(--pr-text-primary)" }}>
+            Users
+            <HelpIcon articleId="roles_and_permissions" />
+          </h1>
           <p style={{ color: "var(--pr-text-muted)", fontSize: 13, maxWidth: 640 }}>
-            Who can do what. Every role maps to a fixed set of permissions -- see RBAC.md for the
-            exact matrix.
+            Who can do what. Every role maps to a fixed set of permissions, see "Roles & Permissions"
+            in the Help Center for what each one covers.
           </p>
         </div>
 
