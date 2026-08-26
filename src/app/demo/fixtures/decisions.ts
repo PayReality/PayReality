@@ -32,6 +32,10 @@ interface DemoDecisionSeed {
   enterprise_system_name: string | null;
   status: "PENDING" | "RESOLVED";
   resolution: LiveDecision["resolution"];
+  // Human Review Continuation (issue #10): optional, defaulting to
+  // null below -- most demo decisions were never submitted with one,
+  // matching the real backend's own honesty about absence.
+  correlation_id?: string | null;
 }
 
 // The story's protagonist decision: this exact ID is what the guided
@@ -93,6 +97,7 @@ const seeds: DemoDecisionSeed[] = [
     enterprise_system_name: "SAP S/4HANA",
     status: "RESOLVED",
     resolution: { resolution: "approved", resolved_by: "Priya Chandrasekaran", reason: "Confirmed against the Q3 capital equipment budget.", created_at: agoMs(18 * MINUTE) },
+    correlation_id: "JOB-2026-0483",
   },
   {
     // Domain Generalization Milestone: the platform's non-financial
@@ -235,6 +240,7 @@ export const demoDecisions: LiveDecision[] = allSeeds.map((s) => ({
   policy_bundle_hash: null,
   authority_version: null,
   resolution: s.resolution,
+  correlation_id: s.correlation_id ?? null,
 }));
 
 export const demoDecisionCreatedAt: Record<string, string> = Object.fromEntries(

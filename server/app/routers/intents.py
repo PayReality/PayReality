@@ -133,6 +133,7 @@ def submit_intent(
         ),
         evidence_id=evidence.id,
         status=status,
+        correlation_id=intent.correlation_id,
     )
 
 
@@ -226,6 +227,7 @@ def _build_decision_history_item(db: Session, decision) -> DecisionHistoryItem:
         source=intent.source,
         has_evidence=has_evidence,
         human_review_state=human_review_state,
+        correlation_id=intent.correlation_id,
     )
 
 
@@ -361,6 +363,7 @@ def _build_decision_response(db: Session, decision) -> GetDecisionResponse:
         facts_evaluated=evidence_payload.get("facts_evaluated"),
         matched_policy_freshness=matched_policy_freshness,
         capability=capability,
+        correlation_id=intent.correlation_id,
     )
 
 

@@ -71,18 +71,26 @@ except HumanReviewRequired as e:
 
 ## 4. If it comes back HUMAN_REVIEW
 
-A human resolves it separately (Policy Studio's Review Queue, or the Runtime Decisions page). Poll for the outcome:
+A human resolves it separately (Policy Studio's Review Queue, or the Runtime Decisions page). Use `wait_for_resolution()` to block until they do, with a real ceiling so you're never waiting forever:
 
 ```python
-import time
+from payreality import ResolutionTimeoutError
 
-while True:
-    latest = agent.get_decision(decision.decision_id)
-    if not latest.pending:
-        print(latest.outcome, latest.resolution)
-        break
-    time.sleep(2)
+try:
+    resolved = agent.wait_for_resolution(decision.decision_id, timeout=300.0)
+    if resolved.resolution.resolution == "approved":
+        execute_payment()
+    else:
+        print(f"Denied by {resolved.resolution.resolved_by}: {resolved.resolution.reason}")
+except ResolutionTimeoutError as e:
+    # Still pending after 5 minutes -- e.decision carries the last-known
+    # (still-pending) state. Check back later with the same decision_id;
+    # nothing is lost by not waiting continuously (see SDK_REFERENCE.md's
+    # "Resume after restart").
+    print(f"Still awaiting review: {e.decision.decision_id}")
 ```
+
+`wait_for_resolution()` is the bounded, synchronous version of the manual polling loop this used to require -- a single blocking call, not a background thread or a webhook. It never assumes `"approved"` means the downstream action actually ran; that's still your own call to make. See `SDK_REFERENCE.md`'s "Polling contract" section for the exact response shape if you're implementing your own poller (e.g. from a different language), and its "Design note: webhooks" in `SDK_ARCHITECTURE.md` for why a push-based alternative wasn't built.
 
 ## Configuration
 

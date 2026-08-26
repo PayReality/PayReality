@@ -18,15 +18,16 @@ plumbing this needs lives in the other modules in this package;
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from . import auth, crypto
 from .client import HttpClient
 from .configuration import Configuration, CredentialStore
-from .exceptions import ApiError, ConfigurationError
+from .exceptions import ApiError, ConfigurationError, ResolutionTimeoutError
 from .models import Decision, RegisteredAgent, Resolution
 
-_SDK_VERSION = "0.4.0"  # kept in sync with pyproject.toml / __init__.__version__ by hand;
+_SDK_VERSION = "0.5.0"  # kept in sync with pyproject.toml / __init__.__version__ by hand;
 # not imported from there to avoid a circular import at package init time.
 # Bumped 0.1.0 -> 0.2.0 for organization_id: a real breaking change under
 # semver -- every operator-key call that previously worked now requires
@@ -391,6 +392,7 @@ class Agent:
             explanation=decision.get("reason"),
             status=response["status"],
             evaluated_mandates=tuple(decision.get("evaluated_mandates", [])),
+            correlation_id=response.get("correlation_id"),
         )
 
     def get_decision(self, decision_id: str) -> Decision:
@@ -414,6 +416,7 @@ class Agent:
                 resolution=response["resolution"]["resolution"],
                 resolved_by=response["resolution"]["resolved_by"],
                 reason=response["resolution"].get("reason"),
+                resolved_at=response["resolution"].get("created_at"),
             )
         return Decision(
             outcome=response["outcome"],
@@ -424,7 +427,64 @@ class Agent:
             status=response["status"],
             evaluated_mandates=tuple(response.get("evaluated_mandates", [])),
             resolution=resolution,
+            correlation_id=response.get("correlation_id"),
+            created_at=response.get("created_at"),
         )
+
+    def wait_for_resolution(
+        self,
+        decision_id: str,
+        timeout: float = 300.0,
+        poll_interval: float = 2.0,
+        max_poll_interval: float = 30.0,
+    ) -> Decision:
+        """Polls `get_decision()` until a HUMAN_REVIEW decision is
+        resolved, or `timeout` seconds elapse -- the bounded, synchronous
+        version of the manual `while True: ... time.sleep(2)` loop
+        documented in SDK_QUICKSTART.md. Returns the resolved `Decision`
+        (check `.resolution.resolution` for "approved"/"denied").
+
+        Deliberately narrow: a single blocking call with a real ceiling,
+        not a background thread, not a webhook listener, not infinite
+        retry. `timeout` bounds total wall-clock time, not iteration
+        count, so it's correct regardless of how the interval grows.
+        Polling starts at `poll_interval` seconds and backs off by 1.5x
+        each attempt, capped at `max_poll_interval`, so a long wait
+        doesn't hammer the API every 2 seconds indefinitely.
+
+        Raises `ResolutionTimeoutError` (carrying the last-known,
+        still-pending `Decision`) if `timeout` elapses first -- never
+        loops forever. If the decision is already final on this very
+        first check -- already resolved, or was never HUMAN_REVIEW at
+        all (an immediate ALLOW/DENY) -- it returns that `Decision`
+        right away without entering the polling loop or sleeping: this
+        call is safe to make defensively on any decision_id, not just
+        ones you know are still pending.
+
+        This method only ever reads decision state. It never executes,
+        confirms, or implies that the downstream business action ran --
+        that remains entirely the caller's own responsibility, exactly
+        as it is for `authorize()`'s ALLOW outcome."""
+        if timeout <= 0:
+            raise ConfigurationError("timeout must be greater than 0.")
+        if poll_interval <= 0:
+            raise ConfigurationError("poll_interval must be greater than 0.")
+
+        decision = self.get_decision(decision_id)
+        if not decision.pending:
+            return decision
+
+        deadline = time.monotonic() + timeout
+        interval = poll_interval
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ResolutionTimeoutError(decision, timeout)
+            time.sleep(min(interval, remaining))
+            decision = self.get_decision(decision_id)
+            if not decision.pending:
+                return decision
+            interval = min(interval * 1.5, max_poll_interval)
 
     # -- diagnostics ------------------------------------------------------
 

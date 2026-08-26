@@ -17,7 +17,7 @@ from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB, UUID as PG_UUID
 from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
-from app.db.models import Agent, Base, Intent, Organization, Principal, RuntimePolicyRecord
+from app.db.models import Agent, Base, Decision, Intent, Organization, Principal, RuntimePolicyRecord
 from app.domain.decision import engine as decision_engine
 from app.domain.decision.source import SOURCE_MANUAL_TEST, SOURCE_RUNTIME, normalize_source
 from app.domain.evidence.signing import public_key_b64_from_signing_key_b64, sign_payload
@@ -27,7 +27,7 @@ from app.domain.runtime_policy.effects import Effect
 from app.domain.runtime_policy.metadata import AuditTrail
 from app.domain.runtime_policy.runtime_policy import PolicyStatus, RuntimePolicy, Scope
 from app.routers.intents import _build_decision_response
-from app.services import capability_service, fact_service, intent_service, runtime_policy_service as svc, signing_key_service
+from app.services import capability_service, fact_service, intent_service, resolution_service, runtime_policy_service as svc, signing_key_service
 
 settings.evidence_signing_key_b64 = "1xq9xsxyr3A1bfh7IJGO3Rd32FvkAhr5AnlnjWZlbuI="
 decision_engine.evaluate.__defaults__ = (5000,)
@@ -297,3 +297,174 @@ def test_decision_detail_capability_reflects_issuance_and_consumption(db, opa_ur
     # Capability consumption is never treated as proof the downstream
     # business action completed -- this contract has no such field.
     assert not hasattr(response_after.capability, "execution_completed")
+
+
+# -- Human Review Continuation (issue #10) --------------------------------
+#
+# correlation_id is trace/correlation metadata only -- these tests prove
+# it round-trips honestly (present when supplied, None when it wasn't)
+# and never participates in the decision itself. The status/resolution
+# tests prove the machine-continuation contract this milestone is
+# actually about: Decision.outcome is never rewritten after a human
+# resolves a HUMAN_REVIEW decision -- the resolution is a separate,
+# derived fact a caller reads alongside the untouched original outcome.
+
+
+def _submit_human_review(db, agent, correlation_id=None):
+    return intent_service.submit_intent(
+        db, agent=agent, action="disable_user", amount=None, currency=None, counterparty=None,
+        context={}, requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex,
+        correlation_id=correlation_id, resource="account:USR-829",
+    )
+
+
+def test_decision_detail_echoes_the_correlation_id_the_intent_was_submitted_with(db, opa_url):
+    org, principal = _org_and_principal(db)
+    agent = _agent_for(db, principal)
+    _deploy_policy(db, org.id, opa_url, scope=Scope(principal="alice", action="disable_user", resource="account:USR-829"))
+    _, decision, _ = intent_service.submit_intent(
+        db, agent=agent, action="disable_user", amount=None, currency=None, counterparty=None,
+        context={}, requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex,
+        correlation_id="JOB-983421", resource="account:USR-829",
+    )
+    response = _build_decision_response(db, decision)
+    assert response.correlation_id == "JOB-983421"
+
+
+def test_decision_detail_correlation_id_is_honestly_none_when_never_supplied(db, opa_url):
+    org, principal = _org_and_principal(db)
+    agent = _agent_for(db, principal)
+    _deploy_policy(db, org.id, opa_url, scope=Scope(principal="alice", action="disable_user", resource="account:USR-829"))
+    _, decision, _ = _submit(db, agent)
+    response = _build_decision_response(db, decision)
+    assert response.correlation_id is None
+
+
+def test_decision_outcome_is_never_rewritten_after_human_resolution(db, opa_url):
+    """The core lifecycle guarantee this milestone must not violate:
+    Decision.outcome stays HUMAN_REVIEW forever, even after a human
+    approves it -- resolution is recorded as a separate fact, never a
+    mutation of the original automated outcome."""
+    org, principal = _org_and_principal(db)
+    agent = _agent_for(db, principal)
+    _deploy_policy(
+        db, org.id, opa_url,
+        scope=Scope(principal="alice", action="disable_user", resource="account:USR-829"),
+        effect=Effect.REQUIRE_HUMAN_REVIEW,
+    )
+    _, decision, _ = _submit_human_review(db, agent)
+    assert decision.outcome == "HUMAN_REVIEW"
+
+    resolution_service.resolve_decision(
+        db, decision_id=decision.id, organization_id=org.id,
+        resolution="approved", resolved_by="Jane Smith",
+    )
+
+    db.expire_all()
+    reloaded = db.get(Decision, decision.id)
+    assert reloaded.outcome == "HUMAN_REVIEW"
+
+
+def test_decision_detail_status_and_resolution_reflect_human_review_lifecycle(db, opa_url):
+    org, principal = _org_and_principal(db)
+    agent = _agent_for(db, principal)
+    _deploy_policy(
+        db, org.id, opa_url,
+        scope=Scope(principal="alice", action="disable_user", resource="account:USR-829"),
+        effect=Effect.REQUIRE_HUMAN_REVIEW,
+    )
+    _, decision, _ = _submit_human_review(db, agent, correlation_id="JOB-983421")
+
+    pending_response = _build_decision_response(db, decision)
+    assert pending_response.status == "PENDING"
+    assert pending_response.resolution is None
+    assert pending_response.correlation_id == "JOB-983421"
+
+    resolution_service.resolve_decision(
+        db, decision_id=decision.id, organization_id=org.id,
+        resolution="approved", resolved_by="Jane Smith", reason="looked fine",
+    )
+
+    resolved_response = _build_decision_response(db, decision)
+    assert resolved_response.status == "RESOLVED"
+    assert resolved_response.resolution is not None
+    assert resolved_response.resolution.resolution == "approved"
+    assert resolved_response.resolution.resolved_by == "Jane Smith"
+    assert resolved_response.resolution.reason == "looked fine"
+    assert resolved_response.resolution.created_at is not None
+    # Untouched by the resolution -- the automated outcome and its
+    # correlation metadata still read exactly as they did while pending.
+    assert resolved_response.correlation_id == "JOB-983421"
+
+
+def test_resolve_decision_rejects_a_duplicate_resolution(db, opa_url):
+    org, principal = _org_and_principal(db)
+    agent = _agent_for(db, principal)
+    _deploy_policy(
+        db, org.id, opa_url,
+        scope=Scope(principal="alice", action="disable_user", resource="account:USR-829"),
+        effect=Effect.REQUIRE_HUMAN_REVIEW,
+    )
+    _, decision, _ = _submit_human_review(db, agent)
+    resolution_service.resolve_decision(
+        db, decision_id=decision.id, organization_id=org.id,
+        resolution="approved", resolved_by="Jane Smith",
+    )
+
+    with pytest.raises(resolution_service.DecisionAlreadyResolvedError):
+        resolution_service.resolve_decision(
+            db, decision_id=decision.id, organization_id=org.id,
+            resolution="denied", resolved_by="A Second Reviewer",
+        )
+
+
+def test_resolve_decision_translates_a_racing_integrity_error_into_the_same_already_resolved_error(db, opa_url, monkeypatch):
+    """The `decision_resolutions.decision_id` UNIQUE constraint, not the
+    ORM-level pre-check, is what actually stops two humans from both
+    resolving the same decision -- the pre-check has a SELECT-then-
+    commit race window. This forces that race deterministically (by
+    making the pre-check blind to a resolution that already committed)
+    and proves the resulting IntegrityError is translated into the same
+    DecisionAlreadyResolvedError (-> HTTP 409) a non-racing duplicate
+    already gets, not an unhandled 500."""
+    org, principal = _org_and_principal(db)
+    agent = _agent_for(db, principal)
+    _deploy_policy(
+        db, org.id, opa_url,
+        scope=Scope(principal="alice", action="disable_user", resource="account:USR-829"),
+        effect=Effect.REQUIRE_HUMAN_REVIEW,
+    )
+    _, decision, _ = _submit_human_review(db, agent)
+
+    from app.db.models import DecisionResolution
+
+    resolution_service.resolve_decision(
+        db, decision_id=decision.id, organization_id=org.id,
+        resolution="approved", resolved_by="Jane Smith",
+    )
+
+    original_query = db.query
+
+    def _blind_to_the_winning_resolution(model, *a, **kw):
+        if model is DecisionResolution:
+            class _NoneResult:
+                def filter_by(self, **kw):
+                    return self
+
+                def one_or_none(self):
+                    return None
+            return _NoneResult()
+        return original_query(model, *a, **kw)
+
+    monkeypatch.setattr(db, "query", _blind_to_the_winning_resolution)
+
+    with pytest.raises(resolution_service.DecisionAlreadyResolvedError):
+        resolution_service.resolve_decision(
+            db, decision_id=decision.id, organization_id=org.id,
+            resolution="denied", resolved_by="A Second Reviewer",
+        )
+
+    monkeypatch.setattr(db, "query", original_query)
+    rows = db.query(DecisionResolution).filter_by(decision_id=decision.id).all()
+    assert len(rows) == 1
+    assert rows[0].resolution == "approved"

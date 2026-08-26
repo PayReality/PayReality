@@ -106,6 +106,11 @@ export function AuthorizationReceiptPage() {
           {receipt.actor.principal_name ? <>, acting for <strong>{receipt.actor.principal_name}</strong></> : null}
           {receipt.request.amount !== null ? <> ({receipt.request.amount.toLocaleString()} {receipt.request.currency ?? ""})</> : null}.
         </p>
+        {receipt.request.correlation_id && (
+          <p className="text-xs mt-1" style={{ color: "var(--pr-text-disabled)" }}>
+            Correlation ID: <span style={{ fontFamily: "monospace" }}>{receipt.request.correlation_id}</span>
+          </p>
+        )}
 
         <div
           className="flex items-center gap-2 mt-4 pt-4"

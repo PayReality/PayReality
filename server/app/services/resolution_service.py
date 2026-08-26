@@ -1,5 +1,6 @@
 import uuid
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import Decision, DecisionResolution, Intent
@@ -82,6 +83,16 @@ def resolve_decision(
     if existing is not None:
         raise DecisionAlreadyResolvedError(str(decision_id))
 
+    # Two humans opening the same HUMAN_REVIEW decision and resolving it
+    # within the same instant both pass the `existing is None` check
+    # above before either commits. The `decision_resolutions.decision_id`
+    # UNIQUE constraint is the actual, DB-level source of truth that
+    # prevents two contradictory resolutions from ever both persisting --
+    # this only translates the loser's IntegrityError into the same
+    # DecisionAlreadyResolvedError (-> HTTP 409) the non-racing
+    # already-resolved path above already returns, instead of letting it
+    # escape as an unhandled 500.
+
     evidence = append_evidence(
         db,
         decision.id,
@@ -119,6 +130,10 @@ def resolve_decision(
         resolved_by_user_id=resolved_by_user_id,
     )
     db.add(resolution_row)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise DecisionAlreadyResolvedError(str(decision_id))
     db.refresh(resolution_row)
     return resolution_row

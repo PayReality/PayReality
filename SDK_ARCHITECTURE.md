@@ -10,7 +10,7 @@ This is the first official PayReality SDK: a Python package (`sdk-python/payreal
 sdk-python/
   payreality/
     __init__.py       public exports: Agent, Decision, RegisteredAgent, exceptions
-    agent.py           Agent: register(), authorize(), get_decision(), health(), version()
+    agent.py           Agent: register(), authorize(), get_decision(), wait_for_resolution(), health(), version()
     auth.py            nonce/timestamp generation, header assembly
     client.py           the one place that makes an HTTP request; owns retries and exception mapping
     crypto.py           ED25519 keygen and signing (PyNaCl)
@@ -57,3 +57,13 @@ The 56-test suite in `sdk-python/tests/` runs against mocked HTTP (`unittest.moc
 ## Retry and error mapping, one sentence each
 
 Retried: connection failures, timeouts, and 5xx responses, with capped exponential backoff (`retry.py`). Never retried: 401, 403, and any other 4xx (`422` validation failures included), since none of these can succeed by trying again unmodified. Every failure path, network or HTTP, is mapped onto one of the exceptions in `exceptions.py` before it reaches calling code (`client.py::_raise_for_response`); a developer using this SDK never sees a raw `requests` exception or a bare status code.
+
+Note this is a different layer from `wait_for_resolution()`'s own polling loop (Human Review Continuation milestone, issue #10): `retry.py`'s retries happen *inside* a single `get_decision()` call, for a transient failure of that one HTTP request; `wait_for_resolution()`'s loop happens *around* repeated, successful `get_decision()` calls, waiting for the decision itself to change state. The two don't duplicate each other -- a single poll inside `wait_for_resolution()` still gets `retry.py`'s normal transient-failure handling for free.
+
+## Design note: webhooks (NOT BUILT / NOT PART OF CURRENT RUNTIME CONTRACT)
+
+Human Review Continuation (issue #10) considered, and deliberately did not build, a push mechanism (webhook or callback) for decision resolution. This section exists so the option is written down, not forgotten -- it describes a shape a future milestone *could* take, not something this SDK, the server, or any shipped contract currently does. Nothing below is implemented; no endpoint, no config field, no delivery code exists anywhere in this repository.
+
+**Why polling was chosen instead, for now:** the machine-continuation contract this milestone had to ship is narrow -- an AI asks for authorization, gets `HUMAN_REVIEW`, and later needs to reliably learn the final resolution. Bounded polling (`wait_for_resolution()`) satisfies that completely, with a synchronous, single-call surface and no new server-side infrastructure (no delivery queue, no retry-on-failed-delivery logic, no signature scheme for inbound webhook payloads, no endpoint-registration UI). A webhook is a strictly larger commitment: it turns PayReality from "a service you call and poll" into "a service that calls you back reliably," which drags in exactly the orchestration-platform concerns (delivery guarantees, ordering, replay protection, dead-lettering, per-organization endpoint management) this milestone was explicitly told to stay away from.
+
+**What a future design would need to answer, if ever pursued:** how a callback URL gets registered per-organization or per-agent; what payload shape and signing scheme it would use (likely reusing the existing Ed25519 Evidence-signing key, not a new secret); at-least-once vs. exactly-once delivery semantics and how a caller would deduplicate; retry/backoff for a caller's endpoint being briefly unreachable; and whether it would replace polling or simply supplement it (bounded polling remains useful as a fallback even if a webhook exists, since a caller's endpoint can always be down when the resolution actually happens). None of these questions are answered here on purpose -- answering them prematurely, without a real caller who needs push delivery, is exactly the scope creep this note exists to head off.

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "payreality"
-version = "0.4.0"
+version = "0.5.0"
 description = "Official Python SDK for PayReality: authorize an AI agent's action in one call, no manual signing."
 readme = "README.md"
 requires-python = ">=3.9"

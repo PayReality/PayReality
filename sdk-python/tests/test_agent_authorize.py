@@ -175,7 +175,12 @@ def test_get_decision_maps_resolution_when_present(credentials_path, fake_http_c
             "outcome": "HUMAN_REVIEW",
             "reason": "escalated",
             "evaluated_mandates": [],
-            "resolution": {"resolution": "approved", "resolved_by": "Jane", "reason": "looked fine"},
+            "resolution": {
+                "resolution": "approved", "resolved_by": "Jane", "reason": "looked fine",
+                "created_at": "2026-08-27T14:42:00+00:00",
+            },
+            "correlation_id": "JOB-983421",
+            "created_at": "2026-08-27T14:00:00+00:00",
         }
     )
 
@@ -183,3 +188,134 @@ def test_get_decision_maps_resolution_when_present(credentials_path, fake_http_c
 
     assert decision.resolution.resolution == "approved"
     assert decision.resolution.resolved_by == "Jane"
+    assert decision.resolution.resolved_at == "2026-08-27T14:42:00+00:00"
+    assert decision.correlation_id == "JOB-983421"
+    assert decision.created_at == "2026-08-27T14:00:00+00:00"
+
+
+# --- Human Review Continuation (issue #10) ----------------------------------
+
+
+def test_authorize_correlation_id_round_trips(credentials_path, fake_http_client):
+    agent = _registered_agent(credentials_path, fake_http_client)
+    fake_http_client.queue_response(
+        {
+            "decision": {"outcome": "HUMAN_REVIEW", "decision_id": "d-1", "reason": None, "evaluated_mandates": []},
+            "evidence_id": "e-1",
+            "status": "PENDING",
+            "correlation_id": "JOB-983421",
+        }
+    )
+
+    decision = agent.authorize(
+        principal="Finance Manager", operation="vendor_payment", resource="invoice:INV-1",
+        resource_data={"amount": 100}, correlation_id="JOB-983421",
+    )
+
+    assert decision.correlation_id == "JOB-983421"
+
+
+def test_authorize_correlation_id_absent_is_honest_none(credentials_path, fake_http_client):
+    agent = _registered_agent(credentials_path, fake_http_client)
+    fake_http_client.queue_response(
+        {
+            "decision": {"outcome": "ALLOW", "decision_id": "d-1", "reason": None, "evaluated_mandates": []},
+            "evidence_id": "e-1",
+            "status": "RESOLVED",
+        }
+    )
+
+    decision = agent.authorize(
+        principal="Finance Manager", operation="vendor_payment", resource="invoice:INV-1",
+        resource_data={"amount": 100},
+    )
+
+    assert decision.correlation_id is None
+
+
+def _pending_response(decision_id="d-1"):
+    return {
+        "id": decision_id, "status": "PENDING", "outcome": "HUMAN_REVIEW",
+        "reason": "escalated", "evaluated_mandates": [], "resolution": None,
+    }
+
+
+def _resolved_response(resolution: str, decision_id="d-1"):
+    return {
+        "id": decision_id, "status": "RESOLVED", "outcome": "HUMAN_REVIEW",
+        "reason": "escalated", "evaluated_mandates": [],
+        "resolution": {"resolution": resolution, "resolved_by": "Jane", "reason": None, "created_at": "2026-08-27T14:42:00+00:00"},
+    }
+
+
+def test_wait_for_resolution_returns_once_approved(credentials_path, fake_http_client):
+    agent = _registered_agent(credentials_path, fake_http_client)
+    fake_http_client.queue_response(_pending_response())  # initial pending check
+    fake_http_client.queue_response(_pending_response())  # first poll: still pending
+    fake_http_client.queue_response(_resolved_response("approved"))  # second poll: resolved
+
+    decision = agent.wait_for_resolution("d-1", timeout=5.0, poll_interval=0.01)
+
+    assert decision.resolution.resolution == "approved"
+    assert not decision.pending
+
+
+def test_wait_for_resolution_returns_once_denied(credentials_path, fake_http_client):
+    agent = _registered_agent(credentials_path, fake_http_client)
+    fake_http_client.queue_response(_pending_response())
+    fake_http_client.queue_response(_resolved_response("denied"))
+
+    decision = agent.wait_for_resolution("d-1", timeout=5.0, poll_interval=0.01)
+
+    assert decision.resolution.resolution == "denied"
+
+
+def test_wait_for_resolution_already_resolved_returns_immediately(credentials_path, fake_http_client):
+    """If the decision is already resolved by the very first (pre-loop)
+    check, wait_for_resolution never enters the polling loop at all --
+    exactly one HTTP call, not a spurious extra poll."""
+    agent = _registered_agent(credentials_path, fake_http_client)
+    fake_http_client.queue_response(_resolved_response("approved"))
+
+    decision = agent.wait_for_resolution("d-1", timeout=5.0, poll_interval=0.01)
+
+    assert decision.resolution.resolution == "approved"
+    # register() queued 3 responses; exactly one more was consumed here.
+    assert len(fake_http_client.calls) == 4
+
+
+def test_wait_for_resolution_times_out_without_looping_forever(credentials_path, fake_http_client):
+    agent = _registered_agent(credentials_path, fake_http_client)
+    for _ in range(10):  # far more than a 0.05s timeout at a 0.01s interval could ever consume
+        fake_http_client.queue_response(_pending_response())
+
+    from payreality.exceptions import ResolutionTimeoutError
+
+    with pytest.raises(ResolutionTimeoutError) as exc_info:
+        agent.wait_for_resolution("d-1", timeout=0.05, poll_interval=0.01)
+
+    assert exc_info.value.decision.pending
+    assert exc_info.value.timeout == 0.05
+
+
+def test_wait_for_resolution_on_a_decision_that_was_never_human_review_returns_immediately(credentials_path, fake_http_client):
+    """Defensive-call guarantee: calling wait_for_resolution on a
+    decision that was ALLOW/DENY outright (never HUMAN_REVIEW) is not an
+    error -- it's just already final, so it returns immediately with no
+    polling and no exception, exactly like the already-resolved case."""
+    agent = _registered_agent(credentials_path, fake_http_client)
+    fake_http_client.queue_response({
+        "id": "d-1", "status": "RESOLVED", "outcome": "ALLOW",
+        "reason": None, "evaluated_mandates": [], "resolution": None,
+    })
+
+    decision = agent.wait_for_resolution("d-1", timeout=5.0)
+
+    assert decision.outcome == "ALLOW"
+    assert not decision.pending
+
+
+def test_wait_for_resolution_rejects_non_positive_timeout(credentials_path, fake_http_client):
+    agent = _registered_agent(credentials_path, fake_http_client)
+    with pytest.raises(ConfigurationError):
+        agent.wait_for_resolution("d-1", timeout=0)

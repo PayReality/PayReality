@@ -92,3 +92,20 @@ class HumanReviewRequired(PayRealityError):
     def __init__(self, decision):
         self.decision = decision
         super().__init__(decision.reason or "This action requires human review.")
+
+
+class ResolutionTimeoutError(PayRealityError):
+    """Raised only by `agent.wait_for_resolution()`: the bounded polling
+    window elapsed with the decision still `HUMAN_REVIEW`/pending. Not
+    raised by `authorize()` or `get_decision()`, and never means the
+    decision failed -- it may still resolve later; `.decision` carries
+    the last-known state (still pending) so the caller can decide
+    whether to keep waiting, poll manually, or give up."""
+
+    def __init__(self, decision, timeout: float):
+        self.decision = decision
+        self.timeout = timeout
+        super().__init__(
+            f"Decision {decision.decision_id} was still pending after {timeout:.0f}s. "
+            "It may still resolve later -- this is not a failure of the decision itself."
+        )

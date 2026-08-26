@@ -185,6 +185,11 @@ export interface LiveDecision {
   facts_evaluated: Record<string, unknown>[] | null;
   matched_policy_freshness: PolicyFreshnessSummary | null;
   capability: CapabilitySummary | null;
+  // Human Review Continuation (issue #10): trace/correlation metadata
+  // only, echoed back exactly as the caller submitted it on the
+  // originating Intent (or null if none was supplied) -- never an
+  // authority signal, never used to select a policy.
+  correlation_id: string | null;
 }
 
 // Issue #4 (Authorization Receipts), GET /v1/decisions/{id}/receipt: a
@@ -213,6 +218,11 @@ export interface ReceiptRequestSummary {
   amount: number | null;
   currency: string | null;
   context: Record<string, unknown>;
+  // Human Review Continuation (issue #10): the caller's own trace id,
+  // kept on the receipt purely as historical metadata for an auditor to
+  // cross-reference against their own system's logs -- not part of the
+  // authorization decision itself.
+  correlation_id: string | null;
 }
 
 export interface ReceiptPolicyManifestEntry {
@@ -475,6 +485,7 @@ export interface DecisionHistoryItem {
   source: string | null;
   has_evidence: boolean;
   human_review_state: "pending" | "resolved" | null;
+  correlation_id: string | null;
 }
 
 export interface DecisionHistoryResponse {

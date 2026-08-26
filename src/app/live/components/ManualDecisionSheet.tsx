@@ -525,6 +525,12 @@ export function ManualDecisionSheet({ open, onOpenChange, onSettled, triggerRef 
                 </div>
               )}
 
+              {decision.resolution && (
+                <p className="text-xs mt-4 pt-4" style={{ color: "var(--pr-text-primary)", borderTop: "1px solid var(--pr-overlay-05)" }}>
+                  Human resolution: <strong>{decision.resolution.resolution === "approved" ? "Approved" : "Denied"}</strong> by {decision.resolution.resolved_by}
+                </p>
+              )}
+
               <div className="flex gap-2 mt-5">
                 <Button
                   variant="primary"

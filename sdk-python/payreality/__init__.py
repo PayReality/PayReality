@@ -29,10 +29,11 @@ from .exceptions import (
     InvalidSignature,
     NetworkError,
     PayRealityError,
+    ResolutionTimeoutError,
 )
 from .models import Decision, RegisteredAgent, Resolution
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "Agent",
@@ -47,5 +48,6 @@ __all__ = [
     "ApiError",
     "AuthorizationDenied",
     "HumanReviewRequired",
+    "ResolutionTimeoutError",
     "__version__",
 ]

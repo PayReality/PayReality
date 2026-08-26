@@ -217,6 +217,9 @@ export function DecisionDetailPage() {
             <style.icon className="w-5 h-5" style={{ color: style.fg }} />
           </div>
           <div>
+            {decision.outcome === "HUMAN_REVIEW" && (
+              <p className="text-xs font-medium uppercase tracking-wide" style={{ color: "var(--pr-text-disabled)" }}>Runtime Authority</p>
+            )}
             <p className="font-semibold text-lg" style={{ color: style.fg }}>{formatStatus(decision.outcome)}</p>
             <p className="text-sm" style={{ color: "var(--pr-text-muted)" }}>{describeReason(decision.reason)}</p>
           </div>
@@ -228,6 +231,7 @@ export function DecisionDetailPage() {
         </p>
         <p className="text-xs mt-1" style={{ color: "var(--pr-text-disabled)" }}>
           {new Date(decision.created_at).toLocaleString()} &middot; Source: {describeSource(decision.source)}
+          {decision.correlation_id ? <> &middot; Correlation ID: <span style={{ fontFamily: "monospace" }}>{decision.correlation_id}</span></> : null}
         </p>
 
         {decision.outcome === "HUMAN_REVIEW" && decision.status === "PENDING" && (
@@ -278,7 +282,7 @@ export function DecisionDetailPage() {
 
         {decision.resolution && (
           <p className="text-sm mt-3 pt-3" style={{ color: "var(--pr-text-primary)", borderTop: "1px solid var(--pr-overlay-05)" }}>
-            Resolved <strong>{decision.resolution.resolution}</strong> by {decision.resolution.resolved_by}
+            Human resolution: <strong>{decision.resolution.resolution === "approved" ? "Approved" : "Denied"}</strong> by {decision.resolution.resolved_by} at {new Date(decision.resolution.created_at).toLocaleString()}
             {decision.resolution.reason ? ` -- ${decision.resolution.reason}` : ""}
           </p>
         )}

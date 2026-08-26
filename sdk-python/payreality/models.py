@@ -30,6 +30,17 @@ class Decision:
     status: str  # "RESOLVED" | "PENDING"
     evaluated_mandates: tuple[str, ...] = field(default_factory=tuple)
     resolution: "Resolution | None" = None
+    # Human Review Continuation (issue #10): the caller's own external
+    # workflow/job/request id, echoed back exactly as submitted on
+    # authorize() -- lets a caller that resumes polling in a fresh
+    # process (no local memory of which correlation_id it used) confirm
+    # it has the right decision. Trace metadata only; never consulted by
+    # this SDK for anything.
+    correlation_id: str | None = None
+    # Set from get_decision() (the server's GetDecisionResponse always
+    # carries it); None from authorize()'s own response shape, which
+    # doesn't include it today.
+    created_at: str | None = None
 
     @property
     def allowed(self) -> bool:
@@ -65,6 +76,11 @@ class Resolution:
     resolution: str  # "approved" | "denied"
     resolved_by: str
     reason: str | None
+    # Human Review Continuation (issue #10): when the resolution was
+    # recorded (GetDecisionResponse.resolution.created_at) -- an ISO
+    # 8601 string, matching how every other timestamp already crosses
+    # the wire in this SDK (see Decision.created_at above).
+    resolved_at: str | None = None
 
 
 @dataclass(frozen=True)

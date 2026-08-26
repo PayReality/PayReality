@@ -36,7 +36,22 @@ Returns a `Decision`. Never raises for `ALLOW`/`DENY`/`HUMAN_REVIEW`; those are 
 
 ### `agent.get_decision(decision_id) -> Decision`
 
-Fetches the current state of a decision (`GET /v1/decisions/{id}`), including its `resolution` if a `HUMAN_REVIEW` decision has since been resolved. Useful for polling.
+Fetches the current state of a decision (`GET /v1/decisions/{id}`), including its `resolution` if a `HUMAN_REVIEW` decision has since been resolved. A single, one-shot fetch -- see "Polling contract" below for the exact response shape, and `wait_for_resolution()` below for a bounded helper that calls this repeatedly for you.
+
+### `agent.wait_for_resolution(decision_id, timeout=300.0, poll_interval=2.0, max_poll_interval=30.0) -> Decision`
+
+Blocks, calling `get_decision()` repeatedly, until a `HUMAN_REVIEW` decision is resolved or `timeout` seconds elapse. The bounded, synchronous version of the manual `while True: ... time.sleep(2)` loop shown in `SDK_QUICKSTART.md`.
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `decision_id` | `str` | Yes | The decision to wait on -- typically `decision.decision_id` from an `authorize()` call that returned `HUMAN_REVIEW`. |
+| `timeout` | `float` | No | Total wall-clock seconds to wait, not an iteration count -- correct regardless of how the poll interval grows. Raises `ConfigurationError` if `<= 0`. |
+| `poll_interval` | `float` | No | Seconds between the first two polls. Raises `ConfigurationError` if `<= 0`. |
+| `max_poll_interval` | `float` | No | Ceiling the interval backs off to. Each poll multiplies the interval by 1.5x, capped here, so a long wait doesn't hammer the API every 2 seconds indefinitely. |
+
+If the decision is already final on the very first check -- already resolved, or was never `HUMAN_REVIEW` at all (an immediate `ALLOW`/`DENY`) -- it returns that `Decision` immediately, with no sleep and no polling loop: this call is safe to make defensively on any `decision_id`, not just ones you know are still pending. Otherwise it polls until the decision resolves, or raises `ResolutionTimeoutError` (carrying the last-known, still-pending `Decision`) once `timeout` elapses -- it never loops forever, never spawns a background thread, and never retries beyond the given timeout.
+
+This method only ever reads decision state. It never executes, confirms, or implies that the downstream business action ran -- that remains entirely the caller's own responsibility, exactly as it is for `authorize()`'s `ALLOW` outcome. It also never touches webhooks or any push mechanism -- see "Design note: webhooks" in `SDK_ARCHITECTURE.md` for why that's deliberately not built.
 
 ### `agent.health() -> dict`
 
@@ -62,6 +77,8 @@ Thin wrapper over `GET /version`. Returns the raw response body (`{"version": ..
 | `status` | `str` | `"RESOLVED"` or `"PENDING"` |
 | `evaluated_mandates` | `tuple[str, ...]` | Despite the name, holds matched RuntimePolicy policy_key strings, not real Mandate ids -- kept for backward compatibility. `evaluated_mandate_ids` (server-side `Decision`/`GetDecisionResponse`, not yet in this SDK's `Decision` model) is the correctly-named field holding real `mandates.id` values, additive alongside this one. |
 | `resolution` | `Resolution \| None` | Set only once a `HUMAN_REVIEW` decision has been resolved and re-fetched via `get_decision()`. |
+| `correlation_id` | `str \| None` | Echoed back exactly as you passed it to `authorize()`, or `None` if you didn't pass one. Trace/correlation metadata only -- see "correlation_id: what it is, and what it deliberately isn't" below. |
+| `created_at` | `str \| None` | ISO-8601 timestamp the underlying Intent was submitted at. `None` only if the server response omitted it (should not happen in practice). |
 
 Properties: `.allowed`, `.denied`, `.requires_human_review` (all `bool`), `.pending` (`bool`, `status == "PENDING"`).
 
@@ -73,7 +90,9 @@ Method: `.raise_for_outcome()`: raises `AuthorizationDenied` on `DENY`, `HumanRe
 
 ## `payreality.Resolution`
 
-`resolution` (`"approved"` or `"denied"`), `resolved_by` (`str`), `reason` (`str | None`).
+`resolution` (`"approved"` or `"denied"`), `resolved_by` (`str`), `reason` (`str | None`), `resolved_at` (`str | None`, ISO-8601 timestamp of when the human resolved it).
+
+Note what's deliberately absent: there is no field claiming the downstream business action executed. `resolution == "approved"` means a human approved the *request* PayReality evaluated -- it says nothing about whether your code went on to actually perform the payment, the account change, or whatever the request represented. That remains entirely your own responsibility to track, exactly as it already is for an outright `ALLOW`.
 
 ## Exceptions
 
@@ -88,7 +107,34 @@ All inherit from `payreality.PayRealityError`.
 | `ApiError` | Any other non-2xx response, including validation failures (422) and policy-adjacent 4xx/5xx not otherwise mapped. Has `.status_code` and `.body`. |
 | `AuthorizationDenied` | Only from `Decision.raise_for_outcome()` on a `DENY`. Has `.decision`. |
 | `HumanReviewRequired` | Only from `Decision.raise_for_outcome()` on a `HUMAN_REVIEW`. Has `.decision`. |
+| `ResolutionTimeoutError` | Only from `wait_for_resolution()`, when `timeout` elapses with the decision still pending. Has `.decision` (the last-known, still-pending `Decision`) and `.timeout` (`float`). Not a failure of the decision itself -- it may still resolve later; poll again or call `wait_for_resolution()` again to keep waiting. |
+
+## Polling contract: `GET /v1/decisions/{id}`
+
+The exact contract `get_decision()` and `wait_for_resolution()` are built on, spelled out precisely enough to implement your own poller in another language if you need to.
+
+**Endpoint:** `GET /v1/decisions/{decision_id}`, authenticated the same way as every other administrative call (`api_key` + `organization_id`, or `bearer_token`).
+
+**Response states**, distinguished by the `status` field:
+
+1. **`status: "PENDING"`** -- the decision is `HUMAN_REVIEW` and still unresolved. `resolution` is `null`.
+2. **`status: "RESOLVED"`, `resolution` present** -- a `HUMAN_REVIEW` decision that a human has since approved or denied. `resolution.resolution` is `"approved"` or `"denied"`; `resolution.resolved_by`, `.reason`, and `.created_at` (the resolution timestamp) are also present. **`outcome` itself is still, and will always be, `"HUMAN_REVIEW"`** -- resolving a decision never rewrites its original outcome; the resolution is a separate, permanent record layered on top. Never write code that expects `outcome` to become `"ALLOW"`/`"DENY"` after a resolution -- check `resolution.resolution` instead.
+3. **`status: "RESOLVED"`, `resolution` absent (`null`)** -- the decision was `ALLOW` or `DENY` outright; there was never a human review step to resolve.
+
+**Error responses:** `401` (no/invalid credentials), `403` (credentials valid but for a different organization than the decision belongs to -- deliberately indistinguishable from `404` for a genuinely nonexistent decision, so a cross-organization caller learns nothing about a decision's existence), `404` (no such decision, or it belongs to a different organization). The SDK raises `AuthenticationError` for `401`/`403` and `ApiError` for `404` from a raw `get_decision()` call.
+
+**Interval, backoff, and max-wait guidance:** `wait_for_resolution()`'s defaults (start at 2s, back off 1.5x per attempt, cap at 30s, total timeout 300s) are reasonable defaults for a human-review turnaround measured in minutes, not seconds -- don't poll faster than every 1-2 seconds in your own implementation; the resolution isn't going to arrive faster than a human can click a button.
+
+**Idempotency:** `GET /v1/decisions/{id}` is a pure read -- calling it any number of times, from any number of processes, is always safe and has no side effects. There is no "consume" semantic; the same resolved decision returns the same resolution forever.
+
+**Resume after restart:** because polling is just a read, there's no session or subscription to reconnect -- if your process crashes and restarts, call `get_decision(decision_id)` (or `wait_for_resolution(decision_id)`) again with the same `decision_id` you already had, and you'll get the current state immediately, including a resolution that happened while your process was down. You don't need to have been "listening" for the resolution to happen; nothing is lost by not polling continuously.
+
+## `correlation_id`: what it is, and what it deliberately isn't
+
+`correlation_id` is trace/correlation metadata only -- an id you supply so you can match a PayReality decision back to your own system's own record of the same job (a queue message id, a workflow run id, whatever your system already uses). PayReality stores it, echoes it back on `authorize()`, `get_decision()`, and the Authorization Receipt, and does nothing else with it.
+
+Specifically, it is **not**: an authority signal (it never influences whether a request is `ALLOW`/`DENY`/`HUMAN_REVIEW`), a security credential (it's never checked against anything, never used for access control), or a policy selector (no policy can match on it, and none should be written to try). Treat it exactly like a request id in a logging system -- useful for you to grep by later, invisible to the decision itself.
 
 ## Testing note
 
-The SDK's own test suite (`sdk-python/tests/`, 72 tests) mocks every HTTP call; none of it makes a real network request. "100% passing" describes every test in that suite passing, not 100% line coverage of the package, a distinction worth being precise about rather than implying a stronger guarantee than what was actually measured.
+The SDK's own test suite (`sdk-python/tests/`, 80 tests) mocks every HTTP call; none of it makes a real network request. "100% passing" describes every test in that suite passing, not 100% line coverage of the package, a distinction worth being precise about rather than implying a stronger guarantee than what was actually measured.

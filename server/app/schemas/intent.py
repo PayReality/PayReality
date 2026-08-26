@@ -58,6 +58,13 @@ class SubmitIntentResponse(BaseModel):
     decision: DecisionSummary
     evidence_id: UUID
     status: str  # "PENDING" | "RESOLVED"
+    # Human Review Continuation (issue #10): the caller's own external
+    # workflow/job/request identifier, echoed back exactly as submitted
+    # (Intent.correlation_id) so a caller can map their own id to this
+    # decision_id without having to keep a side-table. Trace/correlation
+    # metadata only -- never consulted by policy matching or any
+    # authorization decision.
+    correlation_id: str | None = None
 
 
 class ResolutionSummary(BaseModel):
@@ -165,6 +172,12 @@ class GetDecisionResponse(BaseModel):
     source: str | None = None
     principal_name: str | None = None
     evidence_id: UUID | None = None
+    # Human Review Continuation (issue #10): the same external
+    # correlation id the caller submitted on the original Intent --
+    # read directly off that Intent row, not recomputed. None for any
+    # historical decision predating this field, an honest null, never
+    # backfilled.
+    correlation_id: str | None = None
     # Trusted Enterprise Facts actually evaluated for this decision --
     # the exact list Evidence's own payload already carries
     # (key/value/subject/source_id/observed_at/expires_at), never
@@ -211,6 +224,10 @@ class DecisionHistoryItem(BaseModel):
     # "resolved" otherwise -- the same distinction the Pending Review
     # queue already makes, just carried onto every row here too.
     human_review_state: str | None = None
+    # Human Review Continuation (issue #10): cheap enough to include in
+    # a list row (it's already on the joined Intent), and exactly what a
+    # caller scanning their own history to find "my decision" needs.
+    correlation_id: str | None = None
 
 
 class DecisionHistoryResponse(BaseModel):

@@ -589,6 +589,7 @@ on("GET", "/v1/decisions/history", ({ query }) => {
       source: (d as { source?: string }).source ?? null,
       has_evidence: hasEvidence,
       human_review_state: humanReviewState,
+      correlation_id: d.correlation_id,
     };
   });
 
@@ -729,6 +730,7 @@ on("GET", "/v1/decisions/:id/receipt", ({ params }) => {
       amount: decision.amount,
       currency: decision.currency,
       context: {},
+      correlation_id: decision.correlation_id,
     },
     authority: {
       policy_id: causalPolicy?.policy_key ?? null,

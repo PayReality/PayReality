@@ -139,6 +139,7 @@ def get_authorization_receipt(
             amount=float(intent.amount) if intent.amount is not None else None,
             currency=intent.currency,
             context=intent.context or {},
+            correlation_id=intent.correlation_id,
         ),
         authority=authority,
         facts=[ReceiptFactEntry(**f) for f in (payload.get("facts_evaluated") or [])],

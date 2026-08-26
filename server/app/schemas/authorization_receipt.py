@@ -61,6 +61,11 @@ class ReceiptRequestSummary(BaseModel):
     # Intent rows are never mutated after creation, so this is a safe,
     # genuinely historical read -- not a live projection.
     context: dict[str, Any] = {}
+    # Human Review Continuation (issue #10): genuinely useful historical
+    # trace metadata -- lets an auditor cross-reference this receipt
+    # against the caller's own external workflow/job id. Trace metadata
+    # only; carries no cryptographic or authorization weight of its own.
+    correlation_id: str | None = None
 
 
 class ReceiptAuthoritySummary(BaseModel):
