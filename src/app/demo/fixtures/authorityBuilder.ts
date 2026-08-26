@@ -25,10 +25,10 @@ export const demoGraphSummary: GraphSummary = {
 };
 
 export const demoAuthorityPrincipals: Principal[] = [
-  { id: "authprin-cfo", name: "Priya Chandrasekaran", role: "Chief Financial Officer", reports_to: null, confidence: 0.97, source_excerpt: "The Chief Financial Officer holds ultimate delegated authority over all Treasury and Accounts Payable disbursements.", source_location: "Delegation of Authority Policy, p. 2", resolved_principal_id: PRINCIPAL_CHANDRASEKARAN },
-  { id: "authprin-treasury", name: "David Okonkwo", role: "Head of Treasury", reports_to: "Priya Chandrasekaran", confidence: 0.95, source_excerpt: "The Head of Treasury may approve supplier payments up to $50,000 without further sign-off.", source_location: "Delegation of Authority Policy, p. 3", resolved_principal_id: PRINCIPAL_OKONKWO },
-  { id: "authprin-procurement", name: "Elena Ruiz", role: "VP, Procurement", reports_to: null, confidence: 0.93, source_excerpt: "The VP of Procurement is authorized to approve purchase orders up to $250,000.", source_location: "Delegation of Authority Policy, p. 4", resolved_principal_id: PRINCIPAL_RUIZ },
-  { id: "authprin-ciso", name: "Marcus Webb", role: "Chief Information Security Officer", reports_to: null, confidence: 0.91, source_excerpt: "The CISO governs all system access provisioning outside of administrative escalation.", source_location: "Delegation of Authority Policy, p. 6", resolved_principal_id: PRINCIPAL_WEBB },
+  { id: "authprin-cfo", name: "Priya Chandrasekaran", role: "Chief Financial Officer", reports_to: null, confidence: 0.97, source_excerpt: "The Chief Financial Officer holds ultimate delegated authority over all Treasury and Accounts Payable disbursements.", source_location: "Delegation of Authority Policy, p. 2", resolved_principal_id: PRINCIPAL_CHANDRASEKARAN, clause_reference: "Delegation of Authority Policy, Sec. 2.1", extraction_reasoning: "Explicit title-to-authority statement naming the CFO directly.", detected_assumptions: [], ambiguity_flags: [] },
+  { id: "authprin-treasury", name: "David Okonkwo", role: "Head of Treasury", reports_to: "Priya Chandrasekaran", confidence: 0.95, source_excerpt: "The Head of Treasury may approve supplier payments up to $50,000 without further sign-off.", source_location: "Delegation of Authority Policy, p. 3", resolved_principal_id: PRINCIPAL_OKONKWO, clause_reference: "Delegation of Authority Policy, Sec. 3.2", extraction_reasoning: "Explicit dollar threshold tied to the role title.", detected_assumptions: ["Assumes \"Head of Treasury\" reports to the CFO; reporting line inferred from org chart, not stated in this clause."], ambiguity_flags: [] },
+  { id: "authprin-procurement", name: "Elena Ruiz", role: "VP, Procurement", reports_to: null, confidence: 0.93, source_excerpt: "The VP of Procurement is authorized to approve purchase orders up to $250,000.", source_location: "Delegation of Authority Policy, p. 4", resolved_principal_id: PRINCIPAL_RUIZ, clause_reference: "Delegation of Authority Policy, Sec. 4.1", extraction_reasoning: "Explicit dollar threshold tied to the role title.", detected_assumptions: [], ambiguity_flags: ["This clause's $250,000 ceiling conflicts with the Procurement charter's $200,000 ceiling; see the flagged conflict below."] },
+  { id: "authprin-ciso", name: "Marcus Webb", role: "Chief Information Security Officer", reports_to: null, confidence: 0.91, source_excerpt: "The CISO governs all system access provisioning outside of administrative escalation.", source_location: "Delegation of Authority Policy, p. 6", resolved_principal_id: PRINCIPAL_WEBB, clause_reference: "Delegation of Authority Policy, Sec. 6.1", extraction_reasoning: "Explicit scope statement naming the CISO directly.", detected_assumptions: [], ambiguity_flags: ["\"Outside of administrative escalation\" is not defined elsewhere in the document; see the related gap below."] },
 ];
 
 export const demoPrincipalCandidates: PrincipalCandidate[] = [
@@ -37,16 +37,16 @@ export const demoPrincipalCandidates: PrincipalCandidate[] = [
 ];
 
 export const demoResources: Resource[] = [
-  { id: "authres-ap-ledger", name: "Accounts Payable Ledger", description: "The SAP S/4HANA ledger recording all supplier invoice payments.", confidence: 0.9, source_excerpt: "All disbursements are recorded in the Accounts Payable Ledger within SAP S/4HANA.", source_location: "Delegation of Authority Policy, p. 3" },
-  { id: "authres-procurement-system", name: "Procurement System", description: "Coupa, the system of record for purchase orders.", confidence: 0.88, source_excerpt: "Purchase orders are issued and tracked in the Procurement System.", source_location: "Delegation of Authority Policy, p. 4" },
-  { id: "authres-iam", name: "Identity & Access Management", description: "ServiceNow-backed access provisioning.", confidence: 0.85, source_excerpt: "System access requests are provisioned through Identity & Access Management.", source_location: "Delegation of Authority Policy, p. 6" },
+  { id: "authres-ap-ledger", name: "Accounts Payable Ledger", description: "The SAP S/4HANA ledger recording all supplier invoice payments.", confidence: 0.9, source_excerpt: "All disbursements are recorded in the Accounts Payable Ledger within SAP S/4HANA.", source_location: "Delegation of Authority Policy, p. 3", clause_reference: "Delegation of Authority Policy, Sec. 3.1", extraction_reasoning: "Named system of record for disbursements.", detected_assumptions: [], ambiguity_flags: [] },
+  { id: "authres-procurement-system", name: "Procurement System", description: "Coupa, the system of record for purchase orders.", confidence: 0.88, source_excerpt: "Purchase orders are issued and tracked in the Procurement System.", source_location: "Delegation of Authority Policy, p. 4", clause_reference: "Delegation of Authority Policy, Sec. 4.1", extraction_reasoning: "Named system of record for purchase orders; vendor name (Coupa) inferred from context, not stated in this clause.", detected_assumptions: ["Assumes \"Procurement System\" refers to Coupa; the clause names the system by function, not by vendor."], ambiguity_flags: [] },
+  { id: "authres-iam", name: "Identity & Access Management", description: "ServiceNow-backed access provisioning.", confidence: 0.85, source_excerpt: "System access requests are provisioned through Identity & Access Management.", source_location: "Delegation of Authority Policy, p. 6", clause_reference: "Delegation of Authority Policy, Sec. 6.1", extraction_reasoning: "Named system of record for access provisioning; vendor (ServiceNow) inferred from context, not stated in this clause.", detected_assumptions: ["Assumes the IAM system is ServiceNow-backed; the clause does not name a vendor."], ambiguity_flags: [] },
 ];
 
 export const demoOperations: Operation[] = [
-  { id: "authop-pay-invoice", name: "vendor_payment", description: "Disburse funds against a supplier invoice.", confidence: 0.94, source_excerpt: "Paying a supplier invoice requires delegated Treasury authority.", source_location: "Delegation of Authority Policy, p. 3" },
-  { id: "authop-approve-po", name: "approve_purchase_order", description: "Approve a purchase order against budget.", confidence: 0.9, source_excerpt: "Purchase order approval sits with Procurement leadership.", source_location: "Delegation of Authority Policy, p. 4" },
-  { id: "authop-onboard-vendor", name: "onboard_vendor", description: "Admit a new supplier after due diligence.", confidence: 0.87, source_excerpt: "New suppliers require a passed sanctions and risk screening before onboarding.", source_location: "Delegation of Authority Policy, p. 5" },
-  { id: "authop-grant-access", name: "grant_system_access", description: "Provision a system access request.", confidence: 0.86, source_excerpt: "Access grants below administrative level may be automated.", source_location: "Delegation of Authority Policy, p. 6" },
+  { id: "authop-pay-invoice", name: "vendor_payment", description: "Disburse funds against a supplier invoice.", confidence: 0.94, source_excerpt: "Paying a supplier invoice requires delegated Treasury authority.", source_location: "Delegation of Authority Policy, p. 3", clause_reference: "Delegation of Authority Policy, Sec. 3.2", extraction_reasoning: "Explicit action tied to the Treasury delegation clause.", detected_assumptions: [], ambiguity_flags: [] },
+  { id: "authop-approve-po", name: "approve_purchase_order", description: "Approve a purchase order against budget.", confidence: 0.9, source_excerpt: "Purchase order approval sits with Procurement leadership.", source_location: "Delegation of Authority Policy, p. 4", clause_reference: "Delegation of Authority Policy, Sec. 4.1", extraction_reasoning: "Explicit action tied to the Procurement delegation clause.", detected_assumptions: [], ambiguity_flags: [] },
+  { id: "authop-onboard-vendor", name: "onboard_vendor", description: "Admit a new supplier after due diligence.", confidence: 0.87, source_excerpt: "New suppliers require a passed sanctions and risk screening before onboarding.", source_location: "Delegation of Authority Policy, p. 5", clause_reference: "Delegation of Authority Policy, Sec. 5.1", extraction_reasoning: "Explicit precondition (screening) tied to the onboarding action, but no named approving role.", detected_assumptions: [], ambiguity_flags: ["No principal is named as the approver of this action in the source document."] },
+  { id: "authop-grant-access", name: "grant_system_access", description: "Provision a system access request.", confidence: 0.86, source_excerpt: "Access grants below administrative level may be automated.", source_location: "Delegation of Authority Policy, p. 6", clause_reference: "Delegation of Authority Policy, Sec. 6.2", extraction_reasoning: "Explicit action tied to the CISO's IAM oversight clause.", detected_assumptions: ["Assumes \"automated\" grants still require CISO-delegated authority rather than none at all."], ambiguity_flags: [] },
 ];
 
 export const demoRelationships: Relationship[] = [
@@ -62,6 +62,10 @@ export const demoRelationships: Relationship[] = [
     from_principal_id: PRINCIPAL_CHANDRASEKARAN,
     to_principal_id: PRINCIPAL_OKONKWO,
     status: "active",
+    clause_reference: "Delegation of Authority Policy, Sec. 3.2",
+    extraction_reasoning: "Explicit delegation statement naming both principals and a dollar ceiling.",
+    detected_assumptions: [],
+    ambiguity_flags: [],
   },
   {
     id: "authrel-treasury-escalation",
@@ -75,6 +79,10 @@ export const demoRelationships: Relationship[] = [
     from_principal_id: PRINCIPAL_OKONKWO,
     to_principal_id: PRINCIPAL_CHANDRASEKARAN,
     status: "active",
+    clause_reference: "Delegation of Authority Policy, Sec. 3.2",
+    extraction_reasoning: "Explicit escalation statement tied to the same delegation clause's ceiling.",
+    detected_assumptions: [],
+    ambiguity_flags: [],
   },
 ];
 
