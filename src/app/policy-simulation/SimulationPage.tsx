@@ -57,13 +57,18 @@ export function PolicySimulationPage() {
   const { policyKey } = useParams();
   const [policy, setPolicy] = useState<RuntimePolicy | null>(null);
 
-  const [principal, setPrincipal] = useState("Procurement Manager");
-  const [actingAsAgent, setActingAsAgent] = useState("Procurement AI Agent");
+  // Domain Generalization Milestone: resource/amount/currency were
+  // already properly optional in buildInput() below -- only the
+  // pre-filled defaults implied every simulation is financial. Emptied
+  // so a security or HR policy isn't previewed against a fabricated
+  // procurement scenario by default.
+  const [principal, setPrincipal] = useState("");
+  const [actingAsAgent, setActingAsAgent] = useState("");
   const [action, setAction] = useState("");
   const [resource, setResource] = useState("");
-  const [amount, setAmount] = useState("850000");
-  const [currency, setCurrency] = useState("ZAR");
-  const [contextText, setContextText] = useState('{\n  "authority": {\n    "department": "Finance",\n    "region": "South Africa"\n  }\n}');
+  const [amount, setAmount] = useState("");
+  const [currency, setCurrency] = useState("");
+  const [contextText, setContextText] = useState("{}");
 
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [running, setRunning] = useState(false);
@@ -190,16 +195,16 @@ export function PolicySimulationPage() {
             <Input value={actingAsAgent} onChange={(e) => setActingAsAgent(e.target.value)} style={{ marginBottom: 12, width: "100%" }} />
             <FieldLabel>Action</FieldLabel>
             <Input value={action} onChange={(e) => setAction(e.target.value)} style={{ marginBottom: 12, width: "100%" }} />
-            <FieldLabel>Resource</FieldLabel>
-            <Input value={resource} onChange={(e) => setResource(e.target.value)} placeholder="e.g. Supplier ABC" style={{ marginBottom: 12, width: "100%" }} />
+            <FieldLabel>Resource (optional)</FieldLabel>
+            <Input value={resource} onChange={(e) => setResource(e.target.value)} placeholder="e.g. invoice:INV-4821 or account:USR-829" style={{ marginBottom: 12, width: "100%" }} />
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <FieldLabel>Amount</FieldLabel>
-                <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} style={{ width: "100%" }} />
+                <FieldLabel>Amount (optional)</FieldLabel>
+                <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Only for a financial policy" style={{ width: "100%" }} />
               </div>
               <div>
-                <FieldLabel>Currency</FieldLabel>
-                <Input value={currency} onChange={(e) => setCurrency(e.target.value)} style={{ width: "100%" }} />
+                <FieldLabel>Currency (optional)</FieldLabel>
+                <Input value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="e.g. USD" style={{ width: "100%" }} />
               </div>
             </div>
             <div style={{ marginTop: 12 }}>

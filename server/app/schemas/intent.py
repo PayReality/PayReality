@@ -14,13 +14,26 @@ class SubmitIntentRequest(BaseModel):
 
     agent_id: UUID
     action: str
-    amount: float
-    currency: str
+    # Domain Generalization Milestone: universal fields are agent_id,
+    # action, resource, and context. amount/currency are optional,
+    # domain-specific attributes -- required only for actions that
+    # actually have a monetary dimension (spec 19.5's original
+    # payments-only shape required both; a non-financial action like
+    # `disable_user` supplies neither).
+    resource: str | None = None
+    amount: float | None = None
+    currency: str | None = None
     counterparty: str | None = None
     context: dict[str, Any] = Field(default_factory=dict)
     requested_at: datetime
     nonce: str
     correlation_id: str | None = None
+    # Product Experience Remediation Milestone 1 (Decision Provenance):
+    # self-declared, see domain/decision/source.py's own docstring for
+    # the honest limits of that. Omit entirely for a real integration;
+    # the manual Test Decision UI is the one caller that sends
+    # "manual_test" explicitly.
+    source: str | None = None
 
 
 class DecisionSummary(BaseModel):
@@ -69,6 +82,39 @@ class ResolveDecisionResponse(BaseModel):
     evidence_id: UUID
 
 
+class PolicyFreshnessSummary(BaseModel):
+    """The GOVERNING policy's freshness state as of now, read live off
+    RuntimePolicyRecord -- not a historical reconstruction of what it
+    was at decision time (Historical Policy Binding already exists as
+    a separate, distinct concern for that). `status` is exactly the
+    same current/review_due/expired vocabulary Governance and Assurance
+    use elsewhere, computed the same way, so it reads consistently
+    wherever it appears."""
+
+    policy_key: str
+    last_attested_at: datetime | None
+    next_review_at: datetime | None
+    authority_expires_at: datetime | None
+    status: str  # "current" | "review_due" | "expired" | "unknown"
+
+
+class CapabilitySummary(BaseModel):
+    """Whether a Capability Authorization was ever issued for this
+    decision, and its real state -- issuance and consumption are two
+    separate, independently-true facts, neither of which is proof the
+    downstream business action actually completed (domain/capability/
+    token.py's own module docstring states this explicitly; this
+    schema only ever reports what's actually recorded, never implies
+    more)."""
+
+    issued: bool
+    audience: str | None = None
+    resource: str | None = None
+    action: str | None = None
+    expires_at: datetime | None = None
+    consumed_at: datetime | None = None
+
+
 class GetDecisionResponse(BaseModel):
     """New (not in spec 19's literal API): the polling endpoint the
     HUMAN_REVIEW-resolution addition needs (see plan).
@@ -92,8 +138,12 @@ class GetDecisionResponse(BaseModel):
     reason: str | None
     agent_id: UUID
     action: str
-    amount: float
-    currency: str
+    # Domain Generalization Milestone: optional, matching
+    # SubmitIntentRequest -- a non-financial decision (e.g.
+    # `disable_user`) genuinely has neither.
+    resource: str | None = None
+    amount: float | None = None
+    currency: str | None = None
     created_at: datetime
     evaluated_mandates: list[str]
     evaluated_mandate_ids: list[str] = []
@@ -103,6 +153,26 @@ class GetDecisionResponse(BaseModel):
     policy_bundle_hash: str | None = None
     authority_version: str | None = None
     resolution: ResolutionSummary | None = None
+    # Product Experience Remediation Milestone 1 (Decision Detail
+    # contract): all additive, all read off the same earliest-Evidence-
+    # record lookup this response already performs for policy_version/
+    # policy_bundle_hash/authority_version above -- no new query shape,
+    # only wider projection of data already fetched. Every field is
+    # None exactly when that Evidence lookup itself finds nothing (a
+    # suspended/retired agent, an unrecognized action) -- the same
+    # optionality those three fields already have, not a new failure
+    # mode.
+    source: str | None = None
+    principal_name: str | None = None
+    evidence_id: UUID | None = None
+    # Trusted Enterprise Facts actually evaluated for this decision --
+    # the exact list Evidence's own payload already carries
+    # (key/value/subject/source_id/observed_at/expires_at), never
+    # recomputed. None (not an empty list) when no fact was evaluated,
+    # matching Evidence's own convention for this field.
+    facts_evaluated: list[dict] | None = None
+    matched_policy_freshness: PolicyFreshnessSummary | None = None
+    capability: CapabilitySummary | None = None
 
 
 class DecisionListResponse(BaseModel):
@@ -111,6 +181,40 @@ class DecisionListResponse(BaseModel):
     (schemas/agent.py) rather than inventing a new one."""
 
     decisions: list[GetDecisionResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class DecisionHistoryItem(BaseModel):
+    """Product Experience Remediation Milestone 1 (Phase 3): the
+    lightweight, list-row shape for GET /v1/decisions/history --
+    deliberately narrower than GetDecisionResponse (no policy version/
+    bundle hash/facts/capability/freshness detail; a caller wanting that
+    already has GET /v1/decisions/{id}). No amount/currency: those are
+    contextual, not universal, and have no place in a summary row every
+    action type shares."""
+
+    id: UUID
+    created_at: datetime
+    agent_id: UUID
+    agent_name: str | None = None
+    principal_name: str | None = None
+    action: str
+    resource: str | None = None
+    outcome: str
+    reason: str | None = None
+    matched_policy_name: str | None = None
+    source: str | None = None
+    has_evidence: bool
+    # None when the outcome was never HUMAN_REVIEW at all; "pending" or
+    # "resolved" otherwise -- the same distinction the Pending Review
+    # queue already makes, just carried onto every row here too.
+    human_review_state: str | None = None
+
+
+class DecisionHistoryResponse(BaseModel):
+    decisions: list[DecisionHistoryItem]
     total: int
     limit: int
     offset: int

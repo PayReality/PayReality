@@ -1,4 +1,5 @@
 import { formatStatus } from "../../live/format";
+import { StatusBadge } from "../../components/ui/status-badge";
 import type { AgentStatus } from "../types";
 
 // Same left-border-plus-text convention as PolicyStatusBadge, so an
@@ -12,17 +13,5 @@ const STATUS_COLOR: Record<AgentStatus, string> = {
 };
 
 export function AgentStatusBadge({ status }: { status: AgentStatus }) {
-  return (
-    <span
-      style={{
-        borderLeft: `2px solid ${STATUS_COLOR[status]}`,
-        paddingLeft: 8,
-        color: "var(--pr-text-primary)",
-        fontSize: 13,
-        fontFamily: "monospace",
-      }}
-    >
-      {formatStatus(status)}
-    </span>
-  );
+  return <StatusBadge color={STATUS_COLOR[status]} label={formatStatus(status)} />;
 }

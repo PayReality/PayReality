@@ -87,7 +87,11 @@ def resolve_decision(
         decision.id,
         intent.agent_id,
         intent.action,
-        float(intent.amount),
+        # Domain Generalization Milestone: intent.amount is genuinely
+        # nullable (a non-financial decision has none) -- the previously
+        # unconditional float() here raised TypeError the moment a
+        # HUMAN_REVIEW decision with no amount was resolved.
+        float(intent.amount) if intent.amount is not None else None,
         decision.evaluated_mandates or [],
         outcome=decision.outcome,
         approval_outcome=resolution.upper(),
@@ -95,6 +99,8 @@ def resolve_decision(
         reviewer=resolved_by,
         review_outcome=resolution.upper(),
         status="VERIFIED" if resolution == "approved" else "REJECTED",
+        resource=intent.resource,
+        currency=intent.currency,
         # Authority-as-a-continuous-object, Stage H: reuses the real
         # Mandate ids already resolved and persisted on the original
         # Decision row at submit_intent time -- nothing recomputed here.

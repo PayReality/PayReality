@@ -329,3 +329,76 @@ def test_nested_path_on_a_known_top_level_field_is_still_valid():
         now=FIXED_NOW,
     )
     assert result.ok
+
+
+# -- Domain Generalization Milestone --------------------------------------
+
+
+def test_default_vocabulary_is_generic_not_financial():
+    """The default every real call site silently inherits is
+    GENERIC_VOCABULARY, not FINANCIAL_VOCABULARY -- a bounded,
+    explicitly-authored enumeration that includes a proven non-
+    financial action, not an unbounded accept-anything vocabulary."""
+    from app.domain.compiler_v2.compiler_v2 import GENERIC_VOCABULARY
+
+    import inspect
+
+    default_vocabulary = inspect.signature(compile_bundle).parameters["vocabulary"].default
+    assert default_vocabulary is GENERIC_VOCABULARY
+
+
+def test_disable_user_compiles_under_the_default_vocabulary():
+    """The concrete, explicitly-authored non-financial action this
+    milestone proves the platform supports -- and it compiles under
+    whatever vocabulary a real call site actually gets today (the
+    default), not just under an explicit custom Vocabulary."""
+    result = compile_bundle(
+        [_policy(scope=Scope(principal="prin_1", action="disable_user"))],
+        "bundle-1",
+        1,
+        now=FIXED_NOW,
+    )
+    assert result.ok, f"disable_user should compile under the default vocabulary: {result.diagnostics}"
+
+
+def test_a_genuinely_unauthored_action_is_still_rejected_under_the_generic_default():
+    """GENERIC_VOCABULARY is a bounded enumeration, not "any string" --
+    confirms the new default doesn't quietly relax the original
+    typo-protection test_unrecognized_action_is_rejected already
+    covers for the old default."""
+    result = compile_bundle(
+        [_policy(scope=Scope(principal="prin_1", action="do_something_unknown"))],
+        "bundle-1",
+        1,
+        now=FIXED_NOW,
+    )
+    assert not result.ok
+    assert any(e.code == INVALID_ACTION for e in result.diagnostics.errors)
+
+
+def test_resource_is_a_recognized_intent_field_under_the_default_vocabulary():
+    """Domain Generalization Milestone: `resource` joins action/amount/
+    currency as a universal, always-valid top-level condition field --
+    previously only the financial three were recognized."""
+    result = compile_bundle(
+        [_policy(conditions=ConditionSet(all=(Condition(field="resource", operator=Operator.EQ, value="x"),)))],
+        "bundle-1",
+        1,
+        now=FIXED_NOW,
+    )
+    assert result.ok
+
+
+def test_resource_scoped_disable_user_policy_compiles_and_generates_resource_matching_rego():
+    """End-to-end compile-level proof (OPA-level matching behavior is
+    covered by tests/integration/test_domain_generalization.py) that a
+    non-financial, resource-scoped policy produces a real Rego resource
+    comparison, the same mechanism financial policies already had
+    available but never used."""
+    policy = _policy(
+        scope=Scope(principal="prin_1", action="disable_user", resource="account:USR-829"),
+        conditions=ConditionSet(all=(Condition(field="context.environment", operator=Operator.EQ, value="production"),)),
+    )
+    result = compile_bundle([policy], "bundle-1", 1, now=FIXED_NOW)
+    assert result.ok
+    assert 'input.intent.resource == "account:USR-829"' in result.bundle.rego_source

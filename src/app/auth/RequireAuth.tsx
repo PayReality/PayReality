@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Navigate, useLocation } from "react-router";
 import { useAuth } from "./AuthContext";
 import { DEMO_MODE } from "../demo/config";
+import { SessionExpiredState } from "../components/ui/session-expired-state";
 
 // Gates the entire app: every route except /login and /setup-owner
 // (see routes.tsx's ProtectedLayout) renders only for a signed-in human.
@@ -12,8 +13,17 @@ import { DEMO_MODE } from "../demo/config";
 // before; this only controls what the browser shows a human with no
 // session.
 export function RequireAuth({ children }: { children: ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, loading, sessionExpired } = useAuth();
   const location = useLocation();
+
+  // Checked before `loading`/`user`: a session that expired mid-use
+  // already cleared `user` (AuthContext's handler), so without this
+  // check RequireAuth would fall through to the plain "no session at
+  // all" branch below and silently bounce to /login with no
+  // explanation -- the exact dead-end UX this milestone fixes.
+  if (sessionExpired && !DEMO_MODE) {
+    return <SessionExpiredState />;
+  }
 
   if (loading) {
     return (

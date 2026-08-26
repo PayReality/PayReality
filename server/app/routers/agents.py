@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.db.models import Agent, Certificate, Organization, Principal
+from app.db.models import Agent, Certificate, Intent, Organization, Principal
 from app.db.session import get_db
 from app.dependencies import get_current_organization, require_permission, verify_agent_signature
 from app.domain.rbac.permissions import Permission
@@ -263,11 +263,17 @@ def _build_agent_detail(db: Session, agent: Agent, certificate, certificates) ->
     principal_name = principal.name if principal else "unknown"
 
     policy_rows = runtime_policy_service.list_policies_for_principal(
-        db, principal.organization_id if principal else None, principal_name
+        db, principal.organization_id if principal else None, principal_name, agent_id=agent.id
     )
     policies = [
         LinkedPolicySummary(
-            policy_key=row.policy_key, name=row.content.get("name", ""), version=row.version, status=row.status
+            policy_key=row.policy_key, name=row.content.get("name", ""), version=row.version, status=row.status,
+            # Product Experience Remediation Milestone 1: what this
+            # policy actually governs, not just its name/version/status
+            # -- already sitting in `row.content`, just not projected
+            # before now.
+            action=row.content.get("scope", {}).get("action"),
+            resource=row.content.get("scope", {}).get("resource"),
         )
         for row in policy_rows
     ]
@@ -276,13 +282,26 @@ def _build_agent_detail(db: Session, agent: Agent, certificate, certificates) ->
     evidence = intent_service.list_evidence_for_agent(db, agent.id)
     audit_events = agent_service.list_audit_events(db, agent.id)
 
+    # Product Experience Remediation Milestone 1: one batch lookup (not
+    # per-row) for the Intent each decision was made against -- Decision
+    # itself carries no action/resource, only intent_id. Bounded by the
+    # same `limit` list_decisions_for_agent already applies (20 by
+    # default), so this is one small IN-query, not N+1.
+    intents_by_id = {
+        i.id: i for i in db.query(Intent).filter(Intent.id.in_([d.intent_id for d in decisions])).all()
+    } if decisions else {}
+
     return AgentDetailResponse(
         agent=_to_response(agent, certificate),
         principal_name=principal_name,
         policies=policies,
         certificates=[CertificateResponse.model_validate(c) for c in certificates],
         recent_decisions=[
-            DecisionSummary(id=d.id, outcome=d.outcome, reason=d.reason, created_at=d.created_at)
+            DecisionSummary(
+                id=d.id, outcome=d.outcome, reason=d.reason, created_at=d.created_at,
+                action=intents_by_id[d.intent_id].action if d.intent_id in intents_by_id else None,
+                resource=intents_by_id[d.intent_id].resource if d.intent_id in intents_by_id else None,
+            )
             for d in decisions
         ],
         recent_evidence=[

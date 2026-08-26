@@ -26,7 +26,7 @@ from .configuration import Configuration, CredentialStore
 from .exceptions import ApiError, ConfigurationError
 from .models import Decision, RegisteredAgent, Resolution
 
-_SDK_VERSION = "0.3.0"  # kept in sync with pyproject.toml / __init__.__version__ by hand;
+_SDK_VERSION = "0.4.0"  # kept in sync with pyproject.toml / __init__.__version__ by hand;
 # not imported from there to avoid a circular import at package init time.
 # Bumped 0.1.0 -> 0.2.0 for organization_id: a real breaking change under
 # semver -- every operator-key call that previously worked now requires
@@ -37,6 +37,18 @@ _SDK_VERSION = "0.3.0"  # kept in sync with pyproject.toml / __init__.__version_
 # breaking -- every existing api_key-based call keeps working
 # unmodified, this only adds a second, preferred way to authenticate
 # administrative calls as a real, scoped identity.
+# Bumped 0.3.0 -> 0.4.0 for authorize() (Domain Generalization
+# Milestone), a real breaking change under semver: `resource` used to
+# hold the action name (a naming mistake -- `operation` was accepted
+# but never actually used as the Runtime Policy action) and
+# `resource_data["amount"]` was required even for a non-financial
+# action. `operation` now becomes the real action; `resource` now
+# becomes the real, generic resource identifier
+# (Intent.resource, db/models.py); `amount`/`currency` are optional.
+# No real integration exists yet against the old shape (confirmed via
+# this milestone's own audit), so the blast radius of this break is
+# zero in practice, but it is disclosed here exactly like the two
+# breaking bumps above.
 
 
 class Agent:
@@ -286,8 +298,8 @@ class Agent:
         self,
         principal: str,
         operation: str,
-        resource: str,
-        resource_data: dict[str, Any],
+        resource: str | None = None,
+        resource_data: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
         correlation_id: str | None = None,
     ) -> Decision:
@@ -302,15 +314,27 @@ class Agent:
         `ConfigurationError` on a mismatch, catching a wrong-agent
         mistake before it ever reaches the network.
 
-        `resource` becomes the Runtime Policy action this is evaluated
-        against (normalized to lowercase/underscores: "Vendor Payment"
-        -> "vendor_payment"). `resource_data["amount"]` is required;
-        `currency` defaults to "USD" if not given; `vendor`/`counterparty`
-        is optional; everything else in `resource_data`, plus `operation`
-        and `metadata`, is recorded as context on the resulting Evidence
-        record. `operation` is not yet a separate concept the Runtime
-        Engine enforces (SDK_ARCHITECTURE.md); recording it here means
-        it is preserved for later, not silently dropped.
+        `operation` becomes the Runtime Policy action this is evaluated
+        against (normalized to lowercase/underscores: "Disable User" ->
+        "disable_user"). `resource` is the real-world object the action
+        concerns -- an opaque, organization-defined identifier such as
+        "account:USR-829" or "invoice:INV-4821" (Intent.resource,
+        db/models.py) -- never normalized, and entirely optional.
+
+        `resource_data["amount"]`/`["currency"]` are the platform's
+        existing financial fields, recognized when present but no
+        longer required -- a non-financial action (`disable_user`,
+        `employee_terminate`) supplies neither. `currency` defaults to
+        "USD" only when `amount` is given and `currency` isn't.
+        `vendor`/`counterparty` is optional. Everything else in
+        `resource_data`, plus `metadata`, is recorded as Runtime
+        Authority context.
+
+        Domain Generalization Milestone (SDK 0.4.0): `resource` used to
+        hold the action name and `amount` was required even for a
+        non-financial action -- both fixed here; see this module's own
+        version-history comments above for the full, disclosed breaking
+        change.
         """
         if self._identity is None:
             raise ConfigurationError(
@@ -327,24 +351,25 @@ class Agent:
                 f"This agent was registered for principal '{self._identity.principal_name}', "
                 f"not '{principal}'. Register a separate Agent for each principal."
             )
-        if "amount" not in resource_data:
-            raise ConfigurationError("resource_data must include 'amount'.")
 
-        action = resource.strip().lower().replace(" ", "_")
-        amount = resource_data["amount"]
-        currency = resource_data.get("currency", "USD")
+        action = operation.strip().lower().replace(" ", "_")
+        resource_data = resource_data or {}
+        amount = resource_data.get("amount")
+        currency = resource_data.get("currency")
+        if amount is not None and currency is None:
+            currency = "USD"
         counterparty = resource_data.get("counterparty") or resource_data.get("vendor")
 
         context = {
             k: v for k, v in resource_data.items() if k not in ("amount", "currency", "counterparty", "vendor")
         }
-        context["operation"] = operation
         if metadata:
             context["metadata"] = metadata
 
         body = {
             "agent_id": self._identity.agent_id,
             "action": action,
+            "resource": resource,
             "amount": amount,
             "currency": currency,
             "counterparty": counterparty,

@@ -155,7 +155,7 @@ def list_latest_policies(
 
 
 def list_policies_for_principal(
-    db: Session, organization_id: uuid.UUID | None, principal_name: str
+    db: Session, organization_id: uuid.UUID | None, principal_name: str, agent_id: uuid.UUID | None = None
 ) -> list[RuntimePolicyRecord]:
     """Agent Detail Page's "Runtime Policies" section (AGENT_LIFECYCLE.md):
     a policy applies to an agent via its acting-for Principal's name,
@@ -167,11 +167,37 @@ def list_policies_for_principal(
     the *Principal's own* organization_id (the caller resolves this,
     e.g. from the Agent's acting_for_principal_id), not necessarily the
     HTTP caller's -- this function only ever returns policies belonging
-    to that one organization, never mixed across others."""
-    return [
-        row for row in list_latest_policies(db, organization_id)
-        if row.content.get("scope", {}).get("principal") == principal_name
-    ]
+    to that one organization, never mixed across others.
+
+    Product Experience Remediation Milestone 1: `agent_id` closes a real
+    correctness bug (the IA audit's own finding) -- this previously
+    matched on scope.principal alone, so a policy authored with
+    Scope.agent narrowing (RuntimePolicy's own docstring: "narrows a
+    policy to one specific agent identity rather than every agent
+    acting for a principal") still listed as "governing" every other
+    agent sharing that principal, even though it could never actually
+    match an Intent from them (the same class of silent-mismatch bug
+    Milestone 17.1 already fixed once for real decision matching --
+    this is that same fix applied to the read-only Agent Detail
+    listing, which decision matching itself never used this function
+    for). A row with no Scope.agent at all (None) still applies to
+    every agent under the principal, unchanged -- only a row that DOES
+    narrow to a specific, different agent is now correctly excluded.
+    `agent_id=None` (the default) preserves the exact previous,
+    principal-only behavior for the one other conceptual caller this
+    function documents (a "policies for this principal generally," not
+    "governing this one agent" query) -- though today's only real call
+    site (routers/agents.py) always passes a real agent_id."""
+    matches = []
+    for row in list_latest_policies(db, organization_id):
+        scope = row.content.get("scope", {})
+        if scope.get("principal") != principal_name:
+            continue
+        scoped_agent = scope.get("agent")
+        if agent_id is not None and scoped_agent is not None and scoped_agent != str(agent_id):
+            continue
+        matches.append(row)
+    return matches
 
 
 def get_latest(db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None) -> RuntimePolicyRecord:
@@ -273,6 +299,63 @@ def list_enterprise_knowledge_keys_for_active_policies(db: Session, organization
     return sorted(keys)
 
 
+def list_active_scope_actions(db: Session, organization_id: uuid.UUID | None) -> frozenset[str]:
+    """Domain Generalization Milestone: the set of actions any of this
+    organization's currently-active RuntimePolicies actually govern,
+    read the same way list_enterprise_knowledge_keys_for_active_policies
+    above reads condition fields -- scanning stored content directly,
+    never executing or compiling anything. Feeds
+    scope_vocabulary.is_recognized_scope so an action becomes runtime-
+    recognized the moment a real, already-compiled, already-active
+    policy exists for it, without also needing a hand-maintained global
+    enumeration kept in sync by convention. Cannot admit anything
+    Compiler V2's own vocabulary validation (compiler_v2.
+    GENERIC_VOCABULARY) wouldn't already have allowed to compile and
+    activate in the first place."""
+    actions: set[str] = set()
+    for row in list_latest_policies(db, organization_id, status="active"):
+        action = (row.content.get("scope") or {}).get("action")
+        if action:
+            actions.add(action)
+    return frozenset(actions)
+
+
+_RISK_LEVEL_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+def highest_declared_risk_level(db: Session, policy_keys: list[str]) -> str | None:
+    """Domain Generalization Milestone: the highest Constraints.risk_level
+    explicitly authored on any of the matched policies (evaluated_
+    mandates), read the same way find_expired_high_risk_authority below
+    already reads the identical field -- never inferred, never guessed.
+    None when no matched policy declared one at all, letting the caller
+    fall back to a domain-specific heuristic (e.g. amount thresholds)
+    or a conservative default instead."""
+    best: str | None = None
+    for key in policy_keys:
+        try:
+            policy_key = uuid.UUID(key)
+        except ValueError:
+            continue
+        row = db.scalar(
+            select(RuntimePolicyRecord).where(
+                RuntimePolicyRecord.policy_key == policy_key,
+                RuntimePolicyRecord.status == "active",
+            )
+        )
+        if row is None:
+            continue
+        risk_level = (row.content.get("constraints") or {}).get("risk_level")
+        if not isinstance(risk_level, str):
+            continue
+        normalized = risk_level.lower()
+        if normalized not in _RISK_LEVEL_ORDER:
+            continue
+        if best is None or _RISK_LEVEL_ORDER[normalized] > _RISK_LEVEL_ORDER[best]:
+            best = normalized
+    return best.upper() if best else None
+
+
 _HIGH_RISK_LEVELS = {"high", "critical"}
 
 
@@ -321,6 +404,65 @@ def find_expired_high_risk_authority(db: Session, policy_keys: list[str], now: d
         if expires_at < now:
             return row
     return None
+
+
+def _normalize_aware(value: datetime | None, now: datetime) -> datetime | None:
+    """Same SQLite-tzinfo-stripping normalization find_expired_high_risk_
+    authority above already applies, factored out so the Decision Detail
+    freshness summary below can apply it to all three timestamp columns,
+    not just authority_expires_at."""
+    if value is None:
+        return None
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def freshness_summary_for_matched_policies(
+    db: Session, policy_keys: list[str], now: datetime | None = None
+) -> RuntimePolicyRecord | None:
+    """Product Experience Remediation Milestone 1 (Decision Detail
+    contract): the first matched, currently-active policy's own row --
+    the caller (routers/intents.py) reads last_attested_at/next_review_at/
+    authority_expires_at straight off it and computes a current/review_due/
+    expired label the same way find_expired_high_risk_authority above
+    already reasons about expiry, just for any risk level, not only
+    high/critical. Returns the raw row (not a computed summary) so the
+    caller can build PolicyFreshnessSummary without a second query --
+    mirrors resolve_mandate_ids/resolve_enterprise_system's own
+    "read back, don't recompute" discipline. None when no matched policy
+    can be resolved to a real, still-active row."""
+    now = now or datetime.now(timezone.utc)
+    for key in policy_keys:
+        try:
+            policy_key = uuid.UUID(key)
+        except ValueError:
+            continue
+        row = db.scalar(
+            select(RuntimePolicyRecord).where(
+                RuntimePolicyRecord.policy_key == policy_key,
+                RuntimePolicyRecord.status == "active",
+            )
+        )
+        if row is not None:
+            return row
+    return None
+
+
+def freshness_status(row: RuntimePolicyRecord, now: datetime | None = None) -> str:
+    """"current" | "review_due" | "expired" -- expired takes precedence
+    over review_due when both timestamps have passed, since an expired
+    authority is the more severe of the two states. "unknown" only when
+    the row has neither timestamp set at all (most policies today, since
+    Authority Freshness is opt-in per-policy, not universal)."""
+    now = now or datetime.now(timezone.utc)
+    expires_at = _normalize_aware(row.authority_expires_at, now)
+    review_at = _normalize_aware(row.next_review_at, now)
+    if expires_at is not None and expires_at < now:
+        return "expired"
+    if review_at is not None and review_at < now:
+        return "review_due"
+    if expires_at is None and review_at is None:
+        return "unknown"
+    return "current"
 
 
 def list_versions(

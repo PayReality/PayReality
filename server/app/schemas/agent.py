@@ -135,6 +135,12 @@ class LinkedPolicySummary(BaseModel):
     name: str
     version: int
     status: str
+    # Product Experience Remediation Milestone 1: what this policy
+    # actually governs -- previously the Rules list showed only
+    # name/version/status, with no way to tell what action/resource it
+    # covers without opening Governance separately.
+    action: str | None = None
+    resource: str | None = None
 
 
 class DecisionSummary(BaseModel):
@@ -142,6 +148,12 @@ class DecisionSummary(BaseModel):
     outcome: str
     reason: str | None = None
     created_at: datetime
+    # Product Experience Remediation Milestone 1: closes the
+    # previously-disclosed gap (the domain-generalization and IA audits
+    # both found this) -- deliberately no amount/currency here; those
+    # are contextual, not universal.
+    action: str | None = None
+    resource: str | None = None
 
 
 class EvidenceSummary(BaseModel):

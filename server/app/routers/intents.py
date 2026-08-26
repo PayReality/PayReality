@@ -1,17 +1,21 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.models import (
     Agent,
+    CapabilityToken,
     DecisionResolution,
     EnterpriseSystem,
     Evidence,
     Intent,
     Organization,
     Policy,
+    Principal,
+    RuntimePolicyRecord,
     User,
 )
 from app.db.session import get_db
@@ -24,11 +28,15 @@ from app.dependencies import (
 from app.domain.auth.signature import check_timestamp_window
 from app.domain.rbac.permissions import Permission
 from app.schemas.intent import (
+    CapabilitySummary,
     DecisionExplanationResponse,
+    DecisionHistoryItem,
+    DecisionHistoryResponse,
     DecisionListResponse,
     DecisionPolicyBindingResponse,
     DecisionSummary,
     GetDecisionResponse,
+    PolicyFreshnessSummary,
     PolicyManifestEntry,
     ResolutionSummary,
     ResolveDecisionRequest,
@@ -37,7 +45,7 @@ from app.schemas.intent import (
     SubmitIntentResponse,
 )
 from app.schemas.policy_simulation import ConditionEvaluationResponse, RuleEvaluationResponse
-from app.services import decision_explanation_service, intent_service, resolution_service
+from app.services import decision_explanation_service, intent_service, resolution_service, runtime_policy_service
 from app.services.intent_service import (
     AgentNotOperationalError,
     AgentRetiredError,
@@ -92,6 +100,8 @@ def submit_intent(
             requested_at=body.requested_at,
             nonce=body.nonce,
             correlation_id=body.correlation_id,
+            resource=body.resource,
+            source=body.source,
         )
     except AgentRevokedError:
         raise HTTPException(status_code=403, detail="agent_revoked")
@@ -117,6 +127,99 @@ def submit_intent(
         ),
         evidence_id=evidence.id,
         status=status,
+    )
+
+
+@router.get(
+    "/decisions/history",
+    response_model=DecisionHistoryResponse,
+    dependencies=[Depends(require_permission(Permission.DECISIONS_VIEW))],
+)
+def list_decision_history(
+    limit: int = 50,
+    offset: int = 0,
+    outcome: str | None = None,
+    agent_id: UUID | None = None,
+    action: str | None = None,
+    resource: str | None = None,
+    source: str | None = None,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    """Product Experience Remediation Milestone 1 (Phase 3): the bounded,
+    organisation-scoped operational history the future Decisions page
+    needs -- registered before GET /v1/decisions/{decision_id} below so
+    Starlette matches this static path first (both are single-segment
+    paths under /decisions; a parameterized route registered first
+    would otherwise capture "history" as if it were a decision id).
+    Every outcome, not only HUMAN_REVIEW -- the Pending Review queue's
+    own endpoint (GET /v1/decisions) is untouched, still exactly what it
+    was."""
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    decisions, total = intent_service.list_decision_history(
+        db, organization.id, limit=limit, offset=offset,
+        outcome=outcome, agent_id=agent_id, action=action, resource=resource, source=source,
+    )
+    return DecisionHistoryResponse(
+        decisions=[_build_decision_history_item(db, d) for d in decisions],
+        total=total, limit=limit, offset=offset,
+    )
+
+
+def _build_decision_history_item(db: Session, decision) -> DecisionHistoryItem:
+    """One extra lookup per row for the agent/principal name and the
+    first matched policy's name -- acceptable at this endpoint's own
+    bounded page size (capped at 500, default 50), the same cost
+    resolution_service/agents.py already pay per-row elsewhere in this
+    codebase, not a new pattern."""
+    intent = db.get(Intent, decision.intent_id)
+    agent = db.get(Agent, intent.agent_id) if intent else None
+    principal_name = None
+    if agent is not None and agent.acting_for_principal_id is not None:
+        principal = db.get(Principal, agent.acting_for_principal_id)
+        principal_name = principal.name if principal else None
+
+    matched_policy_name = None
+    if decision.evaluated_mandates:
+        for key in decision.evaluated_mandates:
+            try:
+                policy_key = UUID(key)
+            except ValueError:
+                continue
+            record = db.scalar(
+                select(RuntimePolicyRecord)
+                .where(RuntimePolicyRecord.policy_key == policy_key)
+                .order_by(RuntimePolicyRecord.version.desc())
+                .limit(1)
+            )
+            if record is not None:
+                matched_policy_name = record.content.get("name")
+                break
+
+    has_evidence = (
+        db.scalar(select(func.count()).select_from(Evidence).where(Evidence.decision_id == decision.id)) or 0
+    ) > 0
+
+    resolution_row = db.query(DecisionResolution).filter_by(decision_id=decision.id).one_or_none()
+    human_review_state = None
+    if decision.outcome == "HUMAN_REVIEW":
+        human_review_state = "resolved" if resolution_row is not None else "pending"
+
+    return DecisionHistoryItem(
+        id=decision.id,
+        created_at=decision.created_at,
+        agent_id=intent.agent_id,
+        agent_name=agent.name if agent else None,
+        principal_name=principal_name,
+        action=intent.action,
+        resource=intent.resource,
+        outcome=decision.outcome,
+        reason=decision.reason,
+        matched_policy_name=matched_policy_name,
+        source=intent.source,
+        has_evidence=has_evidence,
+        human_review_state=human_review_state,
     )
 
 
@@ -188,6 +291,51 @@ def _build_decision_response(db: Session, decision) -> GetDecisionResponse:
     )
     evidence_payload = earliest_evidence.payload if earliest_evidence is not None else {}
 
+    # Product Experience Remediation Milestone 1 (Decision Detail
+    # contract): the governing policy's CURRENT freshness state -- read
+    # live, not reconstructed historically (Historical Policy Binding
+    # already exists as a separate concern for "what exactly was
+    # evaluated"). None when no matched policy can be resolved to a
+    # still-active row (e.g. it was since retired).
+    freshness_row = runtime_policy_service.freshness_summary_for_matched_policies(
+        db, decision.evaluated_mandates or []
+    )
+    matched_policy_freshness = None
+    if freshness_row is not None:
+        matched_policy_freshness = PolicyFreshnessSummary(
+            policy_key=str(freshness_row.policy_key),
+            last_attested_at=freshness_row.last_attested_at,
+            next_review_at=freshness_row.next_review_at,
+            authority_expires_at=freshness_row.authority_expires_at,
+            status=runtime_policy_service.freshness_status(freshness_row),
+        )
+
+    # Whether a Capability Authorization was ever issued for this
+    # decision -- the most recent one, if issuance was ever retried.
+    # resource/action are not stored as separate CapabilityToken
+    # columns (only inside the opaque signed token blob, deliberately
+    # never persisted in full -- see that model's own docstring), but
+    # they are the same real values this Intent already carries, since
+    # a capability can only ever be issued for this exact decision's
+    # own action/resource -- not a second, independently-fabricated
+    # value.
+    capability_row = db.scalar(
+        select(CapabilityToken)
+        .where(CapabilityToken.decision_id == decision.id)
+        .order_by(CapabilityToken.issued_at.desc())
+        .limit(1)
+    )
+    capability = None
+    if capability_row is not None:
+        capability = CapabilitySummary(
+            issued=True,
+            audience=capability_row.audience,
+            resource=intent.resource,
+            action=intent.action,
+            expires_at=capability_row.expires_at,
+            consumed_at=capability_row.consumed_at,
+        )
+
     return GetDecisionResponse(
         id=decision.id,
         status=status,
@@ -195,7 +343,12 @@ def _build_decision_response(db: Session, decision) -> GetDecisionResponse:
         reason=decision.reason,
         agent_id=intent.agent_id,
         action=intent.action,
-        amount=float(intent.amount),
+        # Domain Generalization Milestone: intent.amount/.currency are
+        # genuinely nullable (a non-financial action supplies neither);
+        # the previously unconditional float() raised TypeError the
+        # moment either was ever actually None.
+        resource=intent.resource,
+        amount=float(intent.amount) if intent.amount is not None else None,
         currency=intent.currency,
         created_at=decision.created_at,
         evaluated_mandates=decision.evaluated_mandates or [],
@@ -206,6 +359,12 @@ def _build_decision_response(db: Session, decision) -> GetDecisionResponse:
         policy_bundle_hash=evidence_payload.get("policy_bundle_hash"),
         authority_version=evidence_payload.get("authority_version"),
         resolution=resolution,
+        source=intent.source,
+        principal_name=evidence_payload.get("principal_name"),
+        evidence_id=earliest_evidence.id if earliest_evidence is not None else None,
+        facts_evaluated=evidence_payload.get("facts_evaluated"),
+        matched_policy_freshness=matched_policy_freshness,
+        capability=capability,
     )
 
 

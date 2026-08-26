@@ -12,6 +12,22 @@ export class ApiError extends Error {
   }
 }
 
+// Session-expiry recovery (Product Experience Remediation Milestone 1):
+// a single, centrally-registered handler apiClient calls the moment ANY
+// request comes back 401 with a credential-related detail code -- so
+// the app recognizes "you're no longer signed in" once, in one place,
+// instead of every page independently rendering its own dead-end error
+// text. Deliberately narrow: only these two detail codes (both meaning
+// "there is no valid session," never "you lack permission" -- see
+// format.ts's PERMISSION_DETAIL, whose `permission_denied` is a 403 and
+// never reaches here) trigger it, and it is a plain callback, not a
+// redirect -- AuthContext decides what the user actually sees.
+const SESSION_EXPIRED_DETAILS = new Set(["authentication_required", "invalid_or_expired_credential"]);
+let onSessionExpired: (() => void) | null = null;
+export function setSessionExpiredHandler(handler: (() => void) | null) {
+  onSessionExpired = handler;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   // Every requirement of the public demo (mock data, no real backend
   // reachable, disabled destructive actions) lives entirely behind this
@@ -51,6 +67,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => null);
+    // Fires before throwing, not instead of it: callers with their own
+    // local error handling (e.g. LoginPage's own 401 message for a
+    // wrong password -- a real credential rejection, not an expired
+    // session) still get their ApiError; the global handler is a
+    // side-channel notification, not a replacement for local recovery.
+    if (res.status === 401) {
+      const detail = body && typeof body === "object" ? (body as { detail?: string }).detail : undefined;
+      if (detail && SESSION_EXPIRED_DETAILS.has(detail)) {
+        onSessionExpired?.();
+      }
+    }
     throw new ApiError(res.status, body);
   }
   if (res.status === 204) return undefined as T;

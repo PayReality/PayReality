@@ -12,6 +12,7 @@ from app.routers import (
     agents,
     ai_authority_builder,
     ai_policy_builder,
+    assurance,
     auth as auth_router,
     capability_tokens,
     enterprise_systems,
@@ -292,6 +293,7 @@ def create_app() -> FastAPI:
     app.include_router(organization_structure.teams_router)
     app.include_router(facts.router)
     app.include_router(capability_tokens.router)
+    app.include_router(assurance.router)
 
     return app
 

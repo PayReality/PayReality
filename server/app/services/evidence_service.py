@@ -3,7 +3,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -59,6 +59,21 @@ def list_evidence(
     if decision_id is not None:
         stmt = stmt.where(Evidence.decision_id == decision_id)
     return list(db.scalars(stmt.order_by(Evidence.created_at)))
+
+
+def count_evidence_by_status(db: Session, organization_id: uuid.UUID | None) -> dict[str, int]:
+    """Product Experience Remediation Milestone 1 (Assurance): a real
+    COUNT/GROUP BY over the already-indexed `status` column -- the
+    "N of M verified" figure Assurance needs, without re-running
+    signature/chain verification (that stays a separate, on-demand
+    operation via verify_chain/GET /v1/evidence/chain/verify, not
+    something the summary recomputes on every load)."""
+    rows = db.execute(
+        select(Evidence.status, func.count())
+        .where(Evidence.organization_id == organization_id)
+        .group_by(Evidence.status)
+    ).all()
+    return {status: count for status, count in rows}
 
 
 def verify_evidence(db: Session, evidence_id: uuid.UUID, organization_id: uuid.UUID) -> tuple[bool, str]:

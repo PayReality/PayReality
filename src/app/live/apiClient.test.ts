@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { apiClient, ApiError } from "./apiClient";
+import { apiClient, ApiError, setSessionExpiredHandler } from "./apiClient";
 import { setOperatorKey } from "./operatorKey";
 import { setOrganizationId } from "./organizationId";
 import { setSessionToken } from "./sessionToken";
@@ -31,6 +31,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  setSessionExpiredHandler(null);
 });
 
 function headersFromLastCall(): Headers {
@@ -114,5 +115,45 @@ describe("apiClient response handling", () => {
     await apiClient.post("/v1/documents", form);
     const [, formInit] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(formInit.body).toBe(form);
+  });
+});
+
+describe("apiClient session-expiry handler", () => {
+  it("fires the registered handler on a 401 with invalid_or_expired_credential", async () => {
+    const handler = vi.fn();
+    setSessionExpiredHandler(handler);
+    fetchMock.mockResolvedValue(jsonResponse(401, { detail: "invalid_or_expired_credential" }));
+    await expect(apiClient.get("/v1/agents")).rejects.toBeInstanceOf(ApiError);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires the registered handler on a 401 with authentication_required", async () => {
+    const handler = vi.fn();
+    setSessionExpiredHandler(handler);
+    fetchMock.mockResolvedValue(jsonResponse(401, { detail: "authentication_required" }));
+    await expect(apiClient.get("/v1/agents")).rejects.toBeInstanceOf(ApiError);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire on a 401 for a wrong-password login rejection (a different, non-session detail code)", async () => {
+    const handler = vi.fn();
+    setSessionExpiredHandler(handler);
+    fetchMock.mockResolvedValue(jsonResponse(401, { detail: "invalid_credentials" }));
+    await expect(apiClient.get("/v1/agents")).rejects.toBeInstanceOf(ApiError);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does not fire on a 403 (authorization failure, never treated as a session problem)", async () => {
+    const handler = vi.fn();
+    setSessionExpiredHandler(handler);
+    fetchMock.mockResolvedValue(jsonResponse(403, { detail: "permission_denied" }));
+    await expect(apiClient.get("/v1/agents")).rejects.toBeInstanceOf(ApiError);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("still throws ApiError normally when no handler is registered", async () => {
+    setSessionExpiredHandler(null);
+    fetchMock.mockResolvedValue(jsonResponse(401, { detail: "invalid_or_expired_credential" }));
+    await expect(apiClient.get("/v1/agents")).rejects.toBeInstanceOf(ApiError);
   });
 });

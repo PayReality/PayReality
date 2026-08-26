@@ -781,10 +781,36 @@ class Intent(Base):
     amount: Mapped[float | None] = mapped_column(Numeric(18, 2))
     currency: Mapped[str | None] = mapped_column(String(3))
     counterparty: Mapped[str | None] = mapped_column(Text)
+    # Domain Generalization Milestone: the generic successor to
+    # `counterparty` (finance-specific), populated end to end into the
+    # OPA input as `intent.resource` so a RuntimePolicy authored with
+    # Scope.resource (already supported by the compiler/Rego generator,
+    # see runtime_policy.py's Scope docstring) can actually match a real
+    # Intent -- previously it never could. Opaque, organization-defined
+    # string ("invoice:INV-4821", "account:USR-829"); no ontology is
+    # imposed here or anywhere else in this platform.
+    resource: Mapped[str | None] = mapped_column(Text)
     context: Mapped[dict] = mapped_column(JSONB, nullable=False)
     nonce: Mapped[str] = mapped_column(Text, nullable=False)
     requested_at: Mapped[datetime] = mapped_column(nullable=False)
     received_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Product Experience Remediation Milestone 1 (Decision Provenance):
+    # self-declared by the caller at submission time, not cryptographically
+    # enforced -- the signing key alone cannot distinguish a genuine agent
+    # process from a browser holding that same private key (the manual
+    # Test Decision UI's own trust model), so this is honest about being a
+    # declared channel, not a proof. "runtime" is the service-layer default
+    # for any caller that omits it (real SDK integrations); the manual
+    # submission UI explicitly sends "manual_test" instead. Nullable, with
+    # NO server_default: every row written before this column existed is
+    # genuinely NULL, never silently backfilled to "runtime" -- the
+    # frontend renders NULL as an honest "Unknown (recorded before
+    # provenance tracking)" state, never as a claim either way. Distinct
+    # from a *policy simulation* (Policy Studio's dry-run, the standalone
+    # Runtime Policy Simulator): those evaluate against OPA directly and
+    # never create an Intent/Decision/Evidence row at all, so they need no
+    # provenance value here -- there is nothing to tag.
+    source: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         Index("idx_intents_agent", "agent_id"),

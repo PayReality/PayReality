@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider, useAuth } from "./AuthContext";
+import { apiClient, ApiError } from "../live/apiClient";
 import type { CurrentUser, LoginResponse } from "./types";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -114,5 +115,85 @@ describe("hasPermission", () => {
     });
     expect(latest!.user).toBeNull();
     expect(latest!.hasPermission("decisions.view")).toBe(false);
+  });
+});
+
+describe("session expiry", () => {
+  // Genuine integration test (not a mocked apiClient): AuthProvider
+  // registers its handler with the real apiClient module on mount, so
+  // a real 401 flowing through a real apiClient.get() call is the only
+  // way to prove the registration actually works end to end, not just
+  // that the two modules independently do what they claim to.
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("flips sessionExpired true and clears the user when any request hits an expired-credential 401", async () => {
+    mockLogin.mockResolvedValue({
+      token: "session-token",
+      expires_at: "2026-12-31T00:00:00Z",
+      user: baseUser(["decisions.view"]),
+    });
+    mount();
+    await act(async () => {
+      await latest!.login("test@example.com", "password");
+    });
+    expect(latest!.user).not.toBeNull();
+    expect(latest!.sessionExpired).toBe(false);
+
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({ detail: "invalid_or_expired_credential" }),
+    });
+    await act(async () => {
+      await expect(apiClient.get("/v1/agents")).rejects.toBeInstanceOf(ApiError);
+    });
+
+    expect(latest!.sessionExpired).toBe(true);
+    expect(latest!.user).toBeNull();
+  });
+
+  it("does not flip sessionExpired on an ordinary 403 permission-denied response", async () => {
+    mount();
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: () => Promise.resolve({ detail: "permission_denied" }),
+    });
+    await act(async () => {
+      await expect(apiClient.get("/v1/agents")).rejects.toBeInstanceOf(ApiError);
+    });
+    expect(latest!.sessionExpired).toBe(false);
+  });
+
+  it("clears sessionExpired on a fresh successful login", async () => {
+    mount();
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({ detail: "invalid_or_expired_credential" }),
+    });
+    await act(async () => {
+      await expect(apiClient.get("/v1/agents")).rejects.toBeInstanceOf(ApiError);
+    });
+    expect(latest!.sessionExpired).toBe(true);
+
+    mockLogin.mockResolvedValue({
+      token: "session-token-2",
+      expires_at: "2026-12-31T00:00:00Z",
+      user: baseUser(["decisions.view"]),
+    });
+    await act(async () => {
+      await latest!.login("test@example.com", "password");
+    });
+    expect(latest!.sessionExpired).toBe(false);
   });
 });

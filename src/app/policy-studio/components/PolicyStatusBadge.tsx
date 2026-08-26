@@ -1,4 +1,5 @@
 import { formatStatus } from "../../live/format";
+import { StatusBadge } from "../../components/ui/status-badge";
 import type { EffectiveStatus } from "../types";
 
 const STATUS_COLOR: Record<EffectiveStatus, string> = {
@@ -21,17 +22,5 @@ const STATUS_COLOR: Record<EffectiveStatus, string> = {
 // pill or icon: "enterprise, minimal, GitHub-level clarity, no
 // gimmicks" (POLICY_STUDIO_WIREFRAMES.md's UI principles).
 export function PolicyStatusBadge({ status }: { status: EffectiveStatus }) {
-  return (
-    <span
-      style={{
-        borderLeft: `2px solid ${STATUS_COLOR[status]}`,
-        paddingLeft: 8,
-        color: "var(--pr-text-primary)",
-        fontSize: 13,
-        fontFamily: "monospace",
-      }}
-    >
-      {formatStatus(status)}
-    </span>
-  );
+  return <StatusBadge color={STATUS_COLOR[status]} label={formatStatus(status)} />;
 }

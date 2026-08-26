@@ -26,6 +26,10 @@ export interface LinkedPolicy {
   name: string;
   version: number;
   status: string;
+  // Product Experience Remediation Milestone 1: what this policy
+  // actually governs -- previously invisible without opening Governance.
+  action: string | null;
+  resource: string | null;
 }
 
 export interface DecisionSummary {
@@ -33,6 +37,11 @@ export interface DecisionSummary {
   outcome: "ALLOW" | "DENY" | "HUMAN_REVIEW";
   reason: string | null;
   created_at: string;
+  // Product Experience Remediation Milestone 1: closes the previously-
+  // disclosed gap. Deliberately no amount/currency -- contextual, not
+  // universal.
+  action: string | null;
+  resource: string | null;
 }
 
 export interface EvidenceSummary {

@@ -1,8 +1,9 @@
 import { act } from "react-dom/test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { createElement } from "react";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { RequirePermission } from "./RequireAuth";
+import { RequireAuth, RequirePermission } from "./RequireAuth";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -13,8 +14,13 @@ import { RequirePermission } from "./RequireAuth";
 // purely on the gate's own branching, independent of login/session
 // plumbing (covered separately in AuthContext.test.tsx).
 const mockHasPermission = vi.fn<(permission: string) => boolean>();
+const mockAuthState: { user: unknown; loading: boolean; sessionExpired: boolean } = {
+  user: null,
+  loading: false,
+  sessionExpired: false,
+};
 vi.mock("./AuthContext", () => ({
-  useAuth: () => ({ hasPermission: mockHasPermission }),
+  useAuth: () => ({ hasPermission: mockHasPermission, ...mockAuthState }),
 }));
 
 let container: HTMLDivElement;
@@ -22,6 +28,9 @@ let root: Root;
 
 beforeEach(() => {
   mockHasPermission.mockReset();
+  mockAuthState.user = null;
+  mockAuthState.loading = false;
+  mockAuthState.sessionExpired = false;
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -63,5 +72,57 @@ describe("RequirePermission", () => {
     });
     expect(container.textContent).not.toContain("Organisation Settings page");
     expect(container.textContent).toContain("don't have permission");
+  });
+});
+
+describe("RequireAuth session-expiry state", () => {
+  it("renders the session-expired recovery state instead of children when sessionExpired is true", () => {
+    mockAuthState.sessionExpired = true;
+    mockAuthState.loading = false;
+    mockAuthState.user = null;
+    act(() => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/agents"] },
+          createElement(RequireAuth, null, createElement("div", null, "Agents page"))
+        )
+      );
+    });
+    expect(container.textContent).not.toContain("Agents page");
+    expect(container.textContent).toContain("session has expired");
+    expect(container.textContent).toContain("Sign in again");
+  });
+
+  it("renders children normally when sessionExpired is false and a user is present", () => {
+    mockAuthState.sessionExpired = false;
+    mockAuthState.loading = false;
+    mockAuthState.user = { id: "u1" };
+    act(() => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/agents"] },
+          createElement(RequireAuth, null, createElement("div", null, "Agents page"))
+        )
+      );
+    });
+    expect(container.textContent).toContain("Agents page");
+  });
+
+  it("prioritizes the session-expired state over the loading state", () => {
+    mockAuthState.sessionExpired = true;
+    mockAuthState.loading = true;
+    act(() => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/agents"] },
+          createElement(RequireAuth, null, createElement("div", null, "Agents page"))
+        )
+      );
+    });
+    expect(container.textContent).toContain("session has expired");
+    expect(container.textContent).not.toBe("Loading...");
   });
 });

@@ -49,8 +49,14 @@ export function PublishPage() {
 
   const [principal, setPrincipal] = useState("");
   const [action, setAction] = useState("");
-  const [amount, setAmount] = useState("75000");
-  const [currency, setCurrency] = useState("ZAR");
+  // Domain Generalization Milestone: none of these three are universal
+  // -- amount/currency start empty (relevant only to a financial
+  // policy) and resource is the generic identifier a Scope.resource-
+  // narrowed policy actually matches against (already supported end to
+  // end by dryRun/dry_run_policy -- this page just never exposed it).
+  const [resource, setResource] = useState("");
+  const [amount, setAmount] = useState("");
+  const [currency, setCurrency] = useState("");
   const [advancedContext, setAdvancedContext] = useState(false);
   const [contextText, setContextText] = useState("{}");
   const [previewResult, setPreviewResult] = useState<DryRunResult | null>(null);
@@ -120,11 +126,19 @@ export function PublishPage() {
         return;
       }
     }
+    // Domain Generalization Milestone: amount/currency only enter the
+    // sample context when actually provided -- a policy with no
+    // monetary dimension (e.g. disable_user) can be previewed without
+    // fabricating either.
+    const financialContext: Record<string, unknown> = {};
+    if (amount.trim()) financialContext.amount = Number(amount);
+    if (currency.trim()) financialContext.currency = currency.trim();
     try {
       const r = await policyStudioApi.dryRun(policyKey!, {
         principal,
         action,
-        context: { amount: Number(amount), currency, ...extra },
+        resource: resource.trim() || undefined,
+        context: { ...financialContext, ...extra },
       });
       setPreviewResult(r);
     } catch (e) {
@@ -246,14 +260,23 @@ export function PublishPage() {
           See what this rule would decide for a specific request. This never affects anything real, run it as many
           times as you like.
         </p>
+        <div style={{ marginBottom: 12 }}>
+          <FieldLabel htmlFor={`${formId}-resource`}>Resource (optional)</FieldLabel>
+          <Input
+            id={`${formId}-resource`}
+            value={resource}
+            onChange={(e) => setResource(e.target.value)}
+            placeholder="e.g. invoice:INV-4821 or account:USR-829"
+          />
+        </div>
         <div className="grid grid-cols-2 gap-3 mb-3">
           <div>
-            <FieldLabel htmlFor={`${formId}-amount`}>Amount</FieldLabel>
-            <Input id={`${formId}-amount`} type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+            <FieldLabel htmlFor={`${formId}-amount`}>Amount (optional)</FieldLabel>
+            <Input id={`${formId}-amount`} type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Only for a financial policy" />
           </div>
           <div>
-            <FieldLabel htmlFor={`${formId}-currency`}>Currency</FieldLabel>
-            <Input id={`${formId}-currency`} value={currency} onChange={(e) => setCurrency(e.target.value)} />
+            <FieldLabel htmlFor={`${formId}-currency`}>Currency (optional)</FieldLabel>
+            <Input id={`${formId}-currency`} value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="e.g. USD" />
           </div>
         </div>
         <Button

@@ -393,6 +393,23 @@ def _as_aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
+def list_authority_expired(db: Session, organization_id: uuid.UUID | None, now: datetime | None = None) -> list[RuntimePolicyRecord]:
+    """Product Experience Remediation Milestone 1 (Assurance): the
+    org-wide "N policies with expired authority" signal Assurance needs
+    -- distinct from runtime_policy_service.find_expired_high_risk_
+    authority, which only ever checks specific already-matched policy
+    keys, at decision time, and only for high/critical risk (a decision-
+    time enforcement concern, not an aggregate reporting one). This is
+    every ACTIVE policy, any risk level, whose authority_expires_at has
+    passed -- same shape and discipline as list_due_for_reattestation
+    just above it."""
+    now = now or _now()
+    return [
+        row for row in svc.list_latest_policies(db, organization_id, status="active")
+        if row.authority_expires_at is not None and _as_aware(row.authority_expires_at) <= now
+    ]
+
+
 def archive_policy(
     db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None, actor: str, reason: str | None = None
 ) -> RuntimePolicyRecord:

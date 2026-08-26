@@ -149,7 +149,18 @@ def get_decision_explanation(
             return ExplanationUnavailable(decision_id=decision.id, reason="historical_policy_record_missing")
         reconstructed_policies.append(_row_to_policy(record))
 
-    reconstructed_intent = {"action": intent.action, "amount": float(intent.amount), "currency": intent.currency}
+    # Domain Generalization Milestone: amount/currency/resource are all
+    # genuinely nullable on Intent -- included only when actually
+    # present, rather than an unconditional float(intent.amount) that
+    # raised TypeError the moment a non-financial decision (no amount
+    # at all) was reconstructed here.
+    reconstructed_intent: dict = {"action": intent.action}
+    if intent.amount is not None:
+        reconstructed_intent["amount"] = float(intent.amount)
+    if intent.currency is not None:
+        reconstructed_intent["currency"] = intent.currency
+    if intent.resource is not None:
+        reconstructed_intent["resource"] = intent.resource
     reconstructed_context = {**(intent.context or {}), "authority": payload.get("authority_context")}
 
     rules = build_rule_evaluations(

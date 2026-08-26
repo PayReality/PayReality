@@ -21,6 +21,7 @@ from app.db.models import (
 from app.domain.time_utils import to_utc_iso
 from app.domain.decision import engine as decision_engine
 from app.domain.decision.scope_vocabulary import is_recognized_scope
+from app.domain.decision.source import normalize_source
 from app.domain.evidence.signing import payload_hash, sign_payload
 from app.opa_client import HttpOpaClient, org_data_path
 from app.services import fact_service, runtime_policy_service, runtime_truth_service
@@ -120,13 +121,15 @@ def _build_evidence_payload(
     decision_id: uuid.UUID,
     agent_id: uuid.UUID,
     action: str,
-    amount: float,
+    amount: float | None,
     matched_mandates: list[str],
     outcome: str,
     approval_outcome: str | None,
     risk_classification: str,
     approver: str | None,
     previous_hash: str | None,
+    resource: str | None = None,
+    currency: str | None = None,
     principal_id: uuid.UUID | None = None,
     principal_name: str | None = None,
     authority_context: dict | None = None,
@@ -203,7 +206,6 @@ def _build_evidence_payload(
         "decision_id": str(decision_id),
         "agent_id": str(agent_id),
         "action": action,
-        "amount": str(amount),
         "matched_mandate_ids": sorted(matched_mandates),
         "authority_outcome": outcome,
         "approval_outcome": approval_outcome,
@@ -212,6 +214,12 @@ def _build_evidence_payload(
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "previous_hash": previous_hash,
     }
+    if amount is not None:
+        payload["amount"] = str(amount)
+    if currency is not None:
+        payload["currency"] = currency
+    if resource is not None:
+        payload["resource"] = resource
     if principal_id is not None:
         payload["principal_id"] = str(principal_id)
     if principal_name is not None:
@@ -318,12 +326,14 @@ def append_evidence(
     decision_id: uuid.UUID,
     agent_id: uuid.UUID,
     action: str,
-    amount: float,
+    amount: float | None,
     matched_mandates: list[str],
     outcome: str,
     approval_outcome: str | None = None,
     approver: str | None = None,
     status: str = "PENDING",
+    resource: str | None = None,
+    currency: str | None = None,
     principal_id: uuid.UUID | None = None,
     principal_name: str | None = None,
     authority_context: dict | None = None,
@@ -349,6 +359,23 @@ def append_evidence(
     resolved_by = "runtime_authority_context" if authority_context is not None else None
     responsible_party = resolved_by
     enterprise_system = db.get(EnterpriseSystem, enterprise_system_id) if enterprise_system_id else None
+    # Domain Generalization Milestone: risk classification precedence
+    # for the persisted Evidence field -- (1) an explicit RiskLevel
+    # authored on any matched policy's own Constraints.risk_level (the
+    # highest one, if more than one matched policy declares one) wins;
+    # (2) [reserved: no additional authority/agent-level risk metadata
+    # exists in this schema yet]; (3) the pre-existing amount-threshold
+    # heuristic, only when no matched policy declared an explicit
+    # level; (4) a conservative MEDIUM default -- never LOW -- when
+    # neither signal is available, so a non-financial decision is never
+    # silently under-classified purely because it has no amount.
+    declared_risk = runtime_policy_service.highest_declared_risk_level(db, matched_mandates)
+    if declared_risk is not None:
+        risk_classification = declared_risk
+    elif amount is not None:
+        risk_classification = classify_risk(amount)
+    else:
+        risk_classification = "MEDIUM"
     payload = _build_evidence_payload(
         decision_id,
         agent_id,
@@ -357,9 +384,11 @@ def append_evidence(
         matched_mandates,
         outcome,
         approval_outcome,
-        classify_risk(amount),
+        risk_classification,
         approver,
         previous_hash,
+        resource=resource,
+        currency=currency,
         principal_id=principal_id,
         principal_name=principal_name,
         authority_context=authority_context,
@@ -398,13 +427,15 @@ def submit_intent(
     db: Session,
     agent: Agent,
     action: str,
-    amount: float,
-    currency: str,
+    amount: float | None,
+    currency: str | None,
     counterparty: str | None,
     context: dict,
     requested_at: datetime,
     nonce: str,
     correlation_id: str | None,
+    resource: str | None = None,
+    source: str | None = None,
 ) -> tuple[Intent, Decision, Evidence]:
     # Phase 9 (AGENT_LIFECYCLE.md "Runtime Behaviour"): revoked and retired
     # agents are rejected before an Intent row even exists, no evidentiary
@@ -426,6 +457,8 @@ def submit_intent(
         amount=amount,
         currency=currency,
         counterparty=counterparty,
+        resource=resource,
+        source=normalize_source(source),
         context=context,
         nonce=nonce,
         requested_at=requested_at,
@@ -463,15 +496,34 @@ def submit_intent(
             [],
             decision.outcome,
             status=_evidence_status_for_outcome(decision.outcome),
+            resource=resource,
+            currency=currency,
         )
         db.commit()
         db.refresh(intent)
         db.refresh(decision)
         return intent, decision, evidence
 
+    # Domain Generalization Milestone: organization_id is needed here,
+    # before Runtime Truth's full resolution below (which also computes
+    # authority_context/principal_name we don't need yet for this
+    # check), purely to look up which actions this organization's own
+    # active policies already govern -- scope_vocabulary.is_recognized_
+    # scope's second, generic recognition path. A cheap, idempotent
+    # Principal lookup, re-done by runtime_truth_service.resolve just
+    # below for the real path; this codebase already tolerates the same
+    # small duplication elsewhere (e.g. _resolve_chain_scope).
+    _principal_for_scope_check = db.get(Principal, agent.acting_for_principal_id)
+    _organization_id_for_scope_check = (
+        _principal_for_scope_check.organization_id if _principal_for_scope_check else None
+    )
+    active_scope_actions = runtime_policy_service.list_active_scope_actions(
+        db, _organization_id_for_scope_check
+    )
+
     # spec 9.3/12.6: an unrecognized action is ambiguous, not explicitly
     # disallowed: HUMAN_REVIEW, never DENY, and OPA is never queried.
-    if not is_recognized_scope(action):
+    if not is_recognized_scope(action, active_scope_actions):
         decision = Decision(
             intent_id=intent.id,
             policy_id=None,
@@ -490,6 +542,8 @@ def submit_intent(
             [],
             decision.outcome,
             status=_evidence_status_for_outcome(decision.outcome),
+            resource=resource,
+            currency=currency,
         )
         db.commit()
         db.refresh(intent)
@@ -542,7 +596,15 @@ def submit_intent(
     enterprise_knowledge = {f.key: f.value for f in resolved_facts}
 
     engine_decision = decision_engine.evaluate(
-        intent={"action": action, "amount": amount, "currency": currency},
+        # Domain Generalization Milestone: `resource` joins the OPA
+        # input's `intent` dict -- previously never populated, so a
+        # RuntimePolicy authored with Scope.resource narrowing
+        # (rego_generator.py already emits `input.intent.resource ==
+        # ...` for one) could compile cleanly but never actually match
+        # any real Intent. None flows through unchanged when the
+        # caller supplied no resource, which correctly fails to match
+        # any resource-narrowed policy rather than silently matching.
+        intent={"action": action, "amount": amount, "currency": currency, "resource": resource},
         context={
             **context,
             "timestamp": to_utc_iso(requested_at),
@@ -611,6 +673,8 @@ def submit_intent(
         engine_decision.evaluated_mandates,
         decision.outcome,
         status=_evidence_status_for_outcome(decision.outcome),
+        resource=resource,
+        currency=currency,
         # Authority-as-a-continuous-object, Stage C: the exact Principal
         # and authority_context already resolved above (now via
         # runtime_truth_service.resolve) for the OPA query itself,
@@ -732,6 +796,120 @@ def list_pending_decisions_for_organization(
             DecisionResolution.id.is_(None),
         )
     )
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    stmt = base.order_by(Decision.created_at.desc()).limit(limit).offset(offset)
+    return list(db.scalars(stmt)), total
+
+
+def count_decisions_by_outcome(db: Session, organization_id: uuid.UUID | None) -> dict[str, int]:
+    """Product Experience Remediation Milestone 1 (Assurance): a real
+    server-side GROUP BY, replacing the previous frontend pattern of
+    fetching every Evidence record for the organization and counting
+    outcomes in the browser. Same org-scoping join every other
+    org-scoped decision query in this module already uses -- COUNT, not
+    a full row fetch, so this stays cheap regardless of how much
+    history an organization accumulates."""
+    rows = db.execute(
+        select(Decision.outcome, func.count())
+        .join(Intent, Decision.intent_id == Intent.id)
+        .join(Agent, Intent.agent_id == Agent.id)
+        .join(Principal, Agent.acting_for_principal_id == Principal.id)
+        .where(Principal.organization_id == organization_id)
+        .group_by(Decision.outcome)
+    ).all()
+    return {outcome: count for outcome, count in rows}
+
+
+def oldest_pending_review_at(db: Session, organization_id: uuid.UUID | None) -> datetime | None:
+    """The single oldest still-unresolved HUMAN_REVIEW decision's
+    timestamp -- the exact same query list_pending_decisions_for_
+    organization already runs, just ordered ascending and capped at one
+    row instead of a page, so this is a trivial variant, not a new
+    query shape."""
+    base = (
+        select(Decision.created_at)
+        .join(Intent, Decision.intent_id == Intent.id)
+        .join(Agent, Intent.agent_id == Agent.id)
+        .join(Principal, Agent.acting_for_principal_id == Principal.id)
+        .outerjoin(DecisionResolution, DecisionResolution.decision_id == Decision.id)
+        .where(
+            Principal.organization_id == organization_id,
+            Decision.outcome == "HUMAN_REVIEW",
+            DecisionResolution.id.is_(None),
+        )
+        .order_by(Decision.created_at.asc())
+        .limit(1)
+    )
+    return db.scalar(base)
+
+
+def count_resolved_reviews(db: Session, organization_id: uuid.UUID | None) -> int:
+    """Every HUMAN_REVIEW decision that now has a DecisionResolution row
+    -- the complement of the Pending Review queue's own filter, not a
+    new concept."""
+    return (
+        db.scalar(
+            select(func.count())
+            .select_from(Decision)
+            .join(Intent, Decision.intent_id == Intent.id)
+            .join(Agent, Intent.agent_id == Agent.id)
+            .join(Principal, Agent.acting_for_principal_id == Principal.id)
+            .join(DecisionResolution, DecisionResolution.decision_id == Decision.id)
+            .where(Principal.organization_id == organization_id, Decision.outcome == "HUMAN_REVIEW")
+        )
+        or 0
+    )
+
+
+def list_decision_history(
+    db: Session,
+    organization_id: uuid.UUID | None,
+    limit: int = 50,
+    offset: int = 0,
+    outcome: str | None = None,
+    agent_id: uuid.UUID | None = None,
+    action: str | None = None,
+    resource: str | None = None,
+    source: str | None = None,
+    created_after: datetime | None = None,
+    created_before: datetime | None = None,
+) -> tuple[list[Decision], int]:
+    """Product Experience Remediation Milestone 1 (Phase 3): the bounded,
+    organisation-scoped operational history query the future Decisions
+    page needs -- every outcome, not only HUMAN_REVIEW (the existing
+    list_pending_decisions_for_organization above stays exactly as-is,
+    unbroken, for the Pending Review queue's own distinct job). Same
+    Decision -> Intent -> Agent -> Principal join-at-SQL-level pattern,
+    generalized with optional filters applied only when the caller
+    actually supplies them -- never a universal query DSL, just the
+    fixed, named set of filters an operational history view genuinely
+    needs. Newest-first, same as the pending queue.
+
+    organization_id=None carries the same "real but unreachable to any
+    authenticated caller" scope every other org-scoped query in this
+    module already documents -- not a new convention."""
+    base = (
+        select(Decision)
+        .join(Intent, Decision.intent_id == Intent.id)
+        .join(Agent, Intent.agent_id == Agent.id)
+        .join(Principal, Agent.acting_for_principal_id == Principal.id)
+        .where(Principal.organization_id == organization_id)
+    )
+    if outcome is not None:
+        base = base.where(Decision.outcome == outcome)
+    if agent_id is not None:
+        base = base.where(Intent.agent_id == agent_id)
+    if action is not None:
+        base = base.where(Intent.action == action)
+    if resource is not None:
+        base = base.where(Intent.resource == resource)
+    if source is not None:
+        base = base.where(Intent.source == source)
+    if created_after is not None:
+        base = base.where(Decision.created_at >= created_after)
+    if created_before is not None:
+        base = base.where(Decision.created_at <= created_before)
+
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     stmt = base.order_by(Decision.created_at.desc()).limit(limit).offset(offset)
     return list(db.scalars(stmt)), total

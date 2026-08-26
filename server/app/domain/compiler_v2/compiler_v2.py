@@ -7,19 +7,28 @@ This module owns the two things DOMAIN_ABSTRACTION.md scoped as
 "adapter-owned": which action names are valid, and which condition
 field names are valid. It does so through an injectable Vocabulary
 rather than a hardcoded list, so the compiler itself stays
-domain-agnostic even though its one shipped default
-(FINANCIAL_VOCABULARY) is not. This is the concrete implementation of
+domain-agnostic. This is the concrete implementation of
 DOMAIN_REFACTOR_PLAN.md's item 2 and item 3.
+
+Domain Generalization Milestone: the default every caller silently
+inherits (every real call site omits this argument) is now
+GENERIC_VOCABULARY -- a bounded, explicitly-authored action
+enumeration that includes one proven non-financial action
+(`disable_user`) alongside the original three financial ones, not an
+unbounded "accept any string." FINANCIAL_VOCABULARY remains, unchanged
+and still finance-only, for a deployment that explicitly wants
+tighter validation.
 
 Field validation closes a real, previously silent gap: a condition
 authored against a typo'd or nonexistent field name
 (rego_generator.py's `_dot_path_access` compiles it into a plain Rego
 dot-path access) used to compile cleanly and simply never match at
-evaluation time, with no error anywhere. Direct against
-intent_service.py:507, the only place a real Intent dict is actually
-built, its shape is exactly `{"action", "amount", "currency"}` -- no
-`vendor`, no `memo`, nothing else -- so those are the only top-level
-fields this default vocabulary accepts.
+evaluation time, with no error anywhere. Direct against the real
+Intent dict intent_service.py builds for OPA, its top-level shape is
+exactly `{"action", "amount", "currency", "resource"}` -- no `vendor`,
+no `memo`, nothing else -- so those are the only top-level fields
+either shipped vocabulary accepts (anything else belongs under the
+always-valid `context.`/`enterprise_knowledge.` prefixes instead).
 """
 
 from dataclasses import dataclass
@@ -87,10 +96,14 @@ class FinancialVocabulary:
     silently drift apart."""
 
     known_actions: frozenset[str] = KNOWN_SCOPES
-    # Exactly intent_service.py:507's real intent dict shape -- see this
-    # module's own docstring for why. "context" is deliberately absent
-    # here: it's handled separately, as a prefix, not a top-level field.
-    known_intent_fields: frozenset[str] = frozenset({"action", "amount", "currency"})
+    # Domain Generalization Milestone: `resource` added alongside
+    # action/amount/currency -- it is a universal Intent field
+    # (db/models.py's Intent.resource) regardless of which vocabulary
+    # gates the *action* set, so a finance-only deployment can still
+    # author a resource-scoped condition. "context" is deliberately
+    # absent here: it's handled separately, as a prefix, not a
+    # top-level field.
+    known_intent_fields: frozenset[str] = frozenset({"action", "amount", "currency", "resource"})
 
     def is_valid_action(self, action: str) -> bool:
         return action in self.known_actions
@@ -103,6 +116,47 @@ class FinancialVocabulary:
 
 
 FINANCIAL_VOCABULARY = FinancialVocabulary()
+
+
+# Domain Generalization Milestone: the first non-financial action this
+# platform has explicitly authored real policy/demo support for --
+# proof that KNOWN_SCOPES' own documented extension mechanism ("a
+# schema change, not a runtime configuration change") generalizes past
+# payments. Kept as its own named constant, never merged into
+# KNOWN_SCOPES itself, so FinancialVocabulary (finance-only, by design,
+# for a deployment that wants tighter validation) is completely
+# unaffected by this addition.
+GENERALIZATION_PROOF_SCOPES = frozenset({"disable_user"})
+
+
+@dataclass(frozen=True)
+class GenericVocabulary:
+    """The domain-agnostic default (Domain Generalization Milestone):
+    a deliberately bounded, explicitly-authored action enumeration --
+    not "any string" -- so a genuinely typo'd or unauthored action name
+    still fails to compile (test_unrecognized_action_is_rejected), while
+    a real, intentionally-authored non-financial action (disable_user)
+    compiles cleanly without requiring FinancialVocabulary's finance-only
+    restriction as the silent default every caller previously inherited.
+    `resource` joins the known top-level intent fields here, matching
+    Intent's own new column (db/models.py) and Scope.resource's existing
+    Rego support (rego_generator.py) -- this was the one universal field
+    the original FinancialVocabulary's known_intent_fields omitted."""
+
+    known_actions: frozenset[str] = KNOWN_SCOPES | GENERALIZATION_PROOF_SCOPES
+    known_intent_fields: frozenset[str] = frozenset({"action", "amount", "currency", "resource"})
+
+    def is_valid_action(self, action: str) -> bool:
+        return action in self.known_actions
+
+    def is_valid_field(self, field: str) -> bool:
+        if field.startswith(_CONTEXT_FIELD_PREFIX) or field.startswith(_ENTERPRISE_KNOWLEDGE_FIELD_PREFIX):
+            return True
+        top_level = field.split(".", 1)[0]
+        return top_level in self.known_intent_fields
+
+
+GENERIC_VOCABULARY = GenericVocabulary()
 
 
 @dataclass(frozen=True)
@@ -222,7 +276,7 @@ def compile_bundle(
     policies: list[RuntimePolicy],
     bundle_id: str,
     bundle_version: int,
-    vocabulary: Vocabulary = FINANCIAL_VOCABULARY,
+    vocabulary: Vocabulary = GENERIC_VOCABULARY,
     now: datetime | None = None,
 ) -> CompileResult:
     """The only entry point this package expects callers to use. Always

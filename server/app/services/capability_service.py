@@ -72,15 +72,31 @@ def issue_capability_for_decision(
     )
     payload = earliest_evidence.payload if earliest_evidence else {}
     principal_name = payload.get("principal_name") or ""
-    # Intent has no dedicated `resource` column (Scope.resource is a
-    # RuntimePolicy authoring concept, not something an Intent carries
-    # today) -- the correlation_id, when the caller supplied one, is the
-    # closest real, caller-specified identifier of "which real-world
-    # object this action concerns"; falling back to the Intent's own row
-    # id keeps the bound resource concrete and specific either way,
-    # never a category.
-    resource = intent.correlation_id or str(intent.id)
-    constraints = {"amount": str(intent.amount), "currency": intent.currency}
+    # Domain Generalization Milestone: Intent.resource (db/models.py) is
+    # now the real, generic identifier of "which real-world object this
+    # action concerns" -- falling back to correlation_id, then the
+    # Intent's own row id, only for an older/non-financial-unaware
+    # caller that never supplied one, so the bound resource is always
+    # concrete and specific either way, never a category.
+    resource = intent.resource or intent.correlation_id or str(intent.id)
+    # Domain Generalization Milestone: constraints bind whichever
+    # execution parameters this decision actually carried, generically
+    # -- amount/currency when the action was financial, plus the
+    # Intent's own evaluated context (the exact parameters the decision
+    # was checked against, so a replayed token can't be presented
+    # against substituted parameters), rather than hardcoding amount/
+    # currency onto every capability regardless of action. `metadata` is
+    # excluded: it's the SDK's own free-form caller-supplied bag, not a
+    # parameter Runtime Authority actually evaluated.
+    constraints: dict[str, str] = {}
+    if intent.amount is not None:
+        constraints["amount"] = str(intent.amount)
+    if intent.currency is not None:
+        constraints["currency"] = intent.currency
+    for key, value in (intent.context or {}).items():
+        if key == "metadata":
+            continue
+        constraints[key] = str(value)
     fact_hashes = [
         capability_token.token_hash(str(f)) for f in payload.get("facts_evaluated", [])
     ]

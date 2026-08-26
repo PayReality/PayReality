@@ -16,8 +16,8 @@ agent.register(name="AP Automation Bot", principal="Finance Manager")
 
 decision = agent.authorize(
     principal="Finance Manager",
-    operation="Approve",
-    resource="Vendor Payment",
+    operation="vendor_payment",
+    resource="invoice:INV-58211",
     resource_data={
         "amount": 85000,
         "vendor": "ABC Ltd",
