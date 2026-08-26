@@ -397,6 +397,36 @@ def test_decision_detail_status_and_resolution_reflect_human_review_lifecycle(db
     assert resolved_response.correlation_id == "JOB-983421"
 
 
+def test_decision_detail_status_and_resolution_reflect_a_denial(db, opa_url):
+    """Same lifecycle, the denial path: issue #10's acceptance criteria
+    require this proven separately from approval -- nothing in the
+    resolved response may imply the underlying action can proceed."""
+    org, principal = _org_and_principal(db)
+    agent = _agent_for(db, principal)
+    _deploy_policy(
+        db, org.id, opa_url,
+        scope=Scope(principal="alice", action="disable_user", resource="account:USR-829"),
+        effect=Effect.REQUIRE_HUMAN_REVIEW,
+    )
+    _, decision, _ = _submit_human_review(db, agent)
+    assert _build_decision_response(db, decision).status == "PENDING"
+
+    resolution_service.resolve_decision(
+        db, decision_id=decision.id, organization_id=org.id,
+        resolution="denied", resolved_by="Jane Smith", reason="Budget exceeded.",
+    )
+
+    resolved_response = _build_decision_response(db, decision)
+    assert resolved_response.status == "RESOLVED"
+    assert resolved_response.resolution.resolution == "denied"
+    assert resolved_response.resolution.resolved_by == "Jane Smith"
+    assert resolved_response.resolution.reason == "Budget exceeded."
+    # outcome is never rewritten to DENY -- it stays the original
+    # HUMAN_REVIEW outcome; only resolution.resolution carries the
+    # human's final answer, exactly as it does for an approval.
+    assert decision.outcome == "HUMAN_REVIEW"
+
+
 def test_resolve_decision_rejects_a_duplicate_resolution(db, opa_url):
     org, principal = _org_and_principal(db)
     agent = _agent_for(db, principal)
