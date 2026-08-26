@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, CSSProperties } from "react";
+import { forwardRef, type ButtonHTMLAttributes, type CSSProperties } from "react";
 import { cn } from "./utils";
 
 type ButtonVariant = "primary" | "danger" | "ghost" | "tint-success" | "tint-danger";
@@ -29,22 +29,23 @@ const SIZE_CLASS: Record<ButtonSize, string> = {
  * primary/danger button falls back to the same "muted, looks inert"
  * bg-hover/text-muted pair every call site already re-implemented by hand
  * (e.g. the Publish button before a policy has compiled).
+ *
+ * Final Product Polish: React.forwardRef -- this project targets React 18
+ * (no automatic ref-as-prop; see sheet.tsx's own fix for the same class of
+ * bug), and a caller managing focus (e.g. returning focus to the button
+ * that opened a now-closed drawer) needs a real DOM ref to focus.
  */
-export function Button({
-  variant = "primary",
-  size = "md",
-  pending,
-  className,
-  style,
-  disabled,
-  ...rest
-}: ButtonProps) {
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
+  { variant = "primary", size = "md", pending, className, style, disabled, ...rest },
+  ref
+) {
   const disabledStyle: CSSProperties =
     disabled && (variant === "primary" || variant === "danger")
       ? { backgroundColor: "var(--pr-bg-hover)", color: "var(--pr-text-muted)" }
       : {};
   return (
     <button
+      ref={ref}
       className={cn(variant !== "ghost" && SIZE_CLASS[size], className)}
       disabled={disabled}
       style={{
@@ -56,4 +57,4 @@ export function Button({
       {...rest}
     />
   );
-}
+});

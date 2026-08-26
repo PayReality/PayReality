@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router";
 import {
   Bot,
@@ -12,7 +12,7 @@ import {
   Settings,
   LogOut,
 } from "lucide-react";
-import { Sheet, SheetContent, SheetTitle } from "./ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
 import { useIsMobile } from "./ui/use-mobile";
 import { OperatorKeyField } from "../live/components/OperatorKeyField";
 import { useAuth } from "../auth/AuthContext";
@@ -224,6 +224,15 @@ function LayoutInner() {
   const location = useLocation();
   const isMobile = useIsMobile();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Final Product Polish (found via real keyboard/focus QA): Radix's
+  // default open-autofocus landed on the Operator Key input -- the
+  // first form control after the nav links in the sidebar's own DOM
+  // order, not the first meaningful destination -- and close-autofocus
+  // landed on <body> instead of back on the button that opened the
+  // drawer. Both are now explicit rather than left to the default,
+  // regardless of why the default picked those targets.
+  const navDrawerContentRef = useRef<HTMLDivElement>(null);
+  const navDrawerTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setDrawerOpen(false);
@@ -257,14 +266,26 @@ function LayoutInner() {
       {isMobile && (
         <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
           <SheetContent
+            ref={navDrawerContentRef}
             side="left"
             className="w-[260px] max-w-[80vw] flex flex-col p-0 gap-0 border-r"
             style={{
               backgroundColor: "var(--pr-bg-secondary)",
               borderColor: "var(--pr-overlay-05)",
             }}
+            onOpenAutoFocus={(e) => {
+              e.preventDefault();
+              navDrawerContentRef.current?.querySelector<HTMLElement>("nav a[href]")?.focus();
+            }}
+            onCloseAutoFocus={(e) => {
+              e.preventDefault();
+              navDrawerTriggerRef.current?.focus();
+            }}
           >
             <SheetTitle className="sr-only">Navigation</SheetTitle>
+            <SheetDescription className="sr-only">
+              Jump to another section of PayReality.
+            </SheetDescription>
             <SidebarBody onNavigate={() => setDrawerOpen(false)} />
           </SheetContent>
         </Sheet>
@@ -282,6 +303,7 @@ function LayoutInner() {
             }}
           >
             <button
+              ref={navDrawerTriggerRef}
               type="button"
               onClick={() => setDrawerOpen(true)}
               aria-label="Open navigation"

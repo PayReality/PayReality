@@ -80,6 +80,20 @@ describe("describeReason", () => {
   it("humanizes rather than drops an unrecognized reason code", () => {
     expect(describeReason("some_future_code")).toBe("Some future code");
   });
+
+  // Visual Experience V2 (found via real browser QA on Decision Detail):
+  // a real backend reason code is always a single snake_case/UPPER_SNAKE
+  // token with no space -- formatStatus's lowercase-then-capitalize-first
+  // is only valid for that shape. This demo's own fixtures put full,
+  // already-proper-cased sentences in this same field for some decisions
+  // ("Within David Okonkwo's delegated $50,000 Treasury spending
+  // limit..."), which used to run through formatStatus and render as
+  // "within david okonkwo's delegated $50,000 treasury spending limit"
+  // -- every proper noun silently lowercased.
+  it("returns an already-prose reason verbatim instead of lowercasing it", () => {
+    const prose = "Within David Okonkwo's delegated $50,000 Treasury spending limit for supplier payments.";
+    expect(describeReason(prose)).toBe(prose);
+  });
 });
 
 describe("describeExplanationUnavailable", () => {
@@ -103,7 +117,9 @@ describe("describeConditionBusiness", () => {
       actual_value: 1200,
       passed: true,
     });
-    expect(message).toBe("Payment amount ($1,200) is within the allowed limit of $5,000.");
+    // Domain Generalization Milestone: "Amount", not "Payment amount"
+    // -- this field applies to any action with a numeric amount.
+    expect(message).toBe("Amount ($1,200) is within the allowed limit of $5,000.");
   });
 
   it("phrases a failed amount <= condition as exceeding the limit, not matching it", () => {
@@ -126,7 +142,7 @@ describe("describeConditionBusiness", () => {
       actual_value: 500,
       passed: true,
     });
-    expect(message).toBe("Payment amount ($500) meets the required minimum of $100.");
+    expect(message).toBe("Amount ($500) meets the required minimum of $100.");
   });
 
   it("phrases a failed amount >= condition as below the minimum", () => {

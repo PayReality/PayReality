@@ -83,6 +83,17 @@ export function describeReason(reason: string | null | undefined): string | null
   if (!reason) return null;
   if (REASON_SENTENCE[reason]) return REASON_SENTENCE[reason];
   if (reason.startsWith("opa_error")) return "The policy check itself hit an error, so this was sent to a human to decide.";
+  // Visual Experience V2 (found via browser QA): a real backend reason
+  // code is always a single snake_case/UPPER_SNAKE token, never
+  // containing a space -- formatStatus's lowercase-then-capitalize-first
+  // is only valid for that shape. This demo's own fixtures put full,
+  // already-proper-cased sentences in this same field for some decisions
+  // (e.g. "Within David Okonkwo's delegated $50,000 Treasury spending
+  // limit..."), which ran through formatStatus and rendered as
+  // "within david okonkwo's delegated $50,000 treasury spending limit"
+  // -- every proper noun silently lowercased. Prose (has a space) is
+  // returned verbatim; only a genuine single-token code gets humanized.
+  if (reason.includes(" ")) return reason;
   // Unknown code: fall back to a humanized version rather than the raw token.
   return formatStatus(reason);
 }
@@ -119,8 +130,12 @@ export function describeExplanationUnavailable(reason: string | null | undefined
 // keeps its raw name verbatim rather than an invented label -- "if a
 // condition cannot safely be translated, keep it honest," not silently
 // papered over.
+// Domain Generalization Milestone: "Amount" (not "Payment amount") --
+// this field applies to any action with a numeric amount, not only a
+// financial one, even though $-formatting below remains the one
+// heuristic this vocabulary is confident enough to apply by default.
 const CONDITION_FIELD_LABELS: Record<string, string> = {
-  amount: "Payment amount",
+  amount: "Amount",
 };
 
 const OPERATOR_PHRASES: Record<string, string> = {

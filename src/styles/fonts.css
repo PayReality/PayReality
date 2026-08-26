@@ -1,1 +1,8 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+/* Visual Experience V2: this @import duplicated index.html's own
+   <link rel="stylesheet"> to the identical Google Fonts URL (union of
+   weights kept there) -- two requests for the same stylesheet, and a
+   CSS @import inside a bundled <style> block resolves later than a
+   <head> <link> paired with the existing rel="preconnect" hints. Kept
+   as an empty file (not deleted) since index.css's own import order
+   still names it, and this stays the one place a font stylesheet
+   import would go if one is ever needed here again. */

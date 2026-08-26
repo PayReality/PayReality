@@ -59,6 +59,33 @@
   --font-weight-medium: 500;
   --font-weight-normal: 400;
   --radius: 0.625rem;
+
+  /* Visual Experience V2: a card and its page background sat only a
+     hairline border apart (bg-card #FFFFFF on bg-primary #F6F8FB in
+     light theme, similarly close in dark) -- real browser QA showed
+     this reads as flat, the exact "generic admin template" feel the
+     brief asked to move away from. One restrained shadow scale, reused
+     everywhere a surface needs to read as raised rather than a second
+     flat rectangle drawn on top of the first -- not a redesign, a
+     depth cue every primary Card already implicitly wanted. This is
+     the dark theme's own value (this block is the dark/default
+     context, same as every other token above); a black box-shadow
+     barely registers against an already near-black background, so
+     elevation here reads instead as a faint lightening of the card's
+     own top edge -- the same "raised surface" cue, expressed the way
+     it actually needs to on a dark ground. See [data-theme="light"]
+     below for the light theme's own (visibly darker) shadow values. */
+  --pr-shadow-sm: 0 1px 2px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.02);
+  --pr-shadow-card: 0 1px 2px rgba(0,0,0,0.2), 0 4px 16px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.03);
+  --pr-shadow-raised: 0 8px 28px rgba(0,0,0,0.35), 0 16px 48px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.04);
+
+  /* A small, deliberate motion scale (section 7/28: "establish a small
+     motion scale," not arbitrary durations everywhere). Every new
+     transition this milestone adds reads from these three steps. */
+  --pr-motion-fast: 120ms;
+  --pr-motion-base: 180ms;
+  --pr-motion-slow: 240ms;
+  --pr-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* Light theme, toggled via <html data-theme="light">. Brand/semantic
@@ -90,6 +117,10 @@
   --pr-overlay-12: rgba(15,26,46,0.14);
   --pr-input-bg: rgba(15,26,46,0.04);
   --pr-backdrop: rgba(15,26,46,0.4);
+
+  --pr-shadow-sm: 0 1px 2px rgba(15,23,42,0.06);
+  --pr-shadow-card: 0 1px 2px rgba(15,23,42,0.05), 0 4px 14px rgba(15,23,42,0.07);
+  --pr-shadow-raised: 0 8px 24px rgba(15,23,42,0.1), 0 16px 40px rgba(15,23,42,0.1);
 }
 
 /* Phase 6, Release 1: the shadcn-default `.dark` block (a full parallel
@@ -246,9 +277,44 @@
   top: 8px;
 }
 
+/* Visual Experience V2: every metric/count display in the app already
+   converges on this exact class pairing (text-xl/text-2xl +
+   font-semibold) as its de facto "this is a number that matters"
+   convention -- Overview's status strip, Assurance's metric cards,
+   Agents' total count. Tabular figures so a value changing next to its
+   own label (or a column of them) doesn't visibly shift width digit by
+   digit; a one-line global rule instead of touching every call site. */
+.text-xl.font-semibold,
+.text-2xl.font-semibold {
+  font-variant-numeric: tabular-nums;
+}
+
 .pr-skeleton {
   background-color: var(--pr-overlay-06);
   animation: pr-skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+/* Visual Experience V2, section 7/10A: a restrained entrance for
+   content that just resolved from a loading state -- Decision Detail's
+   narrative sections, specifically. Communicates "this just became
+   real," never a decorative loop; the existing reduced-motion
+   catch-all below already collapses this to 0.01ms, so it needs no
+   separate handling. `--pr-enter-delay` lets a caller stagger a small
+   sequence of sections without a second animation name per step. */
+.pr-enter {
+  animation: pr-enter var(--pr-motion-slow) var(--pr-motion-ease) both;
+  animation-delay: var(--pr-enter-delay, 0ms);
+}
+
+@keyframes pr-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes pr-skeleton-pulse {
@@ -259,6 +325,24 @@
 @media (prefers-reduced-motion: reduce) {
   .pr-skeleton {
     animation: none;
+  }
+
+  /* Product Experience Remediation Milestone 1: a global catch-all.
+     The skeleton rule above predates this and only ever covered its
+     own animation; every other motion in the app (Sheet/dialog
+     slide-and-fade via tailwindcss-animate's data-state classes,
+     hover/focus transitions, the sidebar's transitions) had no
+     reduced-motion handling at all until this rule. `!important` is
+     deliberate here -- this must win over every component's own
+     inline/utility transition declaration, not just the ones authored
+     with reduced-motion in mind. */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

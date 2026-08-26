@@ -23,6 +23,12 @@ export function Card({
     border: `1px solid ${borderColor}`,
     borderRadius: radius,
     padding,
+    // Visual Experience V2: a restrained depth cue (theme.css's
+    // --pr-shadow-card) so a card reads as a raised surface against the
+    // page background, not a second flat rectangle sharing its border
+    // color. `boxShadow` in `style` (a caller passing its own, or "none")
+    // still wins via the spread below -- this is a default, not a floor.
+    boxShadow: "var(--pr-shadow-card)",
     ...style,
   };
   return (
