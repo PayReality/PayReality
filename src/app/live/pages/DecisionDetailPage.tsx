@@ -191,7 +191,16 @@ export function DecisionDetailPage() {
     <div className="p-8 max-w-4xl mx-auto" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
       <div className="flex items-center justify-between gap-3 mb-4">
         <Link to="/decisions" style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>&lt; Back to Decisions</Link>
-        <span style={{ fontSize: 11, color: "var(--pr-text-disabled)", fontFamily: "monospace" }}>{decision.id}</span>
+        <div className="flex items-center gap-3">
+          {/* Issue #4 (Authorization Receipts): the stable, named
+              artifact assembling this decision's own evidence + policy
+              binding for an auditor -- a separate page, not more detail
+              crammed into this one. */}
+          <Link to={`/decisions/${decision.id}/receipt`} style={{ color: "var(--pr-authority-blue)", fontSize: 13, fontWeight: 500 }}>
+            View Authorization Receipt &rarr;
+          </Link>
+          <span style={{ fontSize: 11, color: "var(--pr-text-disabled)", fontFamily: "monospace" }}>{decision.id}</span>
+        </div>
       </div>
 
       {/* DECISION: the conclusion, first. */}

@@ -187,6 +187,101 @@ export interface LiveDecision {
   capability: CapabilitySummary | null;
 }
 
+// Issue #4 (Authorization Receipts), GET /v1/decisions/{id}/receipt: a
+// stable, named projection assembling data that already exists
+// (Decision/Intent/Evidence/Historical Policy Binding, + Trusted
+// Enterprise Facts/human review/Capability Authorization where they
+// apply) -- not a second Evidence system, not Capability Authorization
+// itself (see AuthorizationReceiptPage.tsx for the distinction).
+export interface ReceiptDecisionSummary {
+  decision_id: string;
+  outcome: DecisionOutcome;
+  created_at: string;
+  source: string | null;
+}
+
+export interface ReceiptActorSummary {
+  agent_id: string;
+  agent_name: string | null;
+  principal_id: string | null;
+  principal_name: string | null;
+}
+
+export interface ReceiptRequestSummary {
+  action: string;
+  resource: string | null;
+  amount: number | null;
+  currency: string | null;
+  context: Record<string, unknown>;
+}
+
+export interface ReceiptPolicyManifestEntry {
+  id: string;
+  name: string;
+  version: number;
+  effect: string;
+  scope: Record<string, unknown>;
+}
+
+export interface ReceiptAuthoritySummary {
+  policy_id: string | null;
+  bundle_hash: string | null;
+  bundle_version: number | null;
+  compiled_at: string | null;
+  activated_at: string | null;
+  retired_at: string | null;
+  authority_version: string | null;
+  policies: ReceiptPolicyManifestEntry[];
+}
+
+export interface ReceiptFactEntry {
+  key: string;
+  value: unknown;
+  subject: string | null;
+  source_id: string | null;
+  observed_at: string | null;
+  expires_at: string | null;
+}
+
+export interface ReceiptHumanReviewSummary {
+  resolution: "approved" | "denied";
+  resolved_by: string;
+  reason: string | null;
+  resolved_at: string;
+}
+
+export interface ReceiptEvidenceSummary {
+  evidence_id: string;
+  key_id: string;
+  signature: string;
+  previous_hash: string | null;
+  payload_hash: string;
+  status: "VERIFIED" | "PENDING" | "REJECTED";
+  created_at: string;
+}
+
+export interface ReceiptVerification {
+  signature_valid: boolean;
+  key_id: string;
+  algorithm: string;
+  verified_at: string;
+}
+
+export interface AuthorizationReceipt {
+  receipt_id: string;
+  evidence_id: string;
+  generated_at: string;
+  decision: ReceiptDecisionSummary;
+  actor: ReceiptActorSummary;
+  request: ReceiptRequestSummary;
+  authority: ReceiptAuthoritySummary;
+  facts: ReceiptFactEntry[];
+  human_review: ReceiptHumanReviewSummary | null;
+  capability: CapabilitySummary | null;
+  evidence: ReceiptEvidenceSummary;
+  verification: ReceiptVerification;
+}
+
 // Pending Review queue (GET /v1/decisions): every HUMAN_REVIEW decision
 // in this organization not yet resolved. Matches AgentListResponse's
 // pagination envelope shape (schemas/agent.py), not a new convention.

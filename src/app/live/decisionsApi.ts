@@ -1,5 +1,5 @@
 import { apiClient } from "./apiClient";
-import type { DecisionHistoryFilters, DecisionHistoryResponse, LiveDecision } from "./types";
+import type { AuthorizationReceipt, DecisionHistoryFilters, DecisionHistoryResponse, LiveDecision } from "./types";
 
 const BASE = "/v1/decisions";
 
@@ -21,4 +21,8 @@ export const decisionsApi = {
   history: (filters: DecisionHistoryFilters = {}) =>
     apiClient.get<DecisionHistoryResponse>(`${BASE}/history${query(filters)}`),
   get: (decisionId: string) => apiClient.get<LiveDecision>(`${BASE}/${decisionId}`),
+  // Issue #4 (Authorization Receipts): a stable, named, read-only
+  // artifact assembling this decision's own Evidence + Historical
+  // Policy Binding -- computed fresh on every request, never cached.
+  getReceipt: (decisionId: string) => apiClient.get<AuthorizationReceipt>(`${BASE}/${decisionId}/receipt`),
 };

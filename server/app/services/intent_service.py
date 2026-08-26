@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db.models import (
     Agent,
+    CapabilityToken,
     Certificate,
     Decision,
     DecisionResolution,
@@ -927,4 +928,35 @@ def list_evidence_for_agent(db: Session, agent_id: uuid.UUID, limit: int = 20) -
             .order_by(Evidence.created_at.desc())
             .limit(limit)
         )
+    )
+
+
+def get_earliest_evidence_for_decision(db: Session, decision_id: uuid.UUID) -> Evidence | None:
+    """The decision-time Evidence record -- the one created atomically
+    with the Decision itself (submit_intent commits both in the same
+    transaction), as opposed to a later record a HUMAN_REVIEW resolution
+    might append. This is where policy_version/policy_bundle_hash/
+    authority_version/principal_name/facts_evaluated were pinned; every
+    reader of that historical pin (routers/intents.py's
+    _build_decision_response, authorization_receipt_service) uses this
+    exact lookup rather than each re-deriving its own."""
+    return (
+        db.query(Evidence)
+        .filter(Evidence.decision_id == decision_id)
+        .order_by(Evidence.created_at.asc(), Evidence.id.asc())
+        .first()
+    )
+
+
+def get_latest_capability_for_decision(db: Session, decision_id: uuid.UUID) -> CapabilityToken | None:
+    """The most recently issued Capability Authorization for this
+    decision, if issuance was ever retried -- the same "most recent one"
+    lookup routers/intents.py's _build_decision_response already
+    performs, factored out so authorization_receipt_service can reuse it
+    without duplicating the query."""
+    return db.scalar(
+        select(CapabilityToken)
+        .where(CapabilityToken.decision_id == decision_id)
+        .order_by(CapabilityToken.issued_at.desc())
+        .limit(1)
     )

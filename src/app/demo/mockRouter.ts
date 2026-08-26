@@ -692,6 +692,81 @@ on("GET", "/v1/decisions/:id/explanation", ({ params }) => {
     rules,
   };
 });
+// Issue #4 (Authorization Receipts): the demo's own read-only projection
+// over the same fixture data GET /v1/decisions/:id and /explanation
+// already expose -- not a second data source, just a different named
+// view of it, matching the real backend's own "assembly, not new
+// storage" scope for this endpoint.
+on("GET", "/v1/decisions/:id/receipt", ({ params }) => {
+  const decision = findLiveDecision(params.id) ?? notFound("decision");
+  const evidenceRecord = findLiveEvidenceByDecision(params.id);
+  if (!evidenceRecord) notFound("receipt");
+  const agent = findAnyDemoAgent(decision.agent_id);
+  const causalPolicy = decision.evaluated_mandates.map(findDemoPolicy).find((p): p is NonNullable<typeof p> => !!p);
+  const policies = decision.evaluated_mandates
+    .map(findDemoPolicy)
+    .filter((p): p is NonNullable<typeof p> => !!p)
+    .map((p) => ({ id: p.policy_key, name: p.name, version: p.version, effect: p.effect, scope: p.scope }));
+  return {
+    receipt_id: evidenceRecord.evidence_id,
+    evidence_id: evidenceRecord.evidence_id,
+    generated_at: new Date().toISOString(),
+    decision: {
+      decision_id: decision.id,
+      outcome: decision.outcome,
+      created_at: decision.created_at,
+      source: decision.source,
+    },
+    actor: {
+      agent_id: decision.agent_id,
+      agent_name: agent?.name ?? null,
+      principal_id: evidenceRecord.payload.principal_id ?? null,
+      principal_name: decision.principal_name,
+    },
+    request: {
+      action: decision.action,
+      resource: decision.resource,
+      amount: decision.amount,
+      currency: decision.currency,
+      context: {},
+    },
+    authority: {
+      policy_id: causalPolicy?.policy_key ?? null,
+      bundle_hash: decision.policy_bundle_hash ?? causalPolicy?.bundle_hash ?? null,
+      bundle_version: decision.policy_version ?? causalPolicy?.version ?? null,
+      compiled_at: agoMs(60 * DAY),
+      activated_at: agoMs(30 * DAY),
+      retired_at: null,
+      authority_version: decision.authority_version,
+      policies,
+    },
+    facts: decision.facts_evaluated ?? [],
+    human_review: decision.resolution
+      ? {
+          resolution: decision.resolution.resolution,
+          resolved_by: decision.resolution.resolved_by,
+          reason: decision.resolution.reason,
+          resolved_at: decision.resolution.created_at,
+        }
+      : null,
+    capability: decision.capability,
+    evidence: {
+      evidence_id: evidenceRecord.evidence_id,
+      key_id: evidenceRecord.key_id,
+      signature: evidenceRecord.signature,
+      previous_hash: evidenceRecord.payload.previous_hash,
+      payload_hash: `sha256:demo${evidenceRecord.evidence_id.replace(/[^a-z0-9]/gi, "")}`,
+      status: evidenceRecord.status,
+      created_at: evidenceRecord.created_at,
+    },
+    verification: {
+      signature_valid: true,
+      key_id: evidenceRecord.key_id,
+      algorithm: "ed25519",
+      verified_at: new Date().toISOString(),
+    },
+  };
+});
 on("POST", "/v1/intents", () => {
   ensureLiveFeedStarted();
   const decision = findLiveDecision(DECISION_HERO_ALLOW)!;

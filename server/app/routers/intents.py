@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db.models import (
     Agent,
-    CapabilityToken,
     DecisionResolution,
     EnterpriseSystem,
     Evidence,
@@ -27,6 +26,7 @@ from app.dependencies import (
 )
 from app.domain.auth.signature import check_timestamp_window
 from app.domain.rbac.permissions import Permission
+from app.schemas.authorization_receipt import AuthorizationReceiptResponse
 from app.schemas.intent import (
     CapabilitySummary,
     DecisionExplanationResponse,
@@ -45,7 +45,13 @@ from app.schemas.intent import (
     SubmitIntentResponse,
 )
 from app.schemas.policy_simulation import ConditionEvaluationResponse, RuleEvaluationResponse
-from app.services import decision_explanation_service, intent_service, resolution_service, runtime_policy_service
+from app.services import (
+    authorization_receipt_service,
+    decision_explanation_service,
+    intent_service,
+    resolution_service,
+    runtime_policy_service,
+)
 from app.services.intent_service import (
     AgentNotOperationalError,
     AgentRetiredError,
@@ -283,12 +289,7 @@ def _build_decision_response(db: Session, decision) -> GetDecisionResponse:
     # they're read from there rather than recomputed. None of the three
     # queries below are new persistence; they read what submit_intent
     # already wrote.
-    earliest_evidence = (
-        db.query(Evidence)
-        .filter(Evidence.decision_id == decision.id)
-        .order_by(Evidence.created_at.asc(), Evidence.id.asc())
-        .first()
-    )
+    earliest_evidence = intent_service.get_earliest_evidence_for_decision(db, decision.id)
     evidence_payload = earliest_evidence.payload if earliest_evidence is not None else {}
 
     # Product Experience Remediation Milestone 1 (Decision Detail
@@ -319,12 +320,7 @@ def _build_decision_response(db: Session, decision) -> GetDecisionResponse:
     # a capability can only ever be issued for this exact decision's
     # own action/resource -- not a second, independently-fabricated
     # value.
-    capability_row = db.scalar(
-        select(CapabilityToken)
-        .where(CapabilityToken.decision_id == decision.id)
-        .order_by(CapabilityToken.issued_at.desc())
-        .limit(1)
-    )
+    capability_row = intent_service.get_latest_capability_for_decision(db, decision.id)
     capability = None
     if capability_row is not None:
         capability = CapabilitySummary(
@@ -457,6 +453,38 @@ def get_decision_policy_binding(
         retired_at=policy.retired_at,
         policies=[PolicyManifestEntry(**p) for p in manifest.get("policies", [])],
     )
+
+
+@router.get(
+    "/decisions/{decision_id}/receipt",
+    response_model=AuthorizationReceiptResponse,
+    dependencies=[Depends(require_permission(Permission.EVIDENCE_VIEW))],
+)
+def get_authorization_receipt(
+    decision_id: UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    """Issue #4 (Authorization Receipts): the stable, named artifact
+    assembling Decision + Intent + Evidence + Historical Policy Binding
+    (+ Trusted Enterprise Facts / human review / Capability Authorization
+    where they apply) into one auditor-facing view. Gated by
+    Permission.EVIDENCE_VIEW -- a receipt's defining content is the
+    cryptographic Evidence record it proves, the same gate every other
+    evidence-related read in this codebase already uses (a role with
+    DECISIONS_VIEW but not EVIDENCE_VIEW, e.g. Reviewer, sees the
+    decision but not its evidentiary proof). Org-scoped and 404-shaped
+    identically to GET /v1/decisions/{id}: see
+    authorization_receipt_service.get_authorization_receipt's own
+    docstring."""
+    try:
+        return authorization_receipt_service.get_authorization_receipt(db, decision_id, organization.id)
+    except intent_service.DecisionNotFoundError:
+        raise HTTPException(status_code=404, detail="decision_not_found")
+    except intent_service.CrossOrganizationAccessError:
+        raise HTTPException(status_code=404, detail="decision_not_found")
+    except authorization_receipt_service.ReceiptNotAvailableError:
+        raise HTTPException(status_code=404, detail="receipt_not_available")
 
 
 def _rule_to_response(r) -> RuleEvaluationResponse:

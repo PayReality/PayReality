@@ -55,5 +55,9 @@ describe("DecisionDetailPage (demo mode)", () => {
     expect(container.textContent).toContain("Policy");
     expect(container.textContent).toContain("Capability authorization");
     expect(container.textContent).toContain("Evidence");
+
+    // Issue #4 (Authorization Receipts): reachable from Decision Detail.
+    const receiptLink = container.querySelector(`a[href="/decisions/${DECISION_HERO_ALLOW}/receipt"]`);
+    expect(receiptLink).not.toBeNull();
   });
 });

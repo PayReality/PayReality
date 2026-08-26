@@ -115,6 +115,11 @@ export const router = createBrowserRouter([
           // full causal detail lives at its own route, below.
           { path: "decisions", lazy: () => import("./live/pages/DecisionHistoryPage").then((m) => ({ Component: m.DecisionHistoryPage })) },
           { path: "decisions/:decisionId", lazy: () => import("./live/pages/DecisionDetailPage").then((m) => ({ Component: m.DecisionDetailPage })) },
+          // Issue #4 (Authorization Receipts): the stable, named artifact
+          // reachable from Decision Detail -- a separate route (not a
+          // section on that page) since it's a distinct, auditor-facing
+          // document, not more causal explanation.
+          { path: "decisions/:decisionId/receipt", lazy: () => import("./live/pages/AuthorizationReceiptPage").then((m) => ({ Component: m.AuthorizationReceiptPage })) },
           // The Pending Review queue (GET /v1/decisions): every
           // HUMAN_REVIEW decision in the organization not yet resolved,
           // across every agent -- previously undiscoverable without an
