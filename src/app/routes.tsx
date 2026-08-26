@@ -55,10 +55,24 @@ function ProtectedLayout() {
 // the shell (Layout) and whichever single page a visitor actually
 // requested, instead of eagerly loading Policy Studio, both AI builders,
 // and every Live page up front.
+// Final Product Polish (found via browser QA console audit): every leaf
+// route below is code-split via `lazy`, so React Router's data router
+// spends a brief moment on first load waiting for that first chunk to
+// resolve before it can render anything -- with no route in the tree
+// declaring a `hydrateFallback`, it logged "No `HydrateFallback` element
+// provided to render during initial hydration" on every single page
+// load. This app has no server-side rendering to actually hydrate, so
+// there's no real hydration state to preserve; the fallback just needs
+// to avoid a flash of unstyled white before the first chunk resolves.
+function RootHydrateFallback() {
+  return <div style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }} />;
+}
+
 export const router = createBrowserRouter([
   {
     path: "/",
     Component: Layout,
+    HydrateFallback: RootHydrateFallback,
     errorElement: <RouteErrorBoundary />,
     children: [
       // Phase 10 (RBAC.md): the only two routes reachable without a
@@ -88,8 +102,19 @@ export const router = createBrowserRouter([
           // Phase 9 (AGENT_LIFECYCLE.md): the Agent Directory + Detail pages
           // replaced the earlier flat Live Agents list/register-only page.
           { path: "agents", lazy: () => import("./agents/AgentDirectoryPage").then((m) => ({ Component: m.AgentDirectoryPage })) },
+          // Core Product Experience Redesign, section 3A: the
+          // registration workflow, split out of the Agents inventory
+          // page it used to sit at the top of.
+          { path: "agents/register", lazy: () => import("./agents/AgentRegisterPage").then((m) => ({ Component: m.AgentRegisterPage })) },
           { path: "agents/:agentId", lazy: () => import("./agents/AgentDetailPage").then((m) => ({ Component: m.AgentDetailPage })) },
-          { path: "decisions", lazy: () => import("./live/pages/LiveTestIntent").then((m) => ({ Component: m.LiveTestIntent })) },
+          // Core Product Experience Redesign, section 4: Decisions is
+          // now operational history first (GET /v1/decisions/history),
+          // replacing the old manual-submission-first LiveTestIntent
+          // page. Manual testing moved into a secondary drawer
+          // (ManualDecisionSheet) reachable from this page; a decision's
+          // full causal detail lives at its own route, below.
+          { path: "decisions", lazy: () => import("./live/pages/DecisionHistoryPage").then((m) => ({ Component: m.DecisionHistoryPage })) },
+          { path: "decisions/:decisionId", lazy: () => import("./live/pages/DecisionDetailPage").then((m) => ({ Component: m.DecisionDetailPage })) },
           // The Pending Review queue (GET /v1/decisions): every
           // HUMAN_REVIEW decision in the organization not yet resolved,
           // across every agent -- previously undiscoverable without an

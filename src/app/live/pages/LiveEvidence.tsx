@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router";
 import { CheckCircle2, Database, KeyRound, Link2, ShieldCheck, ShieldX } from "lucide-react";
 import { apiClient } from "../apiClient";
 import { describeApiError, formatStatus } from "../format";
@@ -18,14 +19,27 @@ import type {
   VerificationKeyHistoryResponse,
 } from "../types";
 
-const FIELD_LABEL: Record<string, string> = {
-  action: "Action",
-  amount: "Amount",
-  authority_outcome: "Authority outcome",
-  risk_classification: "Risk level",
-};
+// Domain Generalization Milestone: the universal summary is Action +
+// Authority outcome + Risk level, always present regardless of domain.
+// Resource takes the fourth slot when the decision named one (e.g.
+// "account:USR-829"); Amount only when the action actually had a
+// monetary dimension and no resource was recorded -- never a fixed
+// slot every action is assumed to fill.
+function summaryEntriesFor(payload: EvidencePayload): { label: string; value: string }[] {
+  const entries: { label: string; value: string }[] = [{ label: "Action", value: payload.action }];
+  if (payload.resource) {
+    entries.push({ label: "Resource", value: payload.resource });
+  } else if (payload.amount) {
+    entries.push({
+      label: "Amount",
+      value: payload.currency ? `${payload.amount} ${payload.currency}` : payload.amount,
+    });
+  }
+  entries.push({ label: "Authority outcome", value: payload.authority_outcome });
+  entries.push({ label: "Risk level", value: payload.risk_classification });
+  return entries;
+}
 
-const SUMMARY_FIELDS: (keyof EvidencePayload)[] = ["action", "amount", "authority_outcome", "risk_classification"];
 const PAGE_SIZE = 10;
 
 export function LiveEvidence() {
@@ -260,6 +274,14 @@ export function LiveEvidence() {
                   <p className="text-sm font-mono" style={{ color: "var(--pr-authority-blue)" }}>{e.evidence_id}</p>
                   <p className="text-xs" style={{ color: "var(--pr-text-muted)" }}>
                     {DEMO_MODE ? formatRelativeTime(e.created_at, now) : new Date(e.created_at).toLocaleString()}
+                    {" "}&middot;{" "}
+                    {/* Section 9: Evidence answers "what can we prove";
+                        the causal "why" this decision was authorized
+                        lives on Decision Detail -- linked, not
+                        duplicated here. */}
+                    <Link to={`/decisions/${e.decision_id}`} style={{ color: "var(--pr-authority-blue)" }}>
+                      View decision
+                    </Link>
                   </p>
                 </div>
                 <span
@@ -274,10 +296,10 @@ export function LiveEvidence() {
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 text-xs">
-                {SUMMARY_FIELDS.map((k) => (
-                  <div key={k}>
-                    <p style={{ color: "var(--pr-text-muted)" }}>{FIELD_LABEL[k] ?? k}</p>
-                    <p style={{ color: "var(--pr-text-primary)" }}>{String(e.payload[k] ?? "N/A")}</p>
+                {summaryEntriesFor(e.payload).map((entry) => (
+                  <div key={entry.label}>
+                    <p style={{ color: "var(--pr-text-muted)" }}>{entry.label}</p>
+                    <p style={{ color: "var(--pr-text-primary)" }}>{entry.value}</p>
                   </div>
                 ))}
               </div>

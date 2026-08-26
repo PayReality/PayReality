@@ -24,11 +24,19 @@ const cardStyle: React.CSSProperties = {
   borderRadius: 12,
 };
 
+// Core Product Experience Redesign, section 10: renamed from "Runtime
+// Authority" -- this tab is fallback-defaults configuration (default
+// review/policy behavior, evidence retention, decision logging), not
+// the product's core "Runtime Authority" pillar itself. Colliding tab
+// and product-concept names is the exact confusion the nav rename to
+// "Decisions" already fixed once (see Layout.tsx's own comment on why
+// "Authority" was renamed away from the nav). Frontend label only --
+// no backend field or settings key is renamed.
 const TABS = [
   "General",
   "Organisation Structure",
   "Security",
-  "Runtime Authority",
+  "Decision Defaults",
   "Integrations",
   "Enterprise Systems",
   "Notifications",
@@ -1098,7 +1106,7 @@ export function OrganizationSettingsPage() {
             {tab === "General" && <GeneralTab settings={settings} onSaved={setSettings} />}
             {tab === "Organisation Structure" && <OrganisationStructureTab settings={settings} />}
             {tab === "Security" && <SecurityTab settings={settings} onSaved={setSettings} />}
-            {tab === "Runtime Authority" && <RuntimeAuthorityTab settings={settings} onSaved={setSettings} />}
+            {tab === "Decision Defaults" && <RuntimeAuthorityTab settings={settings} onSaved={setSettings} />}
             {tab === "Integrations" && <IntegrationsTab />}
             {tab === "Enterprise Systems" && <EnterpriseSystemsTab />}
             {tab === "Notifications" && <NotificationsTab settings={settings} onSaved={setSettings} />}

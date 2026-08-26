@@ -180,7 +180,12 @@ function buildAgentDetail(agentId: string) {
   const principal = demoPrincipals.find((p) => p.id === agent.acting_for_principal_id);
   const linkedPolicies = demoPolicies
     .filter((p) => p.scope.agent === agentId)
-    .map((p) => ({ policy_key: p.policy_key, name: p.name, version: p.version, status: p.status }));
+    .map((p) => ({
+      policy_key: p.policy_key, name: p.name, version: p.version, status: p.status,
+      // Product Experience Remediation Milestone 1: what this policy
+      // actually governs.
+      action: p.scope.action, resource: p.scope.resource,
+    }));
   const decisions = getLiveDecisions().filter((d) => d.agent_id === agentId).slice(0, 5);
   const evidence = getLiveEvidence().filter((e) => e.payload.agent_id === agentId).slice(0, 5);
   return {
@@ -188,7 +193,11 @@ function buildAgentDetail(agentId: string) {
     principal_name: principal?.name ?? "Unknown principal",
     policies: linkedPolicies,
     certificates: buildCertificates(agentId),
-    recent_decisions: decisions.map((d) => ({ id: d.id, outcome: d.outcome, reason: d.reason, created_at: agoMs(0) })),
+    recent_decisions: decisions.map((d) => ({
+      id: d.id, outcome: d.outcome, reason: d.reason, created_at: agoMs(0),
+      // Product Experience Remediation Milestone 1: what was attempted.
+      action: d.action, resource: d.resource,
+    })),
     recent_evidence: evidence.map((e) => ({ id: e.evidence_id, status: e.status, created_at: e.created_at })),
     recent_audit_events: buildAuditEvents(agentId),
   };
@@ -493,6 +502,97 @@ on("GET", "/v1/decisions", () => {
   ensureLiveFeedStarted();
   const pending = getLiveDecisions().filter((d) => d.outcome === "HUMAN_REVIEW" && d.resolution === null);
   return { decisions: pending, total: pending.length, limit: 100, offset: 0 };
+});
+// Product Experience Remediation Milestone 1, Phase 6: mirrors the real
+// GET /v1/assurance/summary contract -- every field computed from this
+// demo's own fixtures/live feed, the same way the real endpoint
+// computes them from real rows, not a second, independently-invented
+// set of demo numbers.
+on("GET", "/v1/assurance/summary", () => {
+  ensureLiveFeedStarted();
+  const dashboard = buildLifecycleDashboard();
+  const decisions = getLiveDecisions();
+  const pending = decisions.filter((d) => d.outcome === "HUMAN_REVIEW" && d.resolution === null);
+  const resolvedReviews = decisions.filter((d) => d.outcome === "HUMAN_REVIEW" && d.resolution !== null);
+  const oldestPending = pending.length
+    ? pending.reduce((oldest, d) => (d.created_at < oldest ? d.created_at : oldest), pending[0].created_at)
+    : null;
+  const evidenceRecords = getLiveEvidence();
+  const evidenceByStatus: Record<string, number> = {};
+  for (const e of evidenceRecords) evidenceByStatus[e.status] = (evidenceByStatus[e.status] ?? 0) + 1;
+
+  return {
+    total_agents: demoAgents.length,
+    active_agents: demoAgents.filter((a) => a.status === "active").length,
+    active_policies: dashboard.counts_by_state["active"] ?? 0,
+    policies_review_due: dashboard.due_for_reattestation.length,
+    policies_authority_expired: dashboard.due_for_reattestation.filter((p) => p.authority_expires_at !== null).length,
+    allow_count: decisions.filter((d) => d.outcome === "ALLOW").length,
+    deny_count: decisions.filter((d) => d.outcome === "DENY").length,
+    human_review_count: decisions.filter((d) => d.outcome === "HUMAN_REVIEW").length,
+    pending_review_count: pending.length,
+    oldest_pending_review_at: oldestPending,
+    resolved_review_count: resolvedReviews.length,
+    evidence_total: evidenceRecords.length,
+    evidence_verified: evidenceByStatus["VERIFIED"] ?? 0,
+    evidence_pending: evidenceByStatus["PENDING"] ?? 0,
+    evidence_rejected: evidenceByStatus["REJECTED"] ?? 0,
+  };
+});
+// Core Product Experience Redesign, section 4: the Decision Center's
+// primary data source. Registered before GET /v1/decisions/:id below so
+// this router's own first-match-wins scan (resolveMockResponse) matches
+// "history" as this static route, not as a decision id -- mirroring the
+// exact reason the real backend registers GET /v1/decisions/history
+// before GET /v1/decisions/{decision_id} (routers/intents.py). Rows are
+// derived from this demo's own live feed/fixtures, not a second,
+// independently-invented history list; demo decisions predate the real
+// backend's provenance/freshness/capability tracking, so `source` stays
+// honestly absent here rather than fabricated.
+on("GET", "/v1/decisions/history", ({ query }) => {
+  ensureLiveFeedStarted();
+  let rows = getLiveDecisions();
+
+  const outcome = query.get("outcome");
+  if (outcome) rows = rows.filter((d) => d.outcome === outcome);
+  const agentId = query.get("agent_id");
+  if (agentId) rows = rows.filter((d) => d.agent_id === agentId);
+  const action = query.get("action");
+  if (action) rows = rows.filter((d) => d.action === action);
+  const resource = query.get("resource");
+  if (resource) rows = rows.filter((d) => (d.resource ?? "").includes(resource));
+  const source = query.get("source");
+  if (source) rows = rows.filter((d) => (d as { source?: string }).source === source);
+
+  const total = rows.length;
+  const limit = Math.min(Number(query.get("limit") ?? 50) || 50, 500);
+  const offset = Math.max(Number(query.get("offset") ?? 0) || 0, 0);
+  const page = rows.slice(offset, offset + limit);
+
+  const items = page.map((d) => {
+    const agent = findDemoAgent(d.agent_id);
+    const principal = agent ? demoPrincipals.find((p) => p.id === agent.acting_for_principal_id) : undefined;
+    const matchedPolicy = d.evaluated_mandates.length > 0 ? findDemoPolicy(d.evaluated_mandates[0]) : undefined;
+    const hasEvidence = !!findLiveEvidenceByDecision(d.id);
+    const humanReviewState = d.outcome === "HUMAN_REVIEW" ? (d.resolution ? "resolved" : "pending") : null;
+    return {
+      id: d.id,
+      created_at: d.created_at,
+      agent_id: d.agent_id,
+      agent_name: agent?.name ?? null,
+      principal_name: principal?.name ?? null,
+      action: d.action,
+      resource: d.resource,
+      outcome: d.outcome,
+      reason: d.reason,
+      matched_policy_name: matchedPolicy?.name ?? null,
+      source: (d as { source?: string }).source ?? null,
+      has_evidence: hasEvidence,
+      human_review_state: humanReviewState,
+    };
+  });
+
+  return { decisions: items, total, limit, offset };
 });
 on("GET", "/v1/decisions/:id", ({ params }) => findLiveDecision(params.id) ?? notFound("decision"));
 on("POST", "/v1/decisions/:id/resolve", ({ params }) => blocked(findLiveDecision(params.id) ?? notFound("decision")));

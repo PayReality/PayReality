@@ -9,89 +9,98 @@ import {
   ArrowRight,
   Lock,
   ShieldCheck,
+  Bot,
+  FileCheck,
+  Clock,
+  CalendarClock,
 } from "lucide-react";
 import { apiClient } from "../live/apiClient";
 import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
+import { Skeleton } from "../components/ui/skeleton";
 import { describeApiError } from "../live/format";
 import { useResourceSync } from "../services/resourceSync";
-import { policyLifecycleApi } from "../policy-studio/lifecycleApi";
-import type { LiveAgent } from "../live/types";
+import type { AssuranceSummary } from "../live/types";
 
-const WORKFLOW = [
+// Core Product Experience Redesign, section 7: the destinations this
+// page hands off to, presented as connected operational surfaces --
+// not a numbered wizard. Order still mirrors the product's real
+// dependency chain (an Agent needs Governance to matter; a Decision
+// needs both; Evidence and Assurance summarize what already
+// happened), but nothing here implies a step must be completed before
+// the next is usable.
+const DESTINATIONS = [
   {
-    step: "01",
     icon: Shield,
     title: "Agents",
-    desc: "Register the AI agents operating in your enterprise and the identity each one acts under.",
+    desc: "The AI agents operating in your enterprise, and the identity each one acts under.",
     path: "/agents",
     color: "var(--pr-authority-blue)",
   },
   {
-    step: "02",
     icon: FileText,
     title: "Governance",
-    desc: "Upload your existing governance documents and let AI find the rules for you, or write one by hand.",
+    desc: "The rules that define what authority has actually been delegated -- written by hand or discovered from your documents.",
     path: "/governance",
     color: "var(--pr-evidence-cyan)",
   },
   {
-    step: "03",
     icon: FlaskConical,
     title: "Decisions",
-    desc: "See what happens when an agent tries to act: approved, blocked, or sent to a human, evaluated against your rules in real time.",
+    desc: "What happened when an agent tried to act: approved, blocked, or sent to a human, and why.",
     path: "/decisions",
     color: "var(--pr-warning-amber)",
   },
   {
-    step: "04",
     icon: Database,
     title: "Evidence",
-    desc: "Every decision produces a cryptographically signed record. Verify any record's signature independently, right here.",
+    desc: "The cryptographically signed record every decision produces. Verify any record's signature independently.",
     path: "/evidence",
     color: "var(--pr-verification-purple)",
   },
   {
-    step: "05",
     icon: Building2,
     title: "Assurance",
-    desc: "A live rollup of what's actually been authorized, decided, and evidenced. Not a projection, a record.",
+    desc: "The aggregate posture across every agent, policy, decision, and evidence record -- a live rollup, not a projection.",
     path: "/assurance",
     color: "var(--pr-trust-green)",
   },
 ];
 
 export function PlatformOverview() {
-  const [agentCount, setAgentCount] = useState<number | null>(null);
-  const [activePolicyCount, setActivePolicyCount] = useState<number | null>(null);
-  const [reachable, setReachable] = useState<boolean | null>(null);
+  const [summary, setSummary] = useState<AssuranceSummary | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   function load() {
-    Promise.all([
-      apiClient.get<{ agents: LiveAgent[]; total: number }>("/v1/agents"),
-      policyLifecycleApi.dashboard(),
-    ])
-      .then(([agentPage, dashboard]) => {
-        setAgentCount(agentPage.total);
-        setActivePolicyCount(dashboard.counts_by_state["active"] ?? 0);
-        setReachable(true);
-      })
-      // Loading the overview's own status strip: a 401/403/400 here (an
-      // expired session, a missing permission, a stray Operator Key with
-      // no Organization Id) is a real, diagnosable cause, not a network
-      // outage -- describeApiError says which one instead of steering
-      // the very first thing a user sees toward the wrong fix.
+    setLoadError(null);
+    // Product Experience Remediation Milestone 1 built this real,
+    // organisation-scoped aggregate endpoint for Assurance; reused here
+    // rather than a second bespoke query, so Overview's numbers are
+    // never a second, independently-computed source of truth for the
+    // same facts.
+    apiClient
+      .get<AssuranceSummary>("/v1/assurance/summary")
+      // A 401/403/400 here (an expired session, a missing permission, a
+      // stray Operator Key with no Organization Id) is a real,
+      // diagnosable cause, not a network outage -- describeApiError says
+      // which one instead of steering the very first thing a user sees
+      // toward the wrong fix.
       .catch((e) => {
-        setReachable(false);
         setLoadError(describeApiError(e, "Loading the overview"));
-      });
+        return null;
+      })
+      .then((s) => setSummary(s));
   }
 
   useEffect(load, []);
-  // Milestone 14: this strip's agent count and active-policy badge had
-  // no way to learn either changed while the page stayed mounted.
-  useResourceSync(["agents", "policies"], load);
+  // Milestone 14: this strip depends on agents, policies, decisions, and
+  // evidence but had no way to learn any of them changed while it stayed
+  // mounted.
+  useResourceSync(["agents", "policies", "decisions", "evidence"], load);
+
+  const attentionCount = summary
+    ? summary.pending_review_count + summary.policies_review_due + summary.policies_authority_expired
+    : 0;
 
   return (
     <div className="p-8 max-w-5xl mx-auto" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
@@ -106,17 +115,10 @@ export function PlatformOverview() {
         <h1 className="text-4xl font-bold mb-4" style={{ color: "var(--pr-text-primary)" }}>
           Does this AI agent's action fall within the authority your organization already delegated?
         </h1>
-        <p className="text-lg max-w-2xl mb-2" style={{ color: "var(--pr-text-secondary)" }}>
-          PayReality is Enterprise AI Authority Infrastructure: Runtime Authority checks every AI
-          action against the authority your organization has already delegated, before it
-          executes. Every enterprise already knows how to delegate authority to people; this
-          platform makes that authority machine-evaluable, deterministically, and every decision
-          produces evidence you can verify independently.
-        </p>
-        <p className="text-sm max-w-2xl mb-8" style={{ color: "var(--pr-text-muted)" }}>
-          Not a model's judgment call. A rule, evaluated the same way every time, fail-closed by
-          default: if the engine can't confirm an action is authorized, it never defaults to
-          allow.
+        <p className="text-lg max-w-2xl mb-8" style={{ color: "var(--pr-text-secondary)" }}>
+          Runtime Authority checks every AI action against the authority your organization has
+          already delegated, before it executes. Not a model's judgment call: a rule, evaluated the
+          same way every time, fail-closed by default, with evidence you can verify independently.
         </p>
         <div className="flex flex-wrap gap-3">
           <Link
@@ -132,54 +134,87 @@ export function PlatformOverview() {
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium border transition-colors"
             style={{ borderColor: "var(--pr-overlay-12)", color: "var(--pr-text-primary)" }}
           >
-            Test a decision now
+            Open Decisions
           </Link>
         </div>
       </div>
 
-      {/* Live status strip */}
-      <Card padding={20} borderColor="var(--pr-overlay-06)" className="mb-14 flex flex-wrap items-center gap-6">
-        {reachable === false ? (
-          <Alert severity="warning" icon={<ShieldCheck className="w-4 h-4" />}>
-            {loadError}
-          </Alert>
-        ) : (
-          <>
-            <div>
-              <div className="text-2xl font-semibold" style={{ color: "var(--pr-text-primary)" }}>
-                {agentCount ?? "…"}
-              </div>
-              <div className="text-xs" style={{ color: "var(--pr-text-muted)" }}>
-                Registered agents
-              </div>
-            </div>
-            <div>
-              <div className="text-2xl font-semibold" style={{ color: "var(--pr-text-primary)" }}>
-                {activePolicyCount ?? "…"}
-              </div>
-              <div className="text-xs" style={{ color: "var(--pr-text-muted)" }}>
-                Active policies
-              </div>
-            </div>
-            <div className="flex items-center gap-2 ml-auto text-xs" style={{ color: "var(--pr-text-muted)" }}>
-              <Lock className="w-3.5 h-3.5" />
-              ED25519-signed evidence, verifiable independently of this app
-            </div>
-          </>
-        )}
-      </Card>
+      {loadError && (
+        <Alert severity="warning" className="mb-10" icon={<ShieldCheck className="w-4 h-4" />}>
+          {loadError}
+        </Alert>
+      )}
 
-      {/* The workflow */}
+      {!summary && !loadError && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-14">
+          {Array.from({ length: 5 }, (_, i) => (
+            <Card key={i} padding={16} borderColor="var(--pr-overlay-06)">
+              <Skeleton height={22} width="50%" style={{ marginBottom: 6 }} />
+              <Skeleton height={11} width="80%" />
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Orientation strip: what needs a look right now, in real numbers
+          only -- section 7's own instruction not to duplicate Assurance
+          wholesale. This answers "where should I look," Assurance answers
+          "what's the full posture." */}
+      {summary && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-14">
+          <Card padding={16} borderColor="var(--pr-overlay-06)">
+            <div className="flex items-center gap-2 mb-1">
+              <Bot className="w-3.5 h-3.5" style={{ color: "var(--pr-authority-blue)" }} />
+              <span className="text-xl font-semibold" style={{ color: "var(--pr-text-primary)" }}>
+                {summary.active_agents}<span className="text-sm font-normal" style={{ color: "var(--pr-text-muted)" }}> / {summary.total_agents}</span>
+              </span>
+            </div>
+            <Link to="/agents" className="text-xs" style={{ color: "var(--pr-text-muted)" }}>Agents active</Link>
+          </Card>
+          <Card padding={16} borderColor="var(--pr-overlay-06)">
+            <div className="flex items-center gap-2 mb-1">
+              <FileCheck className="w-3.5 h-3.5" style={{ color: "var(--pr-trust-green)" }} />
+              <span className="text-xl font-semibold" style={{ color: "var(--pr-text-primary)" }}>{summary.active_policies}</span>
+            </div>
+            <Link to="/governance" className="text-xs" style={{ color: "var(--pr-text-muted)" }}>Active policies</Link>
+          </Card>
+          <Card padding={16} borderColor={summary.pending_review_count > 0 ? "var(--pr-warning-amber)" : "var(--pr-overlay-06)"}>
+            <div className="flex items-center gap-2 mb-1">
+              <Clock className="w-3.5 h-3.5" style={{ color: summary.pending_review_count > 0 ? "var(--pr-warning-amber)" : "var(--pr-text-muted)" }} />
+              <span className="text-xl font-semibold" style={{ color: "var(--pr-text-primary)" }}>{summary.pending_review_count}</span>
+            </div>
+            <Link to="/decisions/queue" className="text-xs" style={{ color: "var(--pr-text-muted)" }}>Decisions awaiting review</Link>
+          </Card>
+          <Card padding={16} borderColor="var(--pr-overlay-06)">
+            <div className="flex items-center gap-2 mb-1">
+              <ShieldCheck className="w-3.5 h-3.5" style={{ color: "var(--pr-verification-purple)" }} />
+              <span className="text-xl font-semibold" style={{ color: "var(--pr-text-primary)" }}>
+                {summary.evidence_verified}<span className="text-sm font-normal" style={{ color: "var(--pr-text-muted)" }}> / {summary.evidence_total}</span>
+              </span>
+            </div>
+            <Link to="/evidence" className="text-xs" style={{ color: "var(--pr-text-muted)" }}>Evidence verified</Link>
+          </Card>
+          <Card padding={16} borderColor={attentionCount - summary.pending_review_count > 0 ? "var(--pr-warning-amber)" : "var(--pr-overlay-06)"}>
+            <div className="flex items-center gap-2 mb-1">
+              <CalendarClock className="w-3.5 h-3.5" style={{ color: (summary.policies_review_due + summary.policies_authority_expired) > 0 ? "var(--pr-warning-amber)" : "var(--pr-text-muted)" }} />
+              <span className="text-xl font-semibold" style={{ color: "var(--pr-text-primary)" }}>{summary.policies_review_due + summary.policies_authority_expired}</span>
+            </div>
+            <Link to="/governance/dashboard" className="text-xs" style={{ color: "var(--pr-text-muted)" }}>Policies needing attention</Link>
+          </Card>
+        </div>
+      )}
+
+      {/* Destinations */}
       <div className="mb-8">
         <h2 className="text-xl font-semibold mb-1" style={{ color: "var(--pr-text-primary)" }}>
-          One workflow, not a dashboard
+          Where to go next
         </h2>
         <p className="text-sm mb-8" style={{ color: "var(--pr-text-muted)" }}>
-          Agents → Governance → Decisions → Evidence → Assurance. Every stage feeds the next.
+          Every surface below reads and writes the same underlying authority model -- open whichever one answers your question.
         </p>
       </div>
       <div className="grid gap-4">
-        {WORKFLOW.map((item) => {
+        {DESTINATIONS.map((item) => {
           const Icon = item.icon;
           return (
             <Link
@@ -195,14 +230,9 @@ export function PlatformOverview() {
                 <Icon className="w-5 h-5" style={{ color: item.color }} />
               </div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xs font-mono" style={{ color: "var(--pr-text-muted)" }}>
-                    {item.step}
-                  </span>
-                  <h3 className="font-medium" style={{ color: "var(--pr-text-primary)" }}>
-                    {item.title}
-                  </h3>
-                </div>
+                <h3 className="font-medium mb-1" style={{ color: "var(--pr-text-primary)" }}>
+                  {item.title}
+                </h3>
                 <p className="text-sm" style={{ color: "var(--pr-text-muted)" }}>{item.desc}</p>
               </div>
               <ArrowRight
@@ -213,6 +243,11 @@ export function PlatformOverview() {
           );
         })}
       </div>
+
+      <p className="flex items-center gap-2 mt-8 text-xs" style={{ color: "var(--pr-text-muted)" }}>
+        <Lock className="w-3.5 h-3.5" />
+        Every decision produces ED25519-signed evidence, verifiable independently of this app.
+      </p>
     </div>
   );
 }

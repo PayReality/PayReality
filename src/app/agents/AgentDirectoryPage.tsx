@@ -1,18 +1,17 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { Plus } from "lucide-react";
+import { Bot, Plus } from "lucide-react";
 import { agentsApi } from "./api";
 import { AgentStatusBadge } from "./components/AgentStatusBadge";
 import { HealthDot } from "./components/HealthDot";
-import { generateKeyPair } from "../live/crypto";
-import { saveAgentKeyPair } from "../live/agentKeyStore";
 import { describeApiError } from "../live/format";
 import { NextStepGuidance } from "../help/NextStepGuidance";
-import type { LiveAgent, LivePrincipal } from "../live/types";
+import type { LiveAgent } from "../live/types";
 import { useResourceSync } from "../services/resourceSync";
 import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
+import { Select } from "../components/ui/select";
 import { SkeletonRows } from "../components/ui/skeleton";
 import { useToast } from "../components/ui/toast";
 import { ConfirmButton } from "../components/ui/confirm-button";
@@ -27,12 +26,10 @@ const BULK_ACTION_LABEL: Record<"suspend" | "activate" | "retire" | "rotate", st
 const PAGE_SIZE = 25;
 
 export function AgentDirectoryPage() {
-  const formId = useId();
   const { notify } = useToast();
   const [agents, setAgents] = useState<LiveAgent[] | null>(null);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
-  const [principals, setPrincipals] = useState<LivePrincipal[]>([]);
   const [principalById, setPrincipalById] = useState<Record<string, string>>({});
 
   const [q, setQ] = useState("");
@@ -43,23 +40,14 @@ export function AgentDirectoryPage() {
   const [confirmingBulkAction, setConfirmingBulkAction] = useState<"suspend" | "activate" | "retire" | "rotate" | null>(null);
   const [pendingRowId, setPendingRowId] = useState<string | null>(null);
 
-  const [name, setName] = useState("");
-  const [principalId, setPrincipalId] = useState("");
-  const [newPrincipalName, setNewPrincipalName] = useState("");
-  const [registerMessage, setRegisterMessage] = useState<string | null>(null);
-  const [registering, setRegistering] = useState(false);
   const [justActivatedName, setJustActivatedName] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [creatingPrincipal, setCreatingPrincipal] = useState(false);
 
   function loadPrincipals() {
     agentsApi
       .listPrincipals()
-      .then((ps) => {
-        setPrincipals(ps);
-        setPrincipalById(Object.fromEntries(ps.map((p) => [p.id, p.name])));
-      })
-      .catch((e) => setRegisterMessage(describeApiError(e, "Loading principals")));
+      .then((ps) => setPrincipalById(Object.fromEntries(ps.map((p) => [p.id, p.name]))))
+      .catch(() => {});
   }
 
   function loadAgents() {
@@ -88,49 +76,6 @@ export function AgentDirectoryPage() {
       else next.add(id);
       return next;
     });
-  }
-
-  async function handleCreatePrincipal() {
-    if (!newPrincipalName.trim()) return;
-    setCreatingPrincipal(true);
-    try {
-      const principal = await agentsApi.createPrincipal(newPrincipalName);
-      setPrincipals((prev) => [...prev, principal]);
-      setPrincipalById((prev) => ({ ...prev, [principal.id]: principal.name }));
-      setPrincipalId(principal.id);
-      setNewPrincipalName("");
-    } catch (e) {
-      setRegisterMessage(describeApiError(e, "Create principal"));
-    } finally {
-      setCreatingPrincipal(false);
-    }
-  }
-
-  async function handleRegister() {
-    if (!name.trim() || !principalId) {
-      setRegisterMessage("Name and Principal are both required.");
-      return;
-    }
-    setRegistering(true);
-    setRegisterMessage(null);
-    try {
-      const { publicKeyB64, privateKeyB64 } = generateKeyPair();
-      const agent = await agentsApi.register({
-        name,
-        acting_for_principal_id: principalId,
-        public_key: `ed25519:base64:${publicKeyB64}`,
-      });
-      saveAgentKeyPair(agent.id, privateKeyB64, publicKeyB64);
-      setName("");
-      setRegisterMessage(
-        `Registered "${agent.name}". It's in "Registered" status, not yet operational: activate it below before it can sign Intents.`
-      );
-      loadAgents();
-    } catch (e) {
-      setRegisterMessage(describeApiError(e, "Registration"));
-    } finally {
-      setRegistering(false);
-    }
   }
 
   async function runRowAction(action: "activate" | "suspend" | "retire", agentId: string) {
@@ -187,92 +132,28 @@ export function AgentDirectoryPage() {
 
   return (
     <div className="p-8" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-      <div className="mb-6">
-        <h1 className="mb-2" style={{ color: "var(--pr-text-primary)" }}>Agents</h1>
-        <p style={{ color: "var(--pr-text-muted)", fontSize: 13, maxWidth: 640 }}>
-          Every AI worker operating under this platform, managed the same way an enterprise manages
-          a human workforce identity and delegates authority to it: registered, activated,
-          suspended, rotated, retired, or revoked, with a signed audit trail for every change.
-        </p>
-      </div>
-
-      <Card style={{ marginBottom: 24 }}>
-        <h2 className="text-sm font-medium mb-4" style={{ color: "var(--pr-text-primary)" }}>Register a new agent</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-          <div>
-            <label htmlFor={`${formId}-name`} className="block text-xs font-medium mb-1.5" style={{ color: "var(--pr-text-muted)" }}>
-              Agent name
-            </label>
-            <input
-              id={`${formId}-name`}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="AP-Automation-Agent"
-              className="w-full px-3 py-2 rounded-lg border text-sm"
-              style={{ backgroundColor: "var(--pr-bg-hover)", borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-primary)" }}
-            />
-          </div>
-          <div>
-            <label htmlFor={`${formId}-principal`} className="block text-xs font-medium mb-1.5" style={{ color: "var(--pr-text-muted)" }}>
-              Acting for principal <span style={{ fontWeight: 400, color: "var(--pr-text-disabled)" }}>(whose delegated authority it acts under)</span>
-            </label>
-            <select
-              id={`${formId}-principal`}
-              value={principalId}
-              onChange={(e) => setPrincipalId(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg border text-sm"
-              style={{ backgroundColor: "var(--pr-bg-hover)", borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-primary)" }}
-            >
-              <option value="">Select a principal...</option>
-              {principals.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </div>
+      <div className="flex items-start justify-between gap-3 mb-6">
+        <div>
+          <h1 className="mb-2" style={{ color: "var(--pr-text-primary)" }}>Agents</h1>
+          <p style={{ color: "var(--pr-text-muted)", fontSize: 13, maxWidth: 640 }}>
+            Every AI worker operating under this platform, managed the same way an enterprise manages
+            a human workforce identity and delegates authority to it: registered, activated,
+            suspended, rotated, retired, or revoked, with a signed audit trail for every change.
+          </p>
         </div>
-
-        <div className="flex items-end gap-2 mb-4">
-          <div className="flex-1">
-            <label htmlFor={`${formId}-new-principal`} className="block text-xs font-medium mb-1.5" style={{ color: "var(--pr-text-muted)" }}>
-              Or create a new principal
-            </label>
-            <input
-              id={`${formId}-new-principal`}
-              value={newPrincipalName}
-              onChange={(e) => setNewPrincipalName(e.target.value)}
-              placeholder="Regional Controller (EMEA)"
-              className="w-full px-3 py-2 rounded-lg border text-sm"
-              style={{ backgroundColor: "var(--pr-bg-hover)", borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-primary)" }}
-            />
-          </div>
-          <button
-            onClick={handleCreatePrincipal}
-            disabled={creatingPrincipal || !newPrincipalName.trim()}
-            className="px-4 py-2 rounded-lg text-sm border disabled:opacity-40"
-            style={{ borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-secondary)" }}
-          >
-            {creatingPrincipal ? "Creating..." : "Create"}
-          </button>
-        </div>
-
-        <button
-          onClick={handleRegister}
-          disabled={registering}
-          className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-40"
+        <Link
+          to="/agents/register"
+          className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 flex-shrink-0"
           style={{ backgroundColor: "var(--pr-authority-blue)", color: "#fff" }}
         >
           <Plus className="w-4 h-4" /> Register agent
-        </button>
-
-        {registerMessage && (
-          <Alert severity="neutral" className="text-sm mt-4">{registerMessage}</Alert>
-        )}
-      </Card>
+        </Link>
+      </div>
 
       {justActivatedName && (
         <NextStepGuidance
-          message={`"${justActivatedName}" is now active and can sign real Intents. Try a test decision to see it get checked against your rules.`}
-          actionLabel="Submit Test Decision"
+          message={`"${justActivatedName}" is now active and can sign real Intents. Try Test Runtime Authority to see it get checked against your rules.`}
+          actionLabel="Go to Decisions"
           actionPath="/decisions"
         />
       )}
@@ -286,7 +167,7 @@ export function AgentDirectoryPage() {
           className="px-3 py-2 rounded-lg border text-sm"
           style={{ backgroundColor: "var(--pr-bg-hover)", borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-primary)", minWidth: 220 }}
         />
-        <select
+        <Select
           value={statusFilter}
           onChange={(e) => { setOffset(0); setStatusFilter(e.target.value); }}
           aria-label="Filter by status"
@@ -299,7 +180,7 @@ export function AgentDirectoryPage() {
           <option value="suspended">Suspended</option>
           <option value="revoked">Revoked</option>
           <option value="retired">Retired</option>
-        </select>
+        </Select>
         <input
           value={environmentFilter}
           onChange={(e) => { setOffset(0); setEnvironmentFilter(e.target.value); }}
@@ -429,11 +310,34 @@ export function AgentDirectoryPage() {
                 </tr>
               );
             })}
-            {agents?.length === 0 && (
-              <tr>
-                <td colSpan={9} className="p-6 text-center" style={{ color: "var(--pr-text-muted)" }}>No agents match these filters.</td>
-              </tr>
-            )}
+            {agents?.length === 0 && (() => {
+              // Visual Experience V2 (found via browser QA): `total` is
+              // the server-side count for the CURRENT filtered query,
+              // not the organisation's real agent count -- filtering to
+              // zero matches used to render "No agents yet, register
+              // the first one" even when real agents existed, exactly
+              // the "0 vs no results" conflation section 14 warns
+              // against. Whether a filter is actually active is the
+              // real signal, not whether this query's own total is 0.
+              const filtersActive = !!(q || statusFilter || environmentFilter);
+              return (
+                <tr>
+                  <td colSpan={9} className="p-10 text-center">
+                    <Bot className="w-6 h-6 mx-auto mb-3" style={{ color: "var(--pr-text-disabled)" }} />
+                    <p style={{ color: "var(--pr-text-muted)", fontSize: 13, marginBottom: filtersActive ? 0 : 8 }}>
+                      {filtersActive
+                        ? "No agents match these filters."
+                        : "No agents yet. Register the first AI agent operating in your enterprise."}
+                    </p>
+                    {!filtersActive && (
+                      <Link to="/agents/register" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
+                        Register an agent &rarr;
+                      </Link>
+                    )}
+                  </td>
+                </tr>
+              );
+            })()}
           </tbody>
         </table>
         </div>

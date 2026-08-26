@@ -36,7 +36,7 @@ export function PendingReviewQueuePage() {
   // Only disable once we positively know the signed-in user lacks the
   // permission -- with no session (Operator Key bypass still active),
   // stay permissive rather than guessing (same rule ReviewQueuePage and
-  // LiveTestIntent already follow). A load failure from GET /v1/decisions
+  // DecisionDetailPage already follow). A load failure from GET /v1/decisions
   // itself (403 for a role without decisions.view, e.g. Agent Admin or
   // Executive) surfaces through loadError below, not a separate check
   // here -- the real permission gate is server-side either way.
@@ -66,7 +66,7 @@ export function PendingReviewQueuePage() {
   useResourceSync(["decisions", "agents"], load);
 
   // Session identity replaces free-text reviewer entry (Stage I.6),
-  // same as LiveTestIntent and ReviewQueuePage.
+  // same as DecisionDetailPage/ManualDecisionSheet and ReviewQueuePage.
   useEffect(() => {
     if (user) setResolverName(user.name);
   }, [user]);
@@ -81,7 +81,7 @@ export function PendingReviewQueuePage() {
     const startedAt = Date.now();
     try {
       // Same endpoint/payload/notify-and-reload shape as
-      // LiveTestIntent.tsx's handleResolve -- not reimplemented
+      // DecisionDetailPage.tsx's handleResolve -- not reimplemented
       // differently for this second entry point to the same action.
       await apiClient.post(`/v1/decisions/${decision.id}/resolve`, {
         resolution,
@@ -109,7 +109,7 @@ export function PendingReviewQueuePage() {
       <div className="flex items-center justify-between gap-3 mb-2">
         <h1 style={{ color: "var(--pr-text-primary)" }}>Pending Review</h1>
         <Link to="/decisions" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
-          Runtime Decision Center
+          &lt; All decisions
         </Link>
       </div>
       <p style={{ color: "var(--pr-text-muted)", fontSize: 12, marginBottom: 4 }}>
@@ -174,15 +174,24 @@ export function PendingReviewQueuePage() {
             <span style={{ color: "var(--pr-text-primary)", fontSize: 14, fontWeight: 500 }}>
               {agentNames[d.agent_id] ?? d.agent_id} &middot; {formatStatus(d.action)}
             </span>
-            <span style={{ color: "var(--pr-text-muted)", fontSize: 12, flexShrink: 0 }}>
-              {d.amount.toLocaleString("en-US")} {d.currency}
-            </span>
+            {/* Domain Generalization Milestone: Resource is the
+                domain-agnostic secondary detail; Amount/Currency only
+                render when the decision actually had them (a
+                non-financial action, e.g. disable_user, has neither). */}
+            {d.resource ? (
+              <span style={{ color: "var(--pr-text-muted)", fontSize: 12, flexShrink: 0 }}>{d.resource}</span>
+            ) : d.amount != null ? (
+              <span style={{ color: "var(--pr-text-muted)", fontSize: 12, flexShrink: 0 }}>
+                {d.amount.toLocaleString("en-US")} {d.currency}
+              </span>
+            ) : null}
           </div>
           <p style={{ color: "var(--pr-text-secondary)", fontSize: 13, marginBottom: 4 }}>
             {describeReason(d.reason) ?? "Sent to a human to decide."}
           </p>
           <p style={{ color: "var(--pr-text-disabled)", fontSize: 11, marginBottom: 10 }}>
-            Submitted {new Date(d.created_at).toLocaleString()}
+            Submitted {new Date(d.created_at).toLocaleString()} &middot;{" "}
+            <Link to={`/decisions/${d.id}`} style={{ color: "var(--pr-authority-blue)" }}>Full decision detail</Link>
           </p>
 
           {rowErrors[d.id] && (

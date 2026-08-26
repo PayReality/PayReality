@@ -156,8 +156,11 @@ export interface LiveDecision {
   reason: string | null;
   agent_id: string;
   action: string;
-  amount: number;
-  currency: string;
+  // Domain Generalization Milestone: optional -- a non-financial
+  // decision (e.g. disable_user) genuinely has none of these three.
+  resource: string | null;
+  amount: number | null;
+  currency: string | null;
   created_at: string;
   evaluated_mandates: string[];
   evaluated_mandate_ids: string[];
@@ -171,6 +174,17 @@ export interface LiveDecision {
   policy_bundle_hash: string | null;
   authority_version: string | null;
   resolution: LiveResolution | null;
+  // Product Experience Remediation Milestone 1 (Decision Provenance +
+  // Decision Detail contract): all additive, all None/null exactly when
+  // GetDecisionResponse's own earliest-Evidence-record lookup finds
+  // nothing -- the same optionality policy_version/policy_bundle_hash/
+  // authority_version above already have, not a new failure mode.
+  source: string | null;
+  principal_name: string | null;
+  evidence_id: string | null;
+  facts_evaluated: Record<string, unknown>[] | null;
+  matched_policy_freshness: PolicyFreshnessSummary | null;
+  capability: CapabilitySummary | null;
 }
 
 // Pending Review queue (GET /v1/decisions): every HUMAN_REVIEW decision
@@ -228,7 +242,13 @@ export interface EvidencePayload {
   decision_id: string;
   agent_id: string;
   action: string;
-  amount: string;
+  // Domain Generalization Milestone: all three now optional, and
+  // included by the backend only when actually relevant to the action
+  // -- a non-financial decision's Evidence carries no fabricated
+  // amount, and currency is no longer silently dropped when present.
+  resource?: string;
+  amount?: string;
+  currency?: string;
   matched_mandate_ids: string[];
   authority_outcome: DecisionOutcome;
   approval_outcome: string | null;
@@ -297,4 +317,84 @@ export interface ChainVerificationResponse {
   intact: boolean;
   invalid_signatures: string[];
   broken_links: string[];
+}
+
+// Product Experience Remediation Milestone 1, Phase 6: GET
+// /v1/assurance/summary's contract -- every field a real,
+// organisation-scoped server aggregate, replacing the previous
+// unbounded client-side scan over every Agent/Evidence record.
+export interface AssuranceSummary {
+  total_agents: number;
+  active_agents: number;
+  active_policies: number;
+  policies_review_due: number;
+  policies_authority_expired: number;
+  allow_count: number;
+  deny_count: number;
+  human_review_count: number;
+  pending_review_count: number;
+  oldest_pending_review_at: string | null;
+  resolved_review_count: number;
+  evidence_total: number;
+  evidence_verified: number;
+  evidence_pending: number;
+  evidence_rejected: number;
+}
+
+// Product Experience Remediation Milestone 1, Phase 4: the Decision
+// Detail contract's additive fields (GetDecisionResponse).
+export interface PolicyFreshnessSummary {
+  policy_key: string;
+  last_attested_at: string | null;
+  next_review_at: string | null;
+  authority_expires_at: string | null;
+  status: "current" | "review_due" | "expired" | "unknown";
+}
+
+export interface CapabilitySummary {
+  issued: boolean;
+  audience: string | null;
+  resource: string | null;
+  action: string | null;
+  expires_at: string | null;
+  consumed_at: string | null;
+}
+
+// Core Product Experience Redesign: GET /v1/decisions/history's row shape
+// (schemas/intent.py's DecisionHistoryItem) -- deliberately narrower than
+// LiveDecision (no policy version/bundle hash/facts/capability/freshness
+// detail; a caller wanting that opens the full Decision Detail page,
+// GET /v1/decisions/{id}, instead). No amount/currency: contextual, not
+// universal, and have no place in a summary row every action type shares.
+export interface DecisionHistoryItem {
+  id: string;
+  created_at: string;
+  agent_id: string;
+  agent_name: string | null;
+  principal_name: string | null;
+  action: string;
+  resource: string | null;
+  outcome: DecisionOutcome;
+  reason: string | null;
+  matched_policy_name: string | null;
+  source: string | null;
+  has_evidence: boolean;
+  human_review_state: "pending" | "resolved" | null;
+}
+
+export interface DecisionHistoryResponse {
+  decisions: DecisionHistoryItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DecisionHistoryFilters {
+  limit?: number;
+  offset?: number;
+  outcome?: string;
+  agent_id?: string;
+  action?: string;
+  resource?: string;
+  source?: string;
 }

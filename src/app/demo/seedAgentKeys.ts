@@ -7,10 +7,10 @@ import { getAgentPrivateKey, saveAgentKeyPair } from "../live/agentKeyStore";
 // AgentDetailPage.tsx) -- correct there, since a real Agent generates
 // its own keypair. The public demo's agents already exist as fixtures
 // with a decision/evidence history, so a fresh visitor's browser never
-// goes through that flow for them, and LiveTestIntent.tsx's own
+// goes through that flow for them, and ManualDecisionSheet.tsx's own
 // signableAgents filter (agents.ts:local, requires a stored private key)
 // then had nothing to show: every demo agent was permanently
-// unselectable on the Runtime Decision Center page. The mock
+// unselectable in the Test Runtime Authority drawer. The mock
 // POST /v1/intents handler (mockRouter.ts) returns a fixed canned result
 // regardless of which key actually signs the request, so which real
 // bytes end up in localStorage here doesn't matter -- only that

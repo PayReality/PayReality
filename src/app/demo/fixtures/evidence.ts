@@ -2,13 +2,26 @@ import type { LiveEvidence, EvidencePayload } from "../../live/types";
 import { demoDecisions, demoDecisionCreatedAt } from "./decisions";
 import { findDemoAgent } from "./agents";
 import { demoAuthorityContextByPrincipal } from "./principals";
-import { AUTHORITY_CFO_DELEGATION } from "./policies";
+import { AUTHORITY_CFO_DELEGATION, findDemoPolicy } from "./policies";
 
-function riskFor(outcome: string, amount: number): EvidencePayload["risk_classification"] {
+// Domain Generalization Milestone: mirrors the real backend's own
+// precedence (intent_service.append_evidence) -- (1) an explicit
+// RiskLevel authored on any matched policy's own constraints.risk_level
+// wins; (2) the amount-threshold heuristic, only when no matched policy
+// declared one; (3) a conservative MEDIUM default -- never LOW -- when
+// neither signal exists, so a non-financial decision is never silently
+// under-classified purely because it has no amount.
+function riskFor(outcome: string, amount: number | null, evaluatedMandates: string[]): EvidencePayload["risk_classification"] {
   if (outcome === "DENY") return "HIGH";
-  if (amount > 50000) return "MEDIUM";
-  if (amount > 0) return "LOW";
-  return "LOW";
+  for (const policyKey of evaluatedMandates) {
+    const declared = findDemoPolicy(policyKey)?.constraints.risk_level;
+    if (declared) return declared as EvidencePayload["risk_classification"];
+  }
+  if (amount != null) {
+    if (amount > 50000) return "MEDIUM";
+    return "LOW";
+  }
+  return "MEDIUM";
 }
 
 export const demoEvidence: LiveEvidence[] = demoDecisions.map((d, i) => {
@@ -22,11 +35,18 @@ export const demoEvidence: LiveEvidence[] = demoDecisions.map((d, i) => {
     decision_id: d.id,
     agent_id: d.agent_id,
     action: d.action,
-    amount: d.amount.toFixed(2),
+    // Domain Generalization Milestone: resource/amount/currency are
+    // all optional -- included only when the decision actually had
+    // them, matching the real backend's own Evidence builder. A
+    // non-financial decision (disable_user) carries no fabricated
+    // amount at all.
+    ...(d.resource != null ? { resource: d.resource } : {}),
+    ...(d.amount != null ? { amount: d.amount.toFixed(2) } : {}),
+    ...(d.currency != null ? { currency: d.currency } : {}),
     matched_mandate_ids: d.evaluated_mandates,
     authority_outcome: d.outcome,
     approval_outcome: d.resolution?.resolution ?? null,
-    risk_classification: riskFor(d.outcome, d.amount),
+    risk_classification: riskFor(d.outcome, d.amount, d.evaluated_mandates),
     approver: d.resolution?.resolved_by ?? null,
     recorded_at: createdAt,
     previous_hash: i === 0 ? null : `sha256:${(i - 1).toString(16).padStart(4, "0")}f2c9e1b7a3d5${i.toString(16).padStart(2, "0")}`,

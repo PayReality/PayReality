@@ -207,6 +207,15 @@ export function AgentDetailPage() {
         )}
       </div>
 
+      {/* Core Product Experience Redesign, section 3C: this page is an
+          operational authority profile, organized around the five
+          questions an operator actually asks about an agent -- who it
+          is, whose authority it acts under, what it's authorized to do,
+          what it's actually done, and its current lifecycle state --
+          rather than an undifferentiated stack of cards. */}
+      <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
+        Who is this
+      </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card style={{ marginBottom: 16 }}>
           <h2 className="text-sm font-medium mb-1" style={{ color: "var(--pr-text-primary)" }}>Identity</h2>
@@ -311,6 +320,9 @@ export function AgentDetailPage() {
         </Card>
       </div>
 
+      <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
+        Whose authority
+      </p>
       <Card style={{ marginBottom: 16 }}>
         <h2 className="text-sm font-medium mb-3" style={{ color: "var(--pr-text-primary)" }}>Active delegations</h2>
         {authorityContext && authorityContext.delegations.length > 0 ? (
@@ -329,6 +341,79 @@ export function AgentDetailPage() {
         )}
       </Card>
 
+      <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
+        What can it do
+      </p>
+      <Card style={{ marginBottom: 16 }}>
+        <h2 className="text-sm font-medium mb-3" style={{ color: "var(--pr-text-primary)" }}>Rules</h2>
+        {detail.policies.length === 0 && <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>No rules target this agent's principal yet.</p>}
+        {detail.policies.map((p) => (
+          <div key={p.policy_key} className="py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
+            <div className="flex items-center justify-between">
+              <Link to={`/governance/${p.policy_key}`} style={{ color: "var(--pr-authority-blue)" }}>{p.name || p.policy_key}</Link>
+              <span style={{ color: "var(--pr-text-muted)" }}>v{p.version} &middot; {formatStatus(p.status)}</span>
+            </div>
+            {/* Product Experience Remediation Milestone 1: what this rule
+                actually governs -- previously invisible without opening
+                Governance separately. */}
+            {(p.action || p.resource) && (
+              <div style={{ color: "var(--pr-text-disabled)", fontSize: 11.5 }}>
+                {p.action ?? "any action"}
+                {p.resource ? ` → ${p.resource}` : ""}
+              </div>
+            )}
+          </div>
+        ))}
+      </Card>
+
+      <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
+        What has it done
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Card style={{ marginBottom: 16 }}>
+          <h2 className="text-sm font-medium mb-3" style={{ color: "var(--pr-text-primary)" }}>Decision history</h2>
+          {detail.recent_decisions.length === 0 && <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>No decisions yet.</p>}
+          {detail.recent_decisions.map((d) => (
+            <div key={d.id} className="py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
+              <div className="flex items-center justify-between">
+                <span style={{ color: "var(--pr-text-primary)" }}>{formatStatus(d.outcome)}</span>
+                <span style={{ fontSize: 11, color: "var(--pr-text-disabled)" }}>{new Date(d.created_at).toLocaleString()}</span>
+              </div>
+              {/* Product Experience Remediation Milestone 1: what was
+                  actually attempted -- previously only outcome/reason,
+                  with no action or resource at all. Deliberately no
+                  amount/currency: contextual, not universal. */}
+              {(d.action || d.resource) && (
+                <div style={{ color: "var(--pr-text-disabled)", fontSize: 11.5 }}>
+                  {d.action ?? "unknown action"}
+                  {d.resource ? ` → ${d.resource}` : ""}
+                </div>
+              )}
+              {d.reason && <div style={{ color: "var(--pr-text-muted)", fontSize: 12 }}>{d.reason}</div>}
+            </div>
+          ))}
+          <Link to="/decisions" style={{ color: "var(--pr-authority-blue)", fontSize: 12, display: "inline-block", marginTop: 8 }}>View all Decisions &rarr;</Link>
+        </Card>
+
+        <Card style={{ marginBottom: 16 }}>
+          <div className="flex items-center gap-1.5 mb-3">
+            <h2 className="text-sm font-medium" style={{ color: "var(--pr-text-primary)" }}>Evidence</h2>
+            <HelpIcon articleId="evidence" />
+          </div>
+          {detail.recent_evidence.length === 0 && <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>No evidence yet.</p>}
+          {detail.recent_evidence.map((e) => (
+            <div key={e.id} className="flex items-center justify-between py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
+              <span style={{ color: "var(--pr-text-primary)" }}>{formatStatus(e.status)}</span>
+              <span style={{ fontSize: 11, color: "var(--pr-text-disabled)" }}>{new Date(e.created_at).toLocaleString()}</span>
+            </div>
+          ))}
+          <Link to="/evidence" style={{ color: "var(--pr-authority-blue)", fontSize: 12, display: "inline-block", marginTop: 8 }}>View all Evidence &rarr;</Link>
+        </Card>
+      </div>
+
+      <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
+        Lifecycle state
+      </p>
       <Card style={{ marginBottom: 16 }}>
         <div className="flex items-center gap-1.5 mb-3">
           <h2 className="text-sm font-medium" style={{ color: "var(--pr-text-primary)" }}>Certificates</h2>
@@ -359,49 +444,6 @@ export function AgentDetailPage() {
           </tbody>
         </table>
       </Card>
-
-      <Card style={{ marginBottom: 16 }}>
-        <h2 className="text-sm font-medium mb-3" style={{ color: "var(--pr-text-primary)" }}>Rules</h2>
-        {detail.policies.length === 0 && <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>No rules target this agent's principal yet.</p>}
-        {detail.policies.map((p) => (
-          <div key={p.policy_key} className="flex items-center justify-between py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
-            <Link to={`/governance/${p.policy_key}`} style={{ color: "var(--pr-authority-blue)" }}>{p.name || p.policy_key}</Link>
-            <span style={{ color: "var(--pr-text-muted)" }}>v{p.version} &middot; {formatStatus(p.status)}</span>
-          </div>
-        ))}
-      </Card>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Card style={{ marginBottom: 16 }}>
-          <h2 className="text-sm font-medium mb-3" style={{ color: "var(--pr-text-primary)" }}>Decision history</h2>
-          {detail.recent_decisions.length === 0 && <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>No decisions yet.</p>}
-          {detail.recent_decisions.map((d) => (
-            <div key={d.id} className="py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
-              <div className="flex items-center justify-between">
-                <span style={{ color: "var(--pr-text-primary)" }}>{formatStatus(d.outcome)}</span>
-                <span style={{ fontSize: 11, color: "var(--pr-text-disabled)" }}>{new Date(d.created_at).toLocaleString()}</span>
-              </div>
-              {d.reason && <div style={{ color: "var(--pr-text-muted)", fontSize: 12 }}>{d.reason}</div>}
-            </div>
-          ))}
-          <Link to="/decisions" style={{ color: "var(--pr-authority-blue)", fontSize: 12, display: "inline-block", marginTop: 8 }}>Submit a new decision &rarr;</Link>
-        </Card>
-
-        <Card style={{ marginBottom: 16 }}>
-          <div className="flex items-center gap-1.5 mb-3">
-            <h2 className="text-sm font-medium" style={{ color: "var(--pr-text-primary)" }}>Evidence</h2>
-            <HelpIcon articleId="evidence" />
-          </div>
-          {detail.recent_evidence.length === 0 && <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>No evidence yet.</p>}
-          {detail.recent_evidence.map((e) => (
-            <div key={e.id} className="flex items-center justify-between py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
-              <span style={{ color: "var(--pr-text-primary)" }}>{formatStatus(e.status)}</span>
-              <span style={{ fontSize: 11, color: "var(--pr-text-disabled)" }}>{new Date(e.created_at).toLocaleString()}</span>
-            </div>
-          ))}
-          <Link to="/evidence" style={{ color: "var(--pr-authority-blue)", fontSize: 12, display: "inline-block", marginTop: 8 }}>View all Evidence &rarr;</Link>
-        </Card>
-      </div>
 
       <Card style={{ marginBottom: 16 }}>
         <h2 className="text-sm font-medium mb-3" style={{ color: "var(--pr-text-primary)" }}>Lifecycle timeline &amp; audit</h2>

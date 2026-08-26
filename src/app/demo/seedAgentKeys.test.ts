@@ -5,10 +5,10 @@ import { getAgentPrivateKey } from "../live/agentKeyStore";
 // The bug this fixes: a fresh demo visitor's browser has no locally
 // stored private key for any of the demo's pre-existing fixture agents
 // (only the real register/rotate-keys flow ever calls
-// saveAgentKeyPair), so LiveTestIntent.tsx's signableAgents filter had
-// nothing to show -- every agent in the Runtime Decision Center's picker
-// was permanently unselectable. ensureDemoAgentKeysSeeded must leave a
-// real key behind for every demo agent, exactly once.
+// saveAgentKeyPair), so ManualDecisionSheet.tsx's signableAgents filter
+// had nothing to show -- every agent in the Test Runtime Authority
+// drawer's picker was permanently unselectable. ensureDemoAgentKeysSeeded
+// must leave a real key behind for every demo agent, exactly once.
 
 beforeEach(() => {
   localStorage.clear();

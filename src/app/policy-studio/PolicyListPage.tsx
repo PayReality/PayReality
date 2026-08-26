@@ -8,6 +8,7 @@ import { useResourceSync } from "../services/resourceSync";
 import { HelpIcon } from "../help/HelpIcon";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
+import { Select } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 
 type SortKey = "name" | "version" | "status" | "created_at" | "owner";
@@ -132,7 +133,7 @@ export function PolicyListPage() {
             width: 260,
           }}
         />
-        <select
+        <Select
           aria-label="Filter by status"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
@@ -154,8 +155,8 @@ export function PolicyListPage() {
           <option value="active">Active</option>
           <option value="retired">Retired</option>
           <option value="archived">Archived</option>
-        </select>
-        <select
+        </Select>
+        <Select
           aria-label="Sort by"
           value={sortKey}
           onChange={(e) => selectSort(e.target.value as SortKey)}
@@ -173,7 +174,7 @@ export function PolicyListPage() {
           <option value="version">Version</option>
           <option value="status">Status</option>
           <option value="owner">Owner</option>
-        </select>
+        </Select>
       </div>
 
       {error && (
@@ -212,7 +213,7 @@ export function PolicyListPage() {
                   </button>
                 </th>
               ))}
-              <th className="pb-2" title="Whether this policy enforces a resolved Authority Builder Authority, or free-text delegation only">Authority</th>
+              <th className="pb-2" title="Whether this policy enforces a resolved Authority Builder Authority, or free-text delegation only">Authority source</th>
             </tr>
           </thead>
           <tbody>
@@ -239,11 +240,11 @@ export function PolicyListPage() {
                 <td className="py-2" style={{ color: "var(--pr-text-muted)" }}>
                   {p.metadata.owner ?? "N/A"}
                 </td>
-                <td className="py-2" title={p.constraints.authority_id ? "Enforces a resolved Authority" : "Free-text delegation only"}>
+                <td className="py-2" style={{ fontSize: 12 }} title={p.constraints.authority_id ? "This policy enforces a resolved Authority Builder Authority" : "This policy's delegated_by is free text, not linked to a resolved Authority"}>
                   {p.constraints.authority_id ? (
-                    <span aria-label="Linked to a resolved Authority" style={{ color: "var(--pr-authority-blue)" }}>&#9679;</span>
+                    <span style={{ color: "var(--pr-authority-blue)" }}>Linked authority</span>
                   ) : (
-                    <span aria-label="No resolved Authority" style={{ color: "var(--pr-text-muted)" }}>&#9675;</span>
+                    <span style={{ color: "var(--pr-text-muted)" }}>Free-text only</span>
                   )}
                 </td>
               </tr>

@@ -7,6 +7,7 @@ import {
   POLICY_PURCHASE_ORDER_APPROVAL,
   POLICY_VENDOR_ONBOARDING,
   POLICY_SYSTEM_ACCESS,
+  POLICY_DISABLE_PRIVILEGED_ACCOUNT,
   MANDATE_AP_INVOICE_50K,
 } from "./policies";
 import { ES_SAP, ES_COUPA, ES_SERVICENOW } from "./enterpriseSystems";
@@ -19,8 +20,12 @@ interface DemoDecisionSeed {
   reason: string | null;
   agent_id: string;
   action: string;
-  amount: number;
-  currency: string;
+  // Domain Generalization Milestone: both nullable -- a non-financial
+  // decision (e.g. disable_user) carries neither, and resource is the
+  // generic identifier of what the action concerned.
+  resource: string | null;
+  amount: number | null;
+  currency: string | null;
   evaluated_mandates: string[];
   evaluated_mandate_ids: string[];
   enterprise_system_id: string | null;
@@ -35,6 +40,7 @@ interface DemoDecisionSeed {
 export const DECISION_HERO_ALLOW = "decision-hero-ap-invoice-allow";
 export const DECISION_HERO_DENY = "decision-hero-ap-invoice-deny";
 export const DECISION_HERO_REVIEW = "decision-hero-ap-invoice-review";
+export const DECISION_HERO_DISABLE_USER = "decision-hero-disable-user-review";
 
 const seeds: DemoDecisionSeed[] = [
   {
@@ -44,6 +50,7 @@ const seeds: DemoDecisionSeed[] = [
     reason: "Within David Okonkwo's delegated $50,000 Treasury spending limit for supplier payments.",
     agent_id: AGENT_AP_INVOICE,
     action: "vendor_payment",
+    resource: null,
     amount: 18450,
     currency: "USD",
     evaluated_mandates: [POLICY_VENDOR_PAYMENT_UNDER_50K],
@@ -60,6 +67,7 @@ const seeds: DemoDecisionSeed[] = [
     reason: "Exceeds David Okonkwo's delegated spending limit of $50,000 -- no active policy authorizes this agent to pay above that threshold.",
     agent_id: AGENT_AP_INVOICE,
     action: "vendor_payment",
+    resource: null,
     amount: 187500,
     currency: "USD",
     evaluated_mandates: [POLICY_VENDOR_PAYMENT_UNDER_50K, POLICY_INVOICE_REVIEW_OVER_50K],
@@ -76,6 +84,7 @@ const seeds: DemoDecisionSeed[] = [
     reason: "Invoice amount exceeds the $50,000 auto-approval threshold -- routed to Treasury for manual sign-off.",
     agent_id: AGENT_AP_INVOICE,
     action: "vendor_payment",
+    resource: null,
     amount: 76200,
     currency: "USD",
     evaluated_mandates: [POLICY_INVOICE_REVIEW_OVER_50K],
@@ -84,6 +93,28 @@ const seeds: DemoDecisionSeed[] = [
     enterprise_system_name: "SAP S/4HANA",
     status: "RESOLVED",
     resolution: { resolution: "approved", resolved_by: "Priya Chandrasekaran", reason: "Confirmed against the Q3 capital equipment budget.", created_at: agoMs(18 * MINUTE) },
+  },
+  {
+    // Domain Generalization Milestone: the platform's non-financial
+    // reference decision -- HUMAN_REVIEW, matched by
+    // POLICY_DISABLE_PRIVILEGED_ACCOUNT's own explicit HIGH risk_level,
+    // not by any amount (there is none). This exact ID is what the
+    // demo's non-financial proof points link to.
+    id: DECISION_HERO_DISABLE_USER,
+    offsetMs: 9 * MINUTE,
+    outcome: "HUMAN_REVIEW",
+    reason: "Disabling a privileged account in a production environment requires human sign-off, regardless of monetary value.",
+    agent_id: AGENT_ACCESS_PROVISIONING,
+    action: "disable_user",
+    resource: "account:USR-829",
+    amount: null,
+    currency: null,
+    evaluated_mandates: [POLICY_DISABLE_PRIVILEGED_ACCOUNT],
+    evaluated_mandate_ids: [],
+    enterprise_system_id: ES_SERVICENOW,
+    enterprise_system_name: "ServiceNow",
+    status: "PENDING",
+    resolution: null,
   },
 ];
 
@@ -103,6 +134,7 @@ function buildBackgroundSeeds(): DemoDecisionSeed[] {
       reason: `Within David Okonkwo's delegated $50,000 Treasury spending limit for supplier payments (${supplier}).`,
       agent_id: AGENT_AP_INVOICE,
       action: "vendor_payment",
+      resource: null,
       amount: 4200 + i * 1375,
       currency: "USD",
       evaluated_mandates: [POLICY_VENDOR_PAYMENT_UNDER_50K],
@@ -122,6 +154,7 @@ function buildBackgroundSeeds(): DemoDecisionSeed[] {
       reason: "Within Elena Ruiz's delegated purchase-order approval authority.",
       agent_id: AGENT_PO_APPROVAL,
       action: "approve_purchase_order",
+      resource: null,
       amount: 32000 + i * 9000,
       currency: "USD",
       evaluated_mandates: [POLICY_PURCHASE_ORDER_APPROVAL],
@@ -140,8 +173,13 @@ function buildBackgroundSeeds(): DemoDecisionSeed[] {
     reason: "Sanctions and risk screening passed for the new supplier.",
     agent_id: AGENT_VENDOR_ONBOARDING,
     action: "onboard_vendor",
-    amount: 0,
-    currency: "USD",
+    // Domain Generalization Milestone: onboarding a vendor has no
+    // monetary dimension of its own -- amount: 0/currency: "USD" here
+    // was exactly the fabricated-placeholder anti-pattern this
+    // milestone eliminates, not a real value.
+    resource: null,
+    amount: null,
+    currency: null,
     evaluated_mandates: [POLICY_VENDOR_ONBOARDING],
     evaluated_mandate_ids: [],
     enterprise_system_id: ES_COUPA,
@@ -157,8 +195,11 @@ function buildBackgroundSeeds(): DemoDecisionSeed[] {
     reason: "Requested access level does not escalate to admin.",
     agent_id: AGENT_ACCESS_PROVISIONING,
     action: "grant_system_access",
-    amount: 0,
-    currency: "USD",
+    // Domain Generalization Milestone: same fix -- granting access has
+    // no monetary dimension; amount: 0/currency: "USD" was fabricated.
+    resource: null,
+    amount: null,
+    currency: null,
     evaluated_mandates: [POLICY_SYSTEM_ACCESS],
     evaluated_mandate_ids: [],
     enterprise_system_id: ES_SERVICENOW,
@@ -178,6 +219,7 @@ export const demoDecisions: LiveDecision[] = allSeeds.map((s) => ({
   reason: s.reason,
   agent_id: s.agent_id,
   action: s.action,
+  resource: s.resource,
   amount: s.amount,
   currency: s.currency,
   created_at: agoMs(s.offsetMs),

@@ -12,6 +12,10 @@ export const DEMO_ACTIONS = [
   "reconcile_treasury",
   "audit_expense",
   "renew_contract",
+  // Domain Generalization Milestone: the platform's proof, in the demo
+  // itself, that it isn't a payments product -- no amount/currency
+  // anywhere in this policy or the decision it produces.
+  "disable_user",
 ] as const;
 
 export const POLICY_VENDOR_PAYMENT_UNDER_50K = "vendor-payment-under-50k";
@@ -21,6 +25,7 @@ export const POLICY_VENDOR_ONBOARDING = "vendor-onboarding-due-diligence";
 export const POLICY_SYSTEM_ACCESS = "system-access-provisioning";
 export const POLICY_CONTRACT_RENEWAL = "contract-auto-renewal-restriction";
 export const POLICY_LEGACY_VENDOR_PAYMENT = "legacy-vendor-payment-rule";
+export const POLICY_DISABLE_PRIVILEGED_ACCOUNT = "disable-privileged-production-account";
 
 export const AUTHORITY_CFO_DELEGATION = "authority-cfo-treasury-delegation";
 export const MANDATE_AP_INVOICE_50K = "mandate-ap-invoice-under-50k";
@@ -193,6 +198,38 @@ export const demoPolicies: RuntimePolicy[] = [
     bundle_id: "bundle-legacy-vendor-payment-v5",
     bundle_hash: "sha256:2e5b8a1c9d3f70264ae8c1f9b5d2a7043",
     created_at: agoMs(400 * DAY),
+  },
+  {
+    // Domain Generalization Milestone: the platform's non-financial
+    // reference scenario. Resource-scoped (unlike every financial
+    // policy above, whose Scope.resource is still null), and its risk
+    // is explicit (Constraints.risk_level), not inferred from an
+    // amount that doesn't exist for this action.
+    policy_key: POLICY_DISABLE_PRIVILEGED_ACCOUNT,
+    version: 1,
+    status: "active",
+    name: "Disable privileged account — production requires review",
+    description: "Allows Access-Provisioning-Agent to disable a privileged account, but routes production environments to human review rather than auto-approving.",
+    scope: { principal: PRINCIPAL_WEBB, action: "disable_user", agent: AGENT_ACCESS_PROVISIONING, resource: "account:USR-829" },
+    conditions: [
+      { field: "context.privileged_account", operator: "==", value: true },
+      { field: "context.environment", operator: "==", value: "production" },
+    ],
+    effect: "require_human_review",
+    constraints: {
+      delegated_by: "Marcus Webb, CISO",
+      expires: null,
+      evidence_required: true,
+      risk_level: "HIGH",
+      authority_id: null,
+      mandate_id: null,
+      enterprise_system_id: ES_SERVICENOW,
+    },
+    metadata: { owner: "Marcus Webb", created_by: "Marcus Webb", tags: ["it", "security"] },
+    audit: { last_reviewed_by: "Marcus Webb", last_reviewed_at: agoMs(2 * DAY) },
+    bundle_id: "bundle-disable-privileged-account-v1",
+    bundle_hash: "sha256:7f4a2e9c1b6d80357ae1c9d4b7e3a1f5f",
+    created_at: agoMs(9 * DAY),
   },
 ];
 
