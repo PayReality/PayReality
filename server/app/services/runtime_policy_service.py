@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import Agent, Authority, EnterpriseSystem, Mandate, Policy, RuntimePolicyRecord
@@ -86,6 +87,22 @@ class UnexpectedActiveWriterError(Exception):
     writer this module isn't aware of, present or future: fail loudly
     rather than silently overwrite something deploy_policy didn't itself
     put there."""
+
+
+class ConcurrentDeploymentConflictError(Exception):
+    """PayReality 1.0 Audit finding G02: raised only after
+    MAX_DEPLOY_ATTEMPTS racing deploy_policy calls have all collided on
+    either the platform-wide Policy.version sequence or this
+    organization's single-active-policy slot -- practically unreachable
+    in real usage, but bounds the retry loop explicitly rather than
+    looping forever (this program's own established discipline; see
+    resolve_decision and approve_graph's own IntegrityError -> clean-
+    error translations). By the time this is raised, OPA has already
+    been reconciled back to whatever this organization's ACTUAL active
+    RuntimePolicy set now is (see deploy_policy's own docstring) -- so
+    even on this failure path, OPA and the database are never left
+    disagreeing; the caller simply lost the race and should retry the
+    deploy from a fresh read."""
 
 
 _EXPECTED_BUNDLE_URI_PREFIX = "runtime_policy_studio:"
@@ -900,6 +917,9 @@ def _ensure_mandate(db: Session, constraints: dict, policy_row: Policy, now: dat
     return constraints
 
 
+MAX_DEPLOY_ATTEMPTS = 3
+
+
 def deploy_policy(
     db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None, opa_url: str = "http://localhost:8181"
 ) -> DeployOutcome:
@@ -910,7 +930,40 @@ def deploy_policy(
     the existing `policies` table, retiring whatever was previously
     active for THIS organization exactly as this function already did
     for the single, shared, platform-wide active row before Milestone 2
-    (idx_policies_single_active_per_org, not idx_policies_single_active)."""
+    (idx_policies_single_active_per_org, not idx_policies_single_active).
+
+    PayReality 1.0 Audit finding G02: two concurrent deploys can race on
+    either of two real, DB-enforced invariants -- `Policy.version` is a
+    genuinely platform-wide monotonic bundle identifier
+    (uq_policies_version, intentionally NOT organization-scoped; see the
+    Policy model's own Milestone 2 docstring for why that scope is
+    deliberate, not an oversight this milestone should "fix" into a
+    per-org sequence), and `idx_policies_single_active_per_org` (exactly
+    one active Policy per organization). _deploy_policy_attempt below
+    now reserves both -- by flushing the new Policy row -- *before* ever
+    pushing to OPA, so a losing attempt's IntegrityError is raised and
+    caught here without OPA having been mutated at all for that attempt.
+    Retried, bounded at MAX_DEPLOY_ATTEMPTS, re-reading fresh state each
+    time (never reusing a stale `prior_active`/`next_version` computed
+    before the previous attempt's rollback). If every attempt collides
+    -- practically unreachable outside deliberately adversarial
+    concurrency -- OPA is explicitly reconciled back to this
+    organization's real, currently-persisted active policy set before
+    raising ConcurrentDeploymentConflictError, so even the give-up path
+    never leaves OPA and the database disagreeing."""
+    for _attempt in range(MAX_DEPLOY_ATTEMPTS):
+        try:
+            return _deploy_policy_attempt(db, policy_key, organization_id, opa_url)
+        except IntegrityError:
+            db.rollback()
+            continue
+    reconcile_opa_with_active_policies(db, opa_url=opa_url)
+    raise ConcurrentDeploymentConflictError(str(policy_key))
+
+
+def _deploy_policy_attempt(
+    db: Session, policy_key: uuid.UUID, organization_id: uuid.UUID | None, opa_url: str
+) -> DeployOutcome:
     row = get_latest(db, policy_key, organization_id)
     if row.status != "compiled":
         raise InvalidTransitionError(row.status, "deploy")
@@ -937,13 +990,6 @@ def deploy_policy(
             "was not written by runtime_policy_service.deploy_policy -- refusing to silently overwrite it"
         )
 
-    package_path, policy_id = _opa_package_and_policy_id(organization_id)
-    rego_source = (
-        result.bundle.rego_source if organization_id is None else retarget_package(result.bundle.rego_source, package_path)
-    )
-    opa = HttpOpaClient(base_url=opa_url)
-    opa.upload_policy(policy_id, rego_source)
-
     next_version = (db.scalar(select(Policy.version).order_by(Policy.version.desc()).limit(1)) or 0) + 1
     now = datetime.now(timezone.utc)
     if prior_active is not None:
@@ -965,11 +1011,25 @@ def deploy_policy(
         bundle_manifest=result.bundle.manifest,
     )
     db.add(policy_row)
-    # Flushed (not just added) so policy_row.id exists below: Mandate.
-    # policy_id is NOT NULL, and this is the first point in this
-    # policy's lifecycle a real Policy row -- and therefore a real id --
-    # exists at all.
+    # G02: flushed here -- BEFORE the OPA push below, and before
+    # policy_row.id is even needed for _ensure_mandate -- specifically
+    # so a racing Policy.version collision (uq_policies_version) or
+    # single-active-policy-per-org collision
+    # (idx_policies_single_active_per_org) raises IntegrityError right
+    # here, caught by deploy_policy's own retry loop above, *before* OPA
+    # has been touched by this (losing) attempt at all. This is the
+    # actual fix for "OPA gets mutated, then the matching DB commit
+    # fails" split-brain: the racy state is reserved in the database
+    # FIRST; OPA is only ever pushed to once this attempt has already
+    # secured a real, durable claim to be the winner.
     db.flush()
+
+    package_path, policy_id = _opa_package_and_policy_id(organization_id)
+    rego_source = (
+        result.bundle.rego_source if organization_id is None else retarget_package(result.bundle.rego_source, package_path)
+    )
+    opa = HttpOpaClient(base_url=opa_url)
+    opa.upload_policy(policy_id, rego_source)
 
     prior_active_rp = db.scalar(
         select(RuntimePolicyRecord).where(

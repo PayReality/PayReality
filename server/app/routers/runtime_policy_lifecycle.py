@@ -58,6 +58,7 @@ from app.schemas.runtime_policy_lifecycle import (
 from app.services import runtime_policy_lifecycle_service as lsvc
 from app.services.runtime_policy_service import (
     CompilationRequiredError,
+    ConcurrentDeploymentConflictError,
     InvalidTransitionError,
     RuntimePolicyNotFoundError,
 )
@@ -157,6 +158,8 @@ def activate(
         ]})
     except CompilationRequiredError as e:
         raise HTTPException(status_code=409, detail=f"compilation_required: {e}")
+    except ConcurrentDeploymentConflictError as e:
+        raise HTTPException(status_code=409, detail=f"concurrent_deployment_conflict: {e}")
     return _row_to_summary(row, db)
 
 

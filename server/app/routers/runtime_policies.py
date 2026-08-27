@@ -36,6 +36,7 @@ from app.services import runtime_policy_service as svc
 from app.services.runtime_policy_service import (
     BundleChangedSinceCompileError,
     CompilationRequiredError,
+    ConcurrentDeploymentConflictError,
     InvalidTransitionError,
     RuntimePolicyNotFoundError,
     UnexpectedActiveWriterError,
@@ -414,6 +415,8 @@ def deploy_policy(
         raise HTTPException(status_code=409, detail=str(e))
     except UnexpectedActiveWriterError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except ConcurrentDeploymentConflictError as e:
+        raise HTTPException(status_code=409, detail=f"concurrent_deployment_conflict: {e}")
     return DeployResponse(
         bundle_id=outcome.bundle_id, bundle_hash=outcome.bundle_hash, deployed_at=outcome.deployed_at,
         authority_id=outcome.authority_id, mandate_id=outcome.mandate_id,
