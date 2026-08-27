@@ -1,4 +1,4 @@
-import type { Corpus, Principal, PrincipalCandidate, Resource, Operation, Relationship, Conflict, Gap, Question, GraphSummary } from "../../ai-authority-builder/types";
+import type { Corpus, Principal, PrincipalCandidate, Resource, Operation, Relationship, Conflict, Gap, Question, GraphSummary, GraphApproval } from "../../ai-authority-builder/types";
 import { agoMs, DAY } from "../liveClock";
 import { PRINCIPAL_OKONKWO, PRINCIPAL_RUIZ, PRINCIPAL_WEBB, PRINCIPAL_CHANDRASEKARAN } from "./principals";
 
@@ -104,6 +104,82 @@ export const demoGaps: Gap[] = [
     source_location: null,
   },
 ];
+
+// Authority Graph Lineage & Versioning (issue #5): a real two-version
+// lineage built from this file's own principal/relationship/conflict/gap
+// fixtures above -- v1 is an honest, smaller subset (only the CFO/
+// Treasury delegation was captured yet); v2 is the full current graph.
+// Snapshot shape matches AuthorityGraphApproval.evidence_snapshot exactly
+// (server/app/services/ai_authority_builder_service.py's
+// _corpus_evidence_snapshot), so the demo diff is real structural
+// comparison, not a scripted narrative.
+function _principalSnapshot(p: Principal) {
+  return { id: p.id, name: p.name, role: p.role, reports_to: p.reports_to, confidence: p.confidence, resolved_principal_id: p.resolved_principal_id };
+}
+function _relationshipSnapshot(r: Relationship) {
+  return { id: r.id, kind: r.kind, from_principal: r.from_principal, to_principal: r.to_principal, status: r.status, confidence: r.confidence };
+}
+function _conflictSnapshot(c: Conflict) {
+  return { id: c.id, description: c.description, conflict_type: null, reviewer_recommendation: null, confidence: c.confidence };
+}
+function _gapSnapshot(g: Gap) {
+  return { id: g.id, description: g.description };
+}
+
+const DEMO_APPROVAL_V1_ID = "graph-approval-meridian-v1";
+const DEMO_APPROVAL_V2_ID = "graph-approval-meridian-v2";
+
+export const demoGraphApprovalV1Snapshot = {
+  principals: [demoAuthorityPrincipals[0], demoAuthorityPrincipals[1]].map(_principalSnapshot),
+  relationships: [] as ReturnType<typeof _relationshipSnapshot>[],
+  conflicts: [] as ReturnType<typeof _conflictSnapshot>[],
+  gaps: [] as ReturnType<typeof _gapSnapshot>[],
+  coverage: {
+    documents_processed: 2, clauses_analysed: 30, clauses_ignored: 3, tables_extracted: 1,
+    images_skipped: 0, sections_unsupported: 0, coverage_percent: 90.9,
+  },
+};
+
+export const demoGraphApprovalV2Snapshot = {
+  principals: demoAuthorityPrincipals.map(_principalSnapshot),
+  relationships: demoRelationships.map(_relationshipSnapshot),
+  conflicts: demoConflicts.map(_conflictSnapshot),
+  gaps: demoGaps.map(_gapSnapshot),
+  coverage: {
+    documents_processed: 3, clauses_analysed: 48, clauses_ignored: 4, tables_extracted: 2,
+    images_skipped: 1, sections_unsupported: 0, coverage_percent: 92.3,
+  },
+};
+
+export const demoGraphApprovals: GraphApproval[] = [
+  {
+    id: DEMO_APPROVAL_V2_ID,
+    corpus_id: DEMO_CORPUS_ID,
+    reviewer: "Priya Chandrasekaran",
+    version: 2,
+    approval_reason: "Added Procurement and CISO authority after the Q1 governance review.",
+    graph_hash: "sha256:demo-graph-hash-v2",
+    approved_at: agoMs(2 * DAY),
+    predecessor_approval_id: DEMO_APPROVAL_V1_ID,
+    superseded_by_approval_id: null,
+  },
+  {
+    id: DEMO_APPROVAL_V1_ID,
+    corpus_id: DEMO_CORPUS_ID,
+    reviewer: "Priya Chandrasekaran",
+    version: 1,
+    approval_reason: "Initial Treasury delegation captured and approved.",
+    graph_hash: "sha256:demo-graph-hash-v1",
+    approved_at: agoMs(21 * DAY),
+    predecessor_approval_id: null,
+    superseded_by_approval_id: DEMO_APPROVAL_V2_ID,
+  },
+];
+
+export const demoGraphApprovalSnapshots: Record<string, typeof demoGraphApprovalV1Snapshot> = {
+  [DEMO_APPROVAL_V1_ID]: demoGraphApprovalV1Snapshot,
+  [DEMO_APPROVAL_V2_ID]: demoGraphApprovalV2Snapshot,
+};
 
 export const demoQuestions: Question[] = [
   {

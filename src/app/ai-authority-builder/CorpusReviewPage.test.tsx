@@ -58,4 +58,52 @@ describe("AIAuthorityBuilderCorpusReviewPage (demo mode)", () => {
     });
     expect(caught).toBeNull();
   });
+
+  it("shows lineage labels and a working View changes disclosure on Approval History (issue #5)", async () => {
+    const { AIAuthorityBuilderCorpusReviewPage } = await import("./CorpusReviewPage");
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/governance/authority-builder/corpus-meridian-governance-docs"] },
+          createElement(
+            Routes,
+            null,
+            createElement(Route, {
+              path: "/governance/authority-builder/:corpusId",
+              element: createElement(AIAuthorityBuilderCorpusReviewPage),
+            })
+          )
+        )
+      );
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    const historyTabButton = Array.from(container.querySelectorAll("button")).find((b) =>
+      (b.textContent ?? "").includes("Approval History")
+    );
+    expect(historyTabButton).toBeTruthy();
+    await act(async () => {
+      historyTabButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    expect(container.textContent).toContain("Current");
+    expect(container.textContent).toContain("Previous version: v1");
+    expect(container.textContent).toContain("First approved version");
+    expect(container.textContent).toContain("No RuntimePolicies compiled from this version yet.");
+
+    const viewChangesButton = Array.from(container.querySelectorAll("button")).find((b) =>
+      (b.textContent ?? "").includes("View changes")
+    );
+    expect(viewChangesButton).toBeTruthy();
+    await act(async () => {
+      viewChangesButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    expect(container.textContent).toContain("Changes from v1 to v2");
+    expect(container.textContent).toContain("Added Marcus Webb");
+    expect(container.textContent).toContain("Added Elena Ruiz");
+  });
 });

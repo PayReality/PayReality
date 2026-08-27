@@ -403,6 +403,20 @@ def test_approve_graph_endpoint_now_depends_on_authorized_corpus():
     assert sig.parameters["corpus"].default.dependency is ai_authority_builder._authorized_corpus
 
 
+def test_diff_graph_approval_endpoint_depends_on_authorized_corpus():
+    """Authority Graph Lineage & Versioning (issue #5): the new diff
+    endpoint takes a corpus_id in its own path -- proves it's gated by
+    the same _authorized_corpus dependency every other corpus-scoped
+    read here already requires, not a new, unverified isolation
+    mechanism."""
+    import inspect
+
+    from app.routers import ai_authority_builder
+
+    sig = inspect.signature(ai_authority_builder.diff_graph_approval)
+    assert sig.parameters["_"].default.dependency is ai_authority_builder._authorized_corpus
+
+
 def test_get_principal_candidates_and_resolve_principal_endpoints_require_authorization():
     import inspect
 

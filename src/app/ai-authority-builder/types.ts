@@ -191,6 +191,11 @@ export interface GraphDiff {
 
 // Approval Audit (Phase 3): one immutable row per "approve this
 // corpus's Authority Graph" reviewer action.
+//
+// Authority Graph Lineage & Versioning (issue #5): predecessor_approval_id
+// is a real, stored, immutable field. superseded_by_approval_id is the
+// opposite direction, always derived server-side, never itself stored --
+// both null is normal (first version / still-current version).
 export interface GraphApproval {
   id: string;
   corpus_id: string;
@@ -199,6 +204,69 @@ export interface GraphApproval {
   approval_reason: string | null;
   graph_hash: string;
   approved_at: string;
+  predecessor_approval_id: string | null;
+  superseded_by_approval_id: string | null;
+}
+
+// Authority Graph Lineage & Versioning (issue #5): a deterministic,
+// same-corpus comparison of two approved graph versions -- GET
+// /corpora/{corpus_id}/approvals/{approval_id}/diff.
+export interface GraphApprovalRef {
+  id: string;
+  version: number;
+  approved_at: string;
+}
+
+export interface FieldChange {
+  field: string;
+  before: unknown;
+  after: unknown;
+}
+
+export interface ChangedItem {
+  id: string;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  changed_fields: FieldChange[];
+}
+
+export interface ItemDiff {
+  added: Record<string, unknown>[];
+  removed: Record<string, unknown>[];
+  changed: ChangedItem[];
+}
+
+export interface CoverageDiff {
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  changed_fields: FieldChange[];
+}
+
+export interface GraphApprovalDiffSummary {
+  principals_added: number;
+  principals_removed: number;
+  principals_changed: number;
+  relationships_added: number;
+  relationships_removed: number;
+  relationships_changed: number;
+  conflicts_added: number;
+  conflicts_removed: number;
+  conflicts_changed: number;
+  gaps_added: number;
+  gaps_removed: number;
+  gaps_changed: number;
+  coverage_changed: boolean;
+}
+
+export interface GraphApprovalDiff {
+  from_approval: GraphApprovalRef;
+  to_approval: GraphApprovalRef;
+  summary: GraphApprovalDiffSummary;
+  principals: ItemDiff;
+  relationships: ItemDiff;
+  conflicts: ItemDiff;
+  gaps: ItemDiff;
+  coverage: CoverageDiff;
 }
 
 // Authority Graph -> RuntimePolicy Compilation Gate (issue #6), reverse

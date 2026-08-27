@@ -41,6 +41,8 @@ import {
   demoConflicts,
   demoGaps,
   demoQuestions,
+  demoGraphApprovals,
+  demoGraphApprovalSnapshots,
   DEMO_CORPUS_ID,
 } from "./fixtures/authorityBuilder";
 import { demoUploads, demoCandidates, DEMO_UPLOAD_ID } from "./fixtures/policyBuilder";
@@ -905,6 +907,57 @@ const DEMO_API_KEYS = [
 // AI Authority Builder
 // ---------------------------------------------------------------------
 const AUTH_BUILDER = "/v1/ai-authority-builder";
+
+// Authority Graph Lineage & Versioning (issue #5): the same deterministic,
+// id-based added/removed/changed algorithm as the real backend's
+// domain/authority_graph/diff.py -- reimplemented here (not imported;
+// this file is a browser-only mock with no access to Python) so the demo's
+// "View changes" UI shows a genuine structural comparison of the two real
+// fixture snapshots above, not a scripted narrative.
+function _indexById(items: Record<string, unknown>[]): Map<string, Record<string, unknown>> {
+  return new Map(items.map((item) => [item.id as string, item]));
+}
+function _diffItems(beforeList: Record<string, unknown>[], afterList: Record<string, unknown>[]) {
+  const before = _indexById(beforeList);
+  const after = _indexById(afterList);
+  const added = [...after.keys()].filter((id) => !before.has(id)).sort().map((id) => after.get(id)!);
+  const removed = [...before.keys()].filter((id) => !after.has(id)).sort().map((id) => before.get(id)!);
+  const changed = [...before.keys()].filter((id) => after.has(id)).sort().flatMap((id) => {
+    const b = before.get(id)!, a = after.get(id)!;
+    const fields = new Set([...Object.keys(b), ...Object.keys(a)]);
+    const changed_fields = [...fields].filter((f) => f !== "id" && b[f] !== a[f]).sort()
+      .map((field) => ({ field, before: b[field] ?? null, after: a[field] ?? null }));
+    return changed_fields.length ? [{ id, before: b, after: a, changed_fields }] : [];
+  });
+  return { added, removed, changed };
+}
+function _diffCoverage(before: Record<string, unknown>, after: Record<string, unknown>) {
+  const fields = new Set([...Object.keys(before), ...Object.keys(after)]);
+  const changed_fields = [...fields].filter((f) => before[f] !== after[f]).sort()
+    .map((field) => ({ field, before: before[field] ?? null, after: after[field] ?? null }));
+  return { before, after, changed_fields };
+}
+function diffDemoGraphApprovals(from: (typeof demoGraphApprovals)[number], to: (typeof demoGraphApprovals)[number]) {
+  const fromSnapshot = demoGraphApprovalSnapshots[from.id];
+  const toSnapshot = demoGraphApprovalSnapshots[to.id];
+  const principals = _diffItems(fromSnapshot.principals, toSnapshot.principals);
+  const relationships = _diffItems(fromSnapshot.relationships, toSnapshot.relationships);
+  const conflicts = _diffItems(fromSnapshot.conflicts, toSnapshot.conflicts);
+  const gaps = _diffItems(fromSnapshot.gaps, toSnapshot.gaps);
+  const coverage = _diffCoverage(fromSnapshot.coverage, toSnapshot.coverage);
+  return {
+    from_approval: { id: from.id, version: from.version, approved_at: from.approved_at },
+    to_approval: { id: to.id, version: to.version, approved_at: to.approved_at },
+    summary: {
+      principals_added: principals.added.length, principals_removed: principals.removed.length, principals_changed: principals.changed.length,
+      relationships_added: relationships.added.length, relationships_removed: relationships.removed.length, relationships_changed: relationships.changed.length,
+      conflicts_added: conflicts.added.length, conflicts_removed: conflicts.removed.length, conflicts_changed: conflicts.changed.length,
+      gaps_added: gaps.added.length, gaps_removed: gaps.removed.length, gaps_changed: gaps.changed.length,
+      coverage_changed: coverage.changed_fields.length > 0,
+    },
+    principals, relationships, conflicts, gaps, coverage,
+  };
+}
 on("GET", `${AUTH_BUILDER}/status`, () => ({ ai_enabled: true }));
 on("POST", `${AUTH_BUILDER}/corpora`, () => demoCorpus);
 on("GET", `${AUTH_BUILDER}/corpora`, () => [demoCorpus]);
@@ -955,7 +1008,17 @@ on("GET", `${AUTH_BUILDER}/corpora/:id/diff`, () => ({
   changed_reporting_lines: [],
   changed_responsibilities: [],
 }));
-on("GET", `${AUTH_BUILDER}/corpora/:id/approvals`, () => []);
+on("GET", `${AUTH_BUILDER}/corpora/:id/approvals`, () => demoGraphApprovals);
+on("GET", `${AUTH_BUILDER}/corpora/:corpusId/approvals/:approvalId/diff`, ({ params, query }) => {
+  const to = demoGraphApprovals.find((a) => a.id === params.approvalId);
+  if (!to) notFound("approval");
+  const against = query.get("against");
+  const from = against
+    ? demoGraphApprovals.find((a) => a.id === against)
+    : demoGraphApprovals.find((a) => a.id === to!.predecessor_approval_id);
+  if (!from) notFound("approval");
+  return diffDemoGraphApprovals(from!, to!);
+});
 on("POST", `${AUTH_BUILDER}/corpora/:id/approve`, ({ params, body }) => blocked({
   id: "approval-demo",
   corpus_id: params.id,
@@ -964,6 +1027,11 @@ on("POST", `${AUTH_BUILDER}/corpora/:id/approve`, ({ params, body }) => blocked(
   approval_reason: body?.approval_reason ?? null,
   graph_hash: "sha256:demo-graph-hash",
   approved_at: new Date().toISOString(),
+  // Issue #5: honestly null -- this demo corpus's first (blocked, never
+  // actually persisted) approval has no predecessor, same honesty as
+  // the always-empty approvals/diff endpoints above.
+  predecessor_approval_id: null,
+  superseded_by_approval_id: null,
 }));
 
 // ---------------------------------------------------------------------

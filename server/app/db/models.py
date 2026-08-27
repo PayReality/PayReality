@@ -1498,10 +1498,23 @@ class AuthorityGraphApproval(Base):
     approval_reason: Mapped[str | None] = mapped_column(Text)
     graph_hash: Mapped[str] = mapped_column(Text, nullable=False)
     approved_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Authority Graph Lineage & Versioning (issue #5): the immediate
+    # previous approved version for this SAME corpus, stamped once at
+    # insert time by approve_graph and never changed afterward -- same
+    # immutability discipline as every other column here. Null only for
+    # a corpus's first approved version. Deliberately one-directional:
+    # "superseded by" is always derived by reverse lookup (which row, if
+    # any, has this row's id as ITS predecessor_approval_id), never
+    # stored, so there is no redundant bidirectional state that could
+    # drift out of sync with itself.
+    predecessor_approval_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("authority_graph_approvals.id")
+    )
 
     __table_args__ = (
         UniqueConstraint("corpus_id", "version", name="uq_authority_graph_approvals_corpus_version"),
         Index("idx_authority_graph_approvals_corpus", "corpus_id"),
+        Index("idx_authority_graph_approvals_predecessor", "predecessor_approval_id"),
     )
 
 

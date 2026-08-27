@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -186,7 +187,15 @@ class GraphApprovalResponse(BaseModel):
     """Task 8: one immutable row per approval action. `reviewer` is
     whatever identity the request was authenticated as -- see the
     router's own get_current_organization/require_permission usage,
-    unchanged by this endpoint."""
+    unchanged by this endpoint.
+
+    Authority Graph Lineage & Versioning (issue #5): predecessor_approval_id
+    is a real, stored, immutable field. superseded_by_approval_id is the
+    opposite direction, always derived by reverse lookup at response
+    time (get_superseding_approval), never itself stored -- see the
+    model's own docstring for why. Both null is normal and common: null
+    predecessor means this is the corpus's first approved version; null
+    superseded_by means this is still the corpus's current latest."""
 
     id: str
     corpus_id: str
@@ -195,6 +204,8 @@ class GraphApprovalResponse(BaseModel):
     approval_reason: str | None
     graph_hash: str
     approved_at: datetime
+    predecessor_approval_id: str | None = None
+    superseded_by_approval_id: str | None = None
 
 
 class CompiledPolicySummaryResponse(BaseModel):
@@ -207,6 +218,79 @@ class CompiledPolicySummaryResponse(BaseModel):
     name: str
     status: str
     created_at: datetime
+
+
+class GraphApprovalRef(BaseModel):
+    """The minimal identity of one side of a diff -- enough for a caller
+    to label "changes from vN to vM" without a second lookup."""
+
+    id: str
+    version: int
+    approved_at: datetime
+
+
+class FieldChangeResponse(BaseModel):
+    field: str
+    before: Any
+    after: Any
+
+
+class ChangedItemResponse(BaseModel):
+    id: str
+    before: dict[str, Any]
+    after: dict[str, Any]
+    changed_fields: list[FieldChangeResponse]
+
+
+class ItemDiffResponse(BaseModel):
+    added: list[dict[str, Any]]
+    removed: list[dict[str, Any]]
+    changed: list[ChangedItemResponse]
+
+
+class CoverageDiffResponse(BaseModel):
+    before: dict[str, Any]
+    after: dict[str, Any]
+    changed_fields: list[FieldChangeResponse]
+
+
+class GraphApprovalDiffSummary(BaseModel):
+    """Deterministic counts, not a risk score -- see
+    domain/authority_graph/diff.py's own docstring for why no severity
+    or risk classification is invented here."""
+
+    principals_added: int
+    principals_removed: int
+    principals_changed: int
+    relationships_added: int
+    relationships_removed: int
+    relationships_changed: int
+    conflicts_added: int
+    conflicts_removed: int
+    conflicts_changed: int
+    gaps_added: int
+    gaps_removed: int
+    gaps_changed: int
+    coverage_changed: bool
+
+
+class GraphApprovalDiffResponse(BaseModel):
+    """Authority Graph Lineage & Versioning (issue #5): a deterministic,
+    same-corpus comparison of two approved graph versions -- see
+    routers/ai_authority_builder.py's diff_graph_approval and
+    domain/authority_graph/diff.py for how this is computed. Named
+    `from_approval`/`to_approval` rather than `from`/`to` only because
+    the latter collides with the Python keyword; the comparison
+    direction is otherwise exactly "from -> to"."""
+
+    from_approval: GraphApprovalRef
+    to_approval: GraphApprovalRef
+    summary: GraphApprovalDiffSummary
+    principals: ItemDiffResponse
+    relationships: ItemDiffResponse
+    conflicts: ItemDiffResponse
+    gaps: ItemDiffResponse
+    coverage: CoverageDiffResponse
 
 
 class GapResponse(BaseModel):

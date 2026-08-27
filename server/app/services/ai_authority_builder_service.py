@@ -13,6 +13,7 @@ import logging
 import uuid
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -35,6 +36,7 @@ from app.domain.ai_authority_builder.provider import (
     AuthorityGraphExtractionProvider,
     CandidateConflict,
 )
+from app.domain.authority_graph.diff import GraphSnapshotDiff, diff_graph_snapshots
 from app.domain.decision.scope_vocabulary import KNOWN_SCOPES
 from app.domain.evidence.signing import payload_hash
 from app.domain.ai_policy_builder.text_extraction import extract_text, extract_text_with_coverage
@@ -791,6 +793,36 @@ def _corpus_evidence_snapshot(db: Session, corpus_id: uuid.UUID) -> dict:
     }
 
 
+class ConcurrentApprovalConflictError(Exception):
+    """Raised only after MAX_APPROVAL_VERSION_ATTEMPTS racing
+    approve_graph calls for the same corpus all collided on the same
+    computed version number -- practically unreachable in real usage,
+    but bounds the retry loop explicitly rather than looping forever
+    (this codebase's own established discipline; see the SDK's
+    wait_for_resolution() and resolve_decision's own IntegrityError ->
+    clean-error translation, Human Review Continuation milestone, issue
+    #10)."""
+
+
+class ApprovalNotFoundError(Exception):
+    """Raised when an approval_id doesn't exist, OR exists but belongs
+    to a different corpus than the one named alongside it -- the same
+    "path segments must agree, and don't distinguish the two cases in
+    the response" discipline list_policies_compiled_from_approval's own
+    router handler already applies, reused here rather than inventing a
+    second signal for what is the same information-hiding concern."""
+
+
+class NoPredecessorApprovalError(Exception):
+    """Raised by diff_graph_approvals when no explicit `against` approval
+    was given and the target approval has no predecessor (it's the
+    first approved version for its corpus) -- there is nothing to
+    compare it to."""
+
+
+MAX_APPROVAL_VERSION_ATTEMPTS = 3
+
+
 def approve_graph(
     db: Session, corpus_id: uuid.UUID, reviewer: str, approval_reason: str | None = None
 ) -> AuthorityGraphApproval:
@@ -802,29 +834,48 @@ def approve_graph(
     is what does that, exactly as before this phase. This function only
     ever appends a new, immutable row; corpus_id+version is unique, so
     calling it again for the same corpus creates the next version rather
-    than overwriting anything."""
-    version = (
-        db.scalar(
-            select(func.max(AuthorityGraphApproval.version)).where(
-                AuthorityGraphApproval.corpus_id == corpus_id
-            )
+    than overwriting anything.
+
+    Authority Graph Lineage & Versioning (issue #5): also stamps
+    predecessor_approval_id to the corpus's real latest approval at the
+    moment of this call (None for a corpus's first approval) -- never
+    changed afterward, same immutability discipline as every other
+    field here.
+
+    Concurrency: two concurrent calls for the same corpus can both read
+    the same "current latest" row before either commits, computing the
+    same next version number. The uq_authority_graph_approvals_corpus_version
+    constraint -- not a lock -- is what actually prevents both from
+    persisting; no row locking exists anywhere in this codebase
+    (deliberately, per this repo's own established preference for
+    optimistic, DB-constraint-enforced safety over distributed locks).
+    The loser's IntegrityError is caught below and the version/
+    predecessor recomputed and retried, bounded at
+    MAX_APPROVAL_VERSION_ATTEMPTS -- never an unhandled 500, and never
+    an infinite loop."""
+    for _attempt in range(MAX_APPROVAL_VERSION_ATTEMPTS):
+        latest = get_latest_approval_for_corpus(db, corpus_id)
+        version = (latest.version if latest else 0) + 1
+        snapshot = _corpus_evidence_snapshot(db, corpus_id)
+        approval = AuthorityGraphApproval(
+            id=uuid.uuid4(),
+            corpus_id=corpus_id,
+            reviewer=reviewer,
+            version=version,
+            predecessor_approval_id=latest.id if latest else None,
+            evidence_snapshot=snapshot,
+            approval_reason=approval_reason,
+            graph_hash=payload_hash(snapshot),
         )
-        or 0
-    ) + 1
-    snapshot = _corpus_evidence_snapshot(db, corpus_id)
-    approval = AuthorityGraphApproval(
-        id=uuid.uuid4(),
-        corpus_id=corpus_id,
-        reviewer=reviewer,
-        version=version,
-        evidence_snapshot=snapshot,
-        approval_reason=approval_reason,
-        graph_hash=payload_hash(snapshot),
-    )
-    db.add(approval)
-    db.commit()
-    db.refresh(approval)
-    return approval
+        db.add(approval)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            continue
+        db.refresh(approval)
+        return approval
+    raise ConcurrentApprovalConflictError(str(corpus_id))
 
 
 def list_approvals(db: Session, corpus_id: uuid.UUID) -> list[AuthorityGraphApproval]:
@@ -854,3 +905,69 @@ def get_latest_approval_for_corpus(db: Session, corpus_id: uuid.UUID) -> Authori
 
 def get_approval_by_id(db: Session, approval_id: uuid.UUID) -> AuthorityGraphApproval | None:
     return db.get(AuthorityGraphApproval, approval_id)
+
+
+def get_approval_for_corpus(db: Session, corpus_id: uuid.UUID, approval_id: uuid.UUID) -> AuthorityGraphApproval:
+    """Authority Graph Lineage & Versioning (issue #5): the org/corpus-
+    scoped read every diff/lineage caller needs, and get_approval_by_id
+    alone does not provide -- that function will happily return an
+    approval belonging to a different corpus (or a different
+    organisation entirely) than the one named in the URL. Raises
+    ApprovalNotFoundError, not a distinguishable "wrong corpus" signal,
+    for both "doesn't exist" and "exists but belongs elsewhere" -- a
+    caller must never learn that a real approval id exists in a corpus
+    it can't otherwise see."""
+    approval = get_approval_by_id(db, approval_id)
+    if approval is None or approval.corpus_id != corpus_id:
+        raise ApprovalNotFoundError(str(approval_id))
+    return approval
+
+
+def diff_graph_approvals(
+    db: Session,
+    corpus_id: uuid.UUID,
+    approval_id: uuid.UUID,
+    against_approval_id: uuid.UUID | None = None,
+) -> tuple[AuthorityGraphApproval, AuthorityGraphApproval, GraphSnapshotDiff]:
+    """Authority Graph Lineage & Versioning (issue #5): a deterministic,
+    same-corpus comparison of two approved graph versions. Returns
+    (from_approval, to_approval, diff) so a caller can read both
+    approvals' own metadata (version, approved_at) alongside the diff
+    itself without a second query.
+
+    Defaults `against_approval_id` to `approval_id`'s own
+    predecessor_approval_id when not given -- comparing a version
+    against the one immediately before it, the common case a reviewer
+    actually wants. Raises NoPredecessorApprovalError if there is none
+    (this is the corpus's first approved version) and no explicit
+    `against` was given -- there is nothing to compare it to.
+
+    An explicit `against_approval_id` may name ANY other approval from
+    the SAME corpus, not just the immediate predecessor -- get_approval_
+    for_corpus's own corpus check applies to it exactly as it does to
+    approval_id, so a cross-corpus (or cross-organisation) `against`
+    404s the same way a cross-corpus approval_id already does. Lineage
+    stays corpus-local; this is never relaxed for the "against" side."""
+    to_approval = get_approval_for_corpus(db, corpus_id, approval_id)
+    if against_approval_id is not None:
+        from_approval = get_approval_for_corpus(db, corpus_id, against_approval_id)
+    elif to_approval.predecessor_approval_id is not None:
+        from_approval = get_approval_for_corpus(db, corpus_id, to_approval.predecessor_approval_id)
+    else:
+        raise NoPredecessorApprovalError(str(approval_id))
+    diff = diff_graph_snapshots(from_approval.evidence_snapshot, to_approval.evidence_snapshot)
+    return from_approval, to_approval, diff
+
+
+def get_superseding_approval(db: Session, approval: AuthorityGraphApproval) -> AuthorityGraphApproval | None:
+    """The approval, if any, whose predecessor_approval_id points back
+    at this one -- deliberately derived by reverse lookup rather than a
+    second stored field (see the model's own docstring for why).
+    Uniqueness of (corpus_id, version) plus every approval always
+    pointing at the corpus's actual prior latest at the time it was
+    created together guarantee at most one match."""
+    return db.scalar(
+        select(AuthorityGraphApproval).where(
+            AuthorityGraphApproval.predecessor_approval_id == approval.id
+        )
+    )

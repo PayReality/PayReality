@@ -11,6 +11,7 @@ import { useAuth } from "../auth/AuthContext";
 import { agentsApi } from "../agents/api";
 import { describeApiError } from "../live/format";
 import { ResolvePrincipalDialog } from "./components/ResolvePrincipalDialog";
+import { ApprovalDiffView } from "./components/ApprovalDiffView";
 import { SkeletonRows } from "../components/ui/skeleton";
 import type {
   Conflict,
@@ -177,7 +178,18 @@ function CompiledPoliciesLink({ corpusId, approvalId }: { corpusId: string; appr
     };
   }, [corpusId, approvalId]);
 
-  if (!policies || policies.length === 0) return null;
+  if (!policies) return null;
+  if (policies.length === 0) {
+    // Authority Graph Lineage & Versioning (issue #5): a real, useful
+    // state, not silently hidden -- a reviewer shouldn't have to wonder
+    // whether this line is missing because nothing compiled, or because
+    // it hasn't loaded yet.
+    return (
+      <p style={{ fontSize: 12, color: "var(--pr-text-muted)", marginTop: 6 }}>
+        No RuntimePolicies compiled from this version yet.
+      </p>
+    );
+  }
   return (
     <p style={{ fontSize: 12, color: "var(--pr-authority-blue)", marginTop: 6 }}>
       Compiled into {policies.length} RuntimePolic{policies.length === 1 ? "y" : "ies"}:{" "}
@@ -238,6 +250,10 @@ export function AIAuthorityBuilderCorpusReviewPage() {
   const [missingInfo, setMissingInfo] = useState<MissingInformationItem[] | null>(null);
   const [diff, setDiff] = useState<GraphDiff | null>(null);
   const [approvals, setApprovals] = useState<GraphApproval[] | null>(null);
+  // Authority Graph Lineage & Versioning (issue #5): which approval
+  // rows currently have their "View changes" disclosure open --
+  // per-row, so opening one doesn't affect the others.
+  const [openDiffs, setOpenDiffs] = useState<Set<string>>(new Set());
   const [answerDrafts, setAnswerDrafts] = useState<Record<string, string>>({});
   const [answerErrors, setAnswerErrors] = useState<Record<string, string>>({});
   const [answerBusyId, setAnswerBusyId] = useState<string | null>(null);
@@ -866,25 +882,58 @@ export function AIAuthorityBuilderCorpusReviewPage() {
             count={approvals?.length ?? null}
             emptyLabel="This corpus's Authority Graph has not been approved yet."
           >
-            {approvals?.map((a) => (
-              <div key={a.id} style={rowStyle}>
-                <div className="flex items-center justify-between gap-3">
-                  <span style={{ color: "var(--pr-text-primary)" }}>
-                    Version {a.version} approved by {a.reviewer}
-                  </span>
-                  <span style={{ fontSize: 12, color: "var(--pr-text-muted)", flexShrink: 0 }}>
-                    {new Date(a.approved_at).toLocaleString()}
-                  </span>
+            {approvals?.map((a) => {
+              const isOpen = openDiffs.has(a.id);
+              return (
+                <div key={a.id} style={rowStyle}>
+                  <div className="flex items-center justify-between gap-3">
+                    <span style={{ color: "var(--pr-text-primary)" }}>
+                      Version {a.version} approved by {a.reviewer}
+                      {a.superseded_by_approval_id === null && (
+                        <span style={{ fontSize: 11, color: "var(--pr-trust-green)", marginLeft: 8 }}>Current</span>
+                      )}
+                    </span>
+                    <span style={{ fontSize: 12, color: "var(--pr-text-muted)", flexShrink: 0 }}>
+                      {new Date(a.approved_at).toLocaleString()}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: 12, color: "var(--pr-text-muted)", marginTop: 2 }}>
+                    {a.predecessor_approval_id ? `Previous version: v${a.version - 1}` : "First approved version"}
+                  </p>
+                  {a.approval_reason && (
+                    <p style={{ fontSize: 13, color: "var(--pr-text-secondary)", marginTop: 4 }}>{a.approval_reason}</p>
+                  )}
+                  <p style={{ fontSize: 11, color: "var(--pr-text-muted)", marginTop: 4, fontFamily: "monospace" }}>
+                    {a.graph_hash}
+                  </p>
+                  {corpusId && <CompiledPoliciesLink corpusId={corpusId} approvalId={a.id} />}
+                  {a.predecessor_approval_id && corpusId && (
+                    <>
+                      <button
+                        onClick={() =>
+                          setOpenDiffs((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(a.id)) next.delete(a.id);
+                            else next.add(a.id);
+                            return next;
+                          })
+                        }
+                        aria-expanded={isOpen}
+                        aria-controls={`approval-diff-${a.id}`}
+                        style={{ fontSize: 12, color: "var(--pr-authority-blue)", marginTop: 6 }}
+                      >
+                        {isOpen ? "Hide changes" : "View changes"}
+                      </button>
+                      {isOpen && (
+                        <div id={`approval-diff-${a.id}`}>
+                          <ApprovalDiffView corpusId={corpusId} approvalId={a.id} />
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
-                {a.approval_reason && (
-                  <p style={{ fontSize: 13, color: "var(--pr-text-secondary)", marginTop: 4 }}>{a.approval_reason}</p>
-                )}
-                <p style={{ fontSize: 11, color: "var(--pr-text-muted)", marginTop: 4, fontFamily: "monospace" }}>
-                  {a.graph_hash}
-                </p>
-                {corpusId && <CompiledPoliciesLink corpusId={corpusId} approvalId={a.id} />}
-              </div>
-            ))}
+              );
+            })}
           </Section>
         )}
       </div>

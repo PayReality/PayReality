@@ -6,6 +6,7 @@ import type {
   Coverage,
   Gap,
   GraphApproval,
+  GraphApprovalDiff,
   GraphDiff,
   GraphSummary,
   MissingInformationItem,
@@ -64,4 +65,12 @@ export const aiAuthorityBuilderApi = {
   // specific approved graph version.
   getPoliciesCompiledFromApproval: (corpusId: string, approvalId: string) =>
     apiClient.get<CompiledPolicySummary[]>(`${BASE}/corpora/${corpusId}/approvals/${approvalId}/policies`),
+  // Authority Graph Lineage & Versioning (issue #5): defaults to
+  // comparing approvalId against its own immediate predecessor;
+  // against (optional) compares it against any other approval from the
+  // same corpus instead.
+  getApprovalDiff: (corpusId: string, approvalId: string, against?: string) =>
+    apiClient.get<GraphApprovalDiff>(
+      `${BASE}/corpora/${corpusId}/approvals/${approvalId}/diff${against ? `?against=${against}` : ""}`,
+    ),
 };

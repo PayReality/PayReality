@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import uuid
 
@@ -33,6 +34,9 @@ from app.schemas.ai_authority_builder import (
     CorpusResponse,
     CoverageResponse,
     GapResponse,
+    GraphApprovalDiffResponse,
+    GraphApprovalDiffSummary,
+    GraphApprovalRef,
     GraphApprovalResponse,
     GraphDiffResponse,
     GraphSummaryResponse,
@@ -50,10 +54,13 @@ from app.services import ai_authority_builder_service as svc
 from app.services import runtime_policy_service
 from app.services.ai_authority_builder_service import (
     AlreadyResolvedError,
+    ApprovalNotFoundError,
     AuthorityPrincipalNotFoundError,
     AuthorityRelationshipNotFoundError,
+    ConcurrentApprovalConflictError,
     CorpusNotFoundError,
     CrossOrganizationMatchError,
+    NoPredecessorApprovalError,
     PrincipalNotFoundError,
     QuestionNotFoundError,
     RelationshipNotResolvableError,
@@ -590,10 +597,15 @@ def approve_graph(
         )
     except CorpusNotFoundError:
         raise HTTPException(status_code=404, detail="corpus_not_found")
+    except ConcurrentApprovalConflictError:
+        raise HTTPException(status_code=409, detail="concurrent_approval_conflict")
     return GraphApprovalResponse(
         id=str(approval.id), corpus_id=str(approval.corpus_id), reviewer=approval.reviewer,
         version=approval.version, approval_reason=approval.approval_reason,
         graph_hash=approval.graph_hash, approved_at=approval.approved_at,
+        predecessor_approval_id=str(approval.predecessor_approval_id) if approval.predecessor_approval_id else None,
+        # A brand-new approval can never already have been superseded.
+        superseded_by_approval_id=None,
     )
 
 
@@ -604,14 +616,90 @@ def approve_graph(
 def list_approvals(
     corpus_id: uuid.UUID, _: AuthorityCorpus = Depends(_authorized_corpus), db: Session = Depends(get_db)
 ):
-    """The immutable approval history for this corpus, newest first."""
+    """The immutable approval history for this corpus, newest first.
+    superseded_by_approval_id is derived per-row from this same list
+    (issue #5) rather than N extra queries: since every approval's
+    predecessor_approval_id points at the corpus's real prior latest at
+    creation time, "what superseded row X" is simply "the row in this
+    list whose predecessor_approval_id equals X.id"."""
+    approvals = svc.list_approvals(db, corpus_id)
+    superseded_by: dict[uuid.UUID, uuid.UUID] = {
+        a.predecessor_approval_id: a.id for a in approvals if a.predecessor_approval_id is not None
+    }
     return [
         GraphApprovalResponse(
             id=str(a.id), corpus_id=str(a.corpus_id), reviewer=a.reviewer, version=a.version,
             approval_reason=a.approval_reason, graph_hash=a.graph_hash, approved_at=a.approved_at,
+            predecessor_approval_id=str(a.predecessor_approval_id) if a.predecessor_approval_id else None,
+            superseded_by_approval_id=str(superseded_by[a.id]) if a.id in superseded_by else None,
         )
-        for a in svc.list_approvals(db, corpus_id)
+        for a in approvals
     ]
+
+
+def _diff_summary(diff) -> GraphApprovalDiffSummary:
+    return GraphApprovalDiffSummary(
+        principals_added=len(diff.principals.added),
+        principals_removed=len(diff.principals.removed),
+        principals_changed=len(diff.principals.changed),
+        relationships_added=len(diff.relationships.added),
+        relationships_removed=len(diff.relationships.removed),
+        relationships_changed=len(diff.relationships.changed),
+        conflicts_added=len(diff.conflicts.added),
+        conflicts_removed=len(diff.conflicts.removed),
+        conflicts_changed=len(diff.conflicts.changed),
+        gaps_added=len(diff.gaps.added),
+        gaps_removed=len(diff.gaps.removed),
+        gaps_changed=len(diff.gaps.changed),
+        coverage_changed=bool(diff.coverage.changed_fields),
+    )
+
+
+@router.get(
+    "/corpora/{corpus_id}/approvals/{approval_id}/diff",
+    response_model=GraphApprovalDiffResponse,
+    dependencies=[Depends(require_permission(Permission.AUTHORITY_REVIEW))],
+)
+def diff_graph_approval(
+    corpus_id: uuid.UUID,
+    approval_id: uuid.UUID,
+    against: uuid.UUID | None = None,
+    _: AuthorityCorpus = Depends(_authorized_corpus),
+    db: Session = Depends(get_db),
+):
+    """Authority Graph Lineage & Versioning (issue #5): a deterministic,
+    same-corpus comparison of two approved graph versions -- never an
+    LLM-generated summary (domain/authority_graph/diff.py is pure,
+    DB-free, LLM-free). Defaults to comparing approval_id against its
+    own immediate predecessor; pass ?against=<approval_id> to compare
+    against any other approval from the SAME corpus instead. A
+    different-corpus (or different-organisation) `against`, or an
+    approval_id with no predecessor and no explicit `against`, both
+    404 -- the same "path segments must agree" discipline every other
+    nested read here already applies, never a 500 or a nonsensical
+    empty diff."""
+    try:
+        from_approval, to_approval, diff = svc.diff_graph_approvals(
+            db, corpus_id, approval_id, against_approval_id=against,
+        )
+    except ApprovalNotFoundError:
+        raise HTTPException(status_code=404, detail="approval_not_found")
+    except NoPredecessorApprovalError:
+        raise HTTPException(status_code=404, detail="no_predecessor_to_compare")
+    return GraphApprovalDiffResponse(
+        from_approval=GraphApprovalRef(
+            id=str(from_approval.id), version=from_approval.version, approved_at=from_approval.approved_at,
+        ),
+        to_approval=GraphApprovalRef(
+            id=str(to_approval.id), version=to_approval.version, approved_at=to_approval.approved_at,
+        ),
+        summary=_diff_summary(diff),
+        principals=dataclasses.asdict(diff.principals),
+        relationships=dataclasses.asdict(diff.relationships),
+        conflicts=dataclasses.asdict(diff.conflicts),
+        gaps=dataclasses.asdict(diff.gaps),
+        coverage=dataclasses.asdict(diff.coverage),
+    )
 
 
 @router.get(

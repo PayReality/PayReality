@@ -47,6 +47,41 @@ Identical guarantees to the AI Policy Builder, extended to every new category: t
 
 None of this changes the promotion boundary above: it makes the existing boundary visible and auditable, it does not move it.
 
+## Authority Graph Lineage & Versioning (issue #5)
+
+Approval Audit (above) gives every approved graph version an immutable snapshot. This closes the two questions that left open: what approved version came immediately before this one, and what exactly changed between them.
+
+**Predecessor, not a second "version" concept.** `AuthorityGraphApproval.predecessor_approval_id` is one additive, nullable, self-referential column, stamped once by `approve_graph` to the corpus's real latest approval at that exact moment (null only for a corpus's first approved version) and never changed afterward. There is no separate `AuthorityGraphVersion` table and no change to how `version` itself is assigned (still `max(version) + 1` per corpus) — lineage is a pointer layered on top of the existing approval record, not a parallel versioning system. "What superseded this version" (`superseded_by_approval_id` in API responses) is never itself stored; it's always derived by reverse lookup (`get_superseding_approval`: which row, if any, has this row's id as its own predecessor) — one direction of truth, not two fields that could drift apart.
+
+**Lineage is corpus-local, always.** A predecessor is only ever a prior approval of the *same* corpus. Two corpora approved in an interleaved order never cross-contaminate each other's lineage, and a diff request naming an `against` approval from a different corpus (or, transitively, a different organisation) 404s rather than comparing across boundaries — `get_approval_for_corpus` is the one function every lineage/diff read goes through, the same "path segments must agree" discipline the rest of this router already applies.
+
+**Concurrency.** No row locking exists anywhere in this codebase, by established preference. Two `approve_graph` calls racing for the same corpus can both read the same "current latest" before either commits and compute the same next version number; the database's own `uq_authority_graph_approvals_corpus_version` constraint — not a lock — is what actually prevents both from persisting. The loser's `IntegrityError` is caught, the version and predecessor recomputed against the now-current latest, and the insert retried, bounded at three attempts (`ConcurrentApprovalConflictError` beyond that, mapped to HTTP 409) — never an unhandled 500, never an infinite loop.
+
+**The diff itself (`domain/authority_graph/diff.py`) is pure and deterministic** — no database call, no LLM call, no network call, same discipline as this package's own `compilation_gate.py`. It compares two `evidence_snapshot` dicts by each item's own stable `id` (the underlying `AuthorityPrincipal`/`AuthorityRelationship`/`AuthorityConflict`/`AuthorityGap` row id) into added/removed/changed sets, plus a field-by-field coverage comparison. That identity is stable across a corpus's approval history today because `run_extraction` only ever runs once per corpus — every later reviewer action mutates an existing row rather than recreating it — not a deliberately designed cross-version identity scheme; if a "re-extract this corpus" capability is ever added, this assumption needs re-verifying. Resources, Operations, and Questions are extracted per corpus but never included in `evidence_snapshot`, so they cannot be diffed today — a real, disclosed limitation of what gets captured at approval time, not of the diff engine. Conflicts have no structured link to which principal/action they concern (only a free-text description), so a conflict diff can only ever say "this conflict appeared/disappeared/changed," never attribute *why* structurally.
+
+**Worked example**, in the same shape a reviewer sees on Approval History's "View changes":
+
+```
+Graph v1 (approved):
+  David Okonkwo -- vendor_payment <= $50,000
+
+Graph v2 (approved):
+  David Okonkwo -- vendor_payment <= $50,000   (unchanged)
+  AP Agent      -- vendor_payment <= $50,000   (new principal + relationship)
+  Sarah Mokoena -- escalation authority above $50,000   (new)
+
+Changes from v1 to v2:
+  Principals:      + AP Agent, + Sarah Mokoena
+  Relationships:    + David -> AP Agent (delegation), + Sarah -> escalation
+  Conflicts:        0 introduced, 0 resolved
+  Gaps:             0 introduced, 0 resolved
+  Coverage:         unchanged
+```
+
+Approving v2 does not retire, mutate, or deactivate anything compiled from v1 — that remains entirely the existing, separate `promote_candidate` / RuntimePolicy review-approve-compile-activate lifecycle, exactly as before this milestone. A Decision made under a RuntimePolicy compiled from v1 stays bound to v1 forever (Historical Policy Binding, unrelated to and unmodified by this milestone): its `policy_id` -> `Policy.bundle_manifest` -> `source.graph_approval_id`/`graph_version` chain is frozen at compile time and never re-resolves, proven end-to-end by `test_old_decision_and_receipt_stay_bound_to_graph_v1_after_v2_supersedes_it` (issue #6's own test, still green).
+
+**API**: `GET /corpora/{corpus_id}/approvals/{approval_id}/diff`, defaulting to a comparison against the approval's own predecessor; `?against=<approval_id>` compares against any other approval from the same corpus instead. 404s (not an empty or nonsensical diff) if the approval doesn't exist, belongs to a different corpus, or (with no explicit `against`) has no predecessor at all.
+
 ## Why the module isn't renamed on disk
 
 The directive asks that the *product* be renamed from AI Policy Builder to AI Authority Builder. The user-facing surface (navigation, page titles, the entry point from Policy Studio) reflects that rename directly. The underlying Python package (`domain/ai_policy_builder/`, `services/ai_policy_builder_service.py`) is deliberately left in place and untouched: it is still exactly correct for what it does (single-document, Runtime-Policy-only extraction), it is imported by the new `domain/ai_authority_builder/` package rather than duplicated, and renaming already-shipped, already-tested modules purely for naming symmetry would be exactly the kind of unforced churn this multi-phase engagement has consistently avoided (see `RUNTIME_POLICY_MAPPING.md`'s and `DOMAIN_AGNOSTIC_ARCHITECTURE.md`'s own preference for reuse over renaming-for-its-own-sake). A new user only ever sees "AI Authority Builder"; which files implement it is an internal detail this document exists to explain, not something the product surface needs to expose.
