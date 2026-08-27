@@ -24,11 +24,16 @@ from app.services import evidence_service
 
 
 class _FakeEvidenceRecord:
-    def __init__(self, id, organization_id, payload, created_at):
+    def __init__(self, id, organization_id, payload, created_at, sequence=None):
         self.id = id
         self.organization_id = organization_id
         self.payload = payload
         self.created_at = created_at
+        # PayReality 1.0 Audit finding G01 (chain-ordering follow-up):
+        # verify_chain now reads this real column; None (the legacy,
+        # pre-column default) is the correct fake for a test that isn't
+        # specifically exercising sequence-based ordering.
+        self.sequence = sequence
 
 
 class _FakeSession:
