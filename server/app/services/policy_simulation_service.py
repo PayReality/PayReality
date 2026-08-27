@@ -33,13 +33,16 @@ from app.config import settings
 from app.db.models import SimulationScenario
 from app.domain.compiler_v2.compiler_v2 import compile_bundle
 from app.domain.compiler_v2.dry_run import DryRunError, dry_run as run_dry_run
+from app.domain.decision.engine import build_opa_input
 from app.domain.evidence.signing import payload_hash
 from app.domain.policy_simulation.authority_trace import AuthorityTraceStep, build_authority_trace
 from app.domain.policy_simulation.batch_evaluator import loaded_bundle, query_loaded_bundle
 from app.domain.policy_simulation.explainer import RuleEvaluation, build_rule_evaluations
+from app.services import fact_service
 from app.services.runtime_policy_service import (
     CompilationRequiredError,
     RuntimePolicyNotFoundError,  # noqa: F401 -- re-exported for router catch clauses
+    _ENTERPRISE_KNOWLEDGE_FIELD_PREFIX,
     _other_active_policies,
     _row_to_policy,
     get_latest,
@@ -63,7 +66,16 @@ class SimulationInput:
     {"authority": {"department": "Finance", "region": "South Africa"}})
     for policies whose conditions reference "context.*" fields -- the
     existing simple dry-run tool has no equivalent, since it never
-    populates a `context` sibling in the OPA input at all."""
+    populates a `context` sibling in the OPA input at all.
+
+    `counterparty` (PayReality 1.0 Audit finding G03): additive, mirrors
+    the real Intent model's own field exactly -- it is the Trusted
+    Enterprise Fact subject real Runtime Authority resolves facts
+    against (intent_service.submit_intent's own `[(counterparty, key)
+    for key in needed_fact_keys]`). Optional and defaulting to None
+    because a simulation genuinely may not have one in mind yet; see
+    `simulate()`'s own handling for what happens to a fact-gated policy
+    when it's absent -- a visible limitation, never a silent guess."""
 
     principal: str
     action: str
@@ -72,6 +84,7 @@ class SimulationInput:
     currency: str | None = None
     agent_name: str = "Simulated Agent"
     context: dict[str, Any] = field(default_factory=dict)
+    counterparty: str | None = None
 
     def to_intent(self) -> dict[str, Any]:
         intent: dict[str, Any] = {"action": self.action}
@@ -87,7 +100,7 @@ class SimulationInput:
         return {
             "principal": self.principal, "action": self.action, "resource": self.resource,
             "amount": self.amount, "currency": self.currency, "agent_name": self.agent_name,
-            "context": self.context,
+            "context": self.context, "counterparty": self.counterparty,
         }
 
     @staticmethod
@@ -96,6 +109,9 @@ class SimulationInput:
             principal=data["principal"], action=data["action"], resource=data.get("resource"),
             amount=data.get("amount"), currency=data.get("currency"),
             agent_name=data.get("agent_name", "Simulated Agent"), context=data.get("context") or {},
+            # Absent on every scenario saved before this field existed --
+            # None is the correct, honest read for those, not a guess.
+            counterparty=data.get("counterparty"),
         )
 
 
@@ -136,6 +152,23 @@ class SimulationResult:
     rules: list[RuleEvaluation]
     authority_trace: list[AuthorityTraceStep]
     evidence_preview: EvidencePreview
+    # PayReality 1.0 Audit finding G03: the exact Trusted Enterprise
+    # Facts actually resolved and fed into this simulation's OPA
+    # evaluation -- {key: value}, empty whenever none were needed or
+    # none resolved. Lets a reviewer see precisely what real-world fact
+    # state this result depended on, the same transparency
+    # facts_evaluated already gives a real Decision's Evidence.
+    facts_evaluated: dict[str, Any] = field(default_factory=dict)
+    # A real, visible limitation this simulation could NOT resolve --
+    # never a silent guess. Populated only when at least one active
+    # policy's condition references an enterprise_knowledge.<key> this
+    # simulation had no counterparty to look it up against; the
+    # resulting evaluation is still real and still fail-closed (an
+    # unresolved fact behaves exactly as it would in production -- the
+    # referencing rule simply doesn't match), but a reviewer should
+    # know the absence was because no subject was given, not because a
+    # fact genuinely doesn't exist.
+    warnings: list[str] = field(default_factory=list)
 
 
 def _decision_from_flags(allow: bool, deny: bool, requires_review: bool) -> str:
@@ -182,6 +215,28 @@ def _compile_for_simulation(db: Session, policy_key: uuid.UUID, organization_id:
     return row, this_policy, all_policies, result
 
 
+def _enterprise_knowledge_keys_referenced(all_policies: list) -> list[str]:
+    """PayReality 1.0 Audit finding G03: the simulator's own equivalent
+    of runtime_policy_service.list_enterprise_knowledge_keys_for_active_
+    policies -- deliberately NOT that function, because that one scans
+    already-*active* Policy rows straight from the database, and the
+    whole point of a simulation is to evaluate a policy that may not be
+    active yet (still draft/compiled). Scans the actual RuntimePolicy
+    domain objects this simulation is about to compile against instead
+    (this_policy + every other currently-active policy,
+    _compile_for_simulation's own `all_policies`) -- the same set a real
+    deploy of `this_policy` would put into production. Reuses the real
+    field-prefix constant, not a redefined copy, so the two functions
+    can never silently drift on what "an enterprise_knowledge field"
+    means."""
+    keys: set[str] = set()
+    for policy in all_policies:
+        for condition in policy.conditions.all:
+            if condition.field.startswith(_ENTERPRISE_KNOWLEDGE_FIELD_PREFIX):
+                keys.add(condition.field[len(_ENTERPRISE_KNOWLEDGE_FIELD_PREFIX):])
+    return sorted(keys)
+
+
 def simulate(
     db: Session, policy_key: uuid.UUID, sim_input: SimulationInput,
     organization_id: uuid.UUID | None, opa_url: str | None = None,
@@ -190,7 +245,25 @@ def simulate(
     policy version together with every other currently-active policy --
     the exact set a real deployment would put into production -- and
     evaluates it via compiler_v2.dry_run's already-existing, already-
-    verified isolated-package mechanism. Never writes anything."""
+    verified isolated-package mechanism. Never writes anything.
+
+    PayReality 1.0 Audit finding G03: previously built its own OPA input
+    by hand, omitting `enterprise_knowledge` entirely -- any fact-gated
+    policy simulated as if no Trusted Enterprise Facts existed at all,
+    silently diverging from what real Runtime Authority would actually
+    decide, with no warning. Now reuses domain.decision.engine's own
+    pure build_opa_input (the exact function intent_service.submit_intent
+    itself calls) and resolves facts the same way submit_intent does --
+    fact_service.resolve_facts against sim_input.counterparty as the
+    subject, for exactly the keys this simulation's own policy set
+    references (_enterprise_knowledge_keys_referenced above). A missing,
+    expired, or conflicting fact behaves exactly as it would in
+    production (fail-closed, via the same undefined-in-Rego mechanism) --
+    this function never invents a fallback value. If a policy needs a
+    fact but this simulation was given no counterparty to look it up
+    against, that's flagged as a real, visible limitation
+    (SimulationResult.warnings) rather than silently evaluated as if the
+    fact requirement didn't exist."""
     row, this_policy, all_policies, compile_result = _compile_for_simulation(db, policy_key, organization_id)
     if not compile_result.ok:
         raise CompilationRequiredError(
@@ -200,12 +273,39 @@ def simulate(
 
     intent = sim_input.to_intent()
     context = sim_input.context
-    opa_input = {
-        "intent": intent,
-        "context": context,
-        "agent": {"acting_for_principal_id": sim_input.principal},
-        "policy_version": bundle.version,
-    }
+
+    needed_fact_keys = _enterprise_knowledge_keys_referenced(all_policies)
+    warnings: list[str] = []
+    resolved_facts = []
+    if needed_fact_keys:
+        if sim_input.counterparty is None:
+            warnings.append(
+                "This policy set references enterprise_knowledge fact(s) "
+                f"({', '.join(needed_fact_keys)}), but no counterparty was given to simulate "
+                "against -- these facts are being evaluated as unresolved (fail-closed, the same "
+                "way a genuinely missing fact behaves in production), not silently ignored."
+            )
+        elif organization_id is not None:
+            # A missing, expired, or conflicting fact here is NOT a
+            # simulation limitation -- production resolves facts exactly
+            # this same way (intent_service.submit_intent's own
+            # resolve_facts call, same FactConflictError -> [] fallback),
+            # so the fail-closed result below IS full parity, not a gap.
+            # No warning: see SimulationResult.warnings' own docstring --
+            # warnings exist only for what this simulation genuinely
+            # could not resolve (no counterparty to look up against),
+            # not for a real, resolved "no trusted fact exists" answer.
+            try:
+                resolved_facts = fact_service.resolve_facts(
+                    db, organization_id, [(sim_input.counterparty, key) for key in needed_fact_keys]
+                )
+            except fact_service.FactConflictError:
+                resolved_facts = []
+    enterprise_knowledge = {f.key: f.value for f in resolved_facts}
+
+    opa_input = build_opa_input(
+        intent, context, sim_input.principal, bundle.version, enterprise_knowledge=enterprise_knowledge
+    )
 
     dry_run_result = run_dry_run(bundle, opa_input, opa_url=opa_url or settings.opa_url)
 
@@ -241,6 +341,7 @@ def simulate(
         policy_version=bundle.version, policy_bundle_hash=bundle.bundle_hash, generated_at=now_iso,
         review_reason=dry_run_result.review_reason, deny_reason=dry_run_result.deny_reason,
         rules=rules, authority_trace=trace, evidence_preview=evidence_preview,
+        facts_evaluated=enterprise_knowledge, warnings=warnings,
     )
 
 

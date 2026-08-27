@@ -19,6 +19,7 @@ class SimulationInputRequest(BaseModel):
     currency: str | None = None
     agent_name: str = "Simulated Agent"
     context: dict[str, Any] = {}
+    counterparty: str | None = None
 
 
 class ConditionEvaluationResponse(BaseModel):
@@ -75,6 +76,8 @@ class SimulationResponse(BaseModel):
     rules: list[RuleEvaluationResponse]
     authority_trace: list[AuthorityTraceStepResponse]
     evidence_preview: EvidencePreviewResponse
+    facts_evaluated: dict[str, Any] = {}
+    warnings: list[str] = []
 
 
 class CreateScenarioRequest(BaseModel):

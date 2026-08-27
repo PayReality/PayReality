@@ -9,6 +9,12 @@ export interface SimulationInput {
   currency: string | null;
   agent_name: string;
   context: Record<string, unknown>;
+  // PayReality 1.0 Audit finding G03: the Trusted Enterprise Fact
+  // subject this simulation resolves facts against, mirroring the real
+  // Intent's own `counterparty` field. Optional -- a policy whose
+  // condition references an enterprise_knowledge.* fact still evaluates
+  // (fail-closed) without one, but see SimulationResult.warnings.
+  counterparty: string | null;
 }
 
 export interface ConditionEvaluation {
@@ -65,6 +71,15 @@ export interface SimulationResult {
   rules: RuleEvaluation[];
   authority_trace: AuthorityTraceStep[];
   evidence_preview: EvidencePreview;
+  // PayReality 1.0 Audit finding G03: the real Trusted Enterprise Facts
+  // this simulation actually resolved and evaluated against, {} when
+  // none were needed or none resolved.
+  facts_evaluated: Record<string, unknown>;
+  // A real, visible limitation this simulation could not resolve --
+  // e.g. a policy needs an enterprise_knowledge fact but no
+  // counterparty was given to look it up against. Never a silent
+  // guess: empty whenever nothing was left unresolved.
+  warnings: string[];
 }
 
 export interface Scenario {

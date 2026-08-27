@@ -66,6 +66,7 @@ export function PolicySimulationPage() {
   const [actingAsAgent, setActingAsAgent] = useState("");
   const [action, setAction] = useState("");
   const [resource, setResource] = useState("");
+  const [counterparty, setCounterparty] = useState("");
   const [amount, setAmount] = useState("");
   const [currency, setCurrency] = useState("");
   const [contextText, setContextText] = useState("{}");
@@ -107,6 +108,7 @@ export function PolicySimulationPage() {
       principal, action, resource: resource || null,
       amount: amount.trim() === "" ? null : Number(amount),
       currency: currency || null, agent_name: actingAsAgent, context,
+      counterparty: counterparty || null,
     };
   }
 
@@ -197,6 +199,8 @@ export function PolicySimulationPage() {
             <Input value={action} onChange={(e) => setAction(e.target.value)} style={{ marginBottom: 12, width: "100%" }} />
             <FieldLabel>Resource (optional)</FieldLabel>
             <Input value={resource} onChange={(e) => setResource(e.target.value)} placeholder="e.g. invoice:INV-4821 or account:USR-829" style={{ marginBottom: 12, width: "100%" }} />
+            <FieldLabel>Counterparty (optional -- the Trusted Enterprise Fact subject, e.g. a supplier)</FieldLabel>
+            <Input value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder="e.g. supplier-acme-industrial" style={{ marginBottom: 12, width: "100%" }} />
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <FieldLabel>Amount (optional)</FieldLabel>
@@ -346,7 +350,22 @@ export function PolicySimulationPage() {
                 <div style={{ fontSize: 10, color: "var(--pr-text-muted)", marginTop: 4, fontFamily: "monospace", wordBreak: "break-all" }}>
                   SHA256 {result.policy_bundle_hash}
                 </div>
+                {Object.keys(result.facts_evaluated).length > 0 && (
+                  <div style={{ fontSize: 11, color: "var(--pr-text-muted)", marginTop: 8 }}>
+                    Trusted facts evaluated:{" "}
+                    {Object.entries(result.facts_evaluated).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join(", ")}
+                  </div>
+                )}
               </Card>
+              {result.warnings.length > 0 && (
+                <Card style={{ marginBottom: 16 }}>
+                  {result.warnings.map((w, i) => (
+                    <Alert key={i} severity="warning" style={{ marginTop: i > 0 ? 8 : 0 }}>
+                      {w}
+                    </Alert>
+                  ))}
+                </Card>
+              )}
 
               <Card style={{ marginBottom: 16 }}>
                 <div style={sectionTitle}>Decision Explanation</div>

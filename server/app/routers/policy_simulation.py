@@ -56,6 +56,7 @@ def _to_sim_input(body: SimulationInputRequest) -> SimulationInput:
     return SimulationInput(
         principal=body.principal, action=body.action, resource=body.resource,
         amount=body.amount, currency=body.currency, agent_name=body.agent_name, context=body.context,
+        counterparty=body.counterparty,
     )
 
 
@@ -87,6 +88,7 @@ def _result_to_response(result) -> SimulationResponse:
             resource=result.evidence_preview.resource, evaluated_at=result.evidence_preview.evaluated_at,
             receipt_hash=result.evidence_preview.receipt_hash, preview=result.evidence_preview.preview,
         ),
+        facts_evaluated=result.facts_evaluated, warnings=result.warnings,
     )
 
 

@@ -6,8 +6,15 @@ import {
   getLiveEvidence,
   findLiveDecision,
   findLiveEvidenceByDecision,
+  getRegisteredAgents,
+  findRegisteredAgent,
+  addRegisteredAgent,
+  updateRegisteredAgent,
+  getRegisteredPrincipals,
+  findRegisteredPrincipal,
+  addRegisteredPrincipal,
 } from "./liveFeed";
-import { demoAgents, findDemoAgent, AGENT_AP_INVOICE } from "./fixtures/agents";
+import { demoAgents, findDemoAgent } from "./fixtures/agents";
 import { demoPrincipals, demoAuthorityContextByPrincipal, PRINCIPAL_OKONKWO } from "./fixtures/principals";
 import {
   demoPolicies,
@@ -47,7 +54,7 @@ import {
 } from "./fixtures/authorityBuilder";
 import { demoUploads, demoCandidates, DEMO_UPLOAD_ID } from "./fixtures/policyBuilder";
 import { DECISION_HERO_ALLOW } from "./fixtures/decisions";
-import type { SubmitIntentResult } from "../live/types";
+import type { SubmitIntentResult, LiveAgent, LivePrincipal, AgentStatus } from "../live/types";
 
 const BLOCKED_MESSAGE = "This action is disabled in the public demonstration.";
 
@@ -103,33 +110,114 @@ on("POST", "/v1/auth/setup-owner", () => demoCurrentUser);
 // ---------------------------------------------------------------------
 // Agents + Principals
 // ---------------------------------------------------------------------
+/** Static, curated fixture agents/principals are read-only in the demo; a visitor's own registrations are genuinely findable and mutable, layered on top via liveFeed's overlay store. */
+function findAnyDemoAgent(id: string): LiveAgent | undefined {
+  return findDemoAgent(id) ?? findRegisteredAgent(id);
+}
+function findAnyPrincipal(id: string): LivePrincipal | undefined {
+  return demoPrincipals.find((p) => p.id === id) ?? findRegisteredPrincipal(id);
+}
+function transitionRegisteredAgent(id: string, status: AgentStatus): LiveAgent | undefined {
+  const patch: Partial<LiveAgent> = {
+    status,
+    certificate_status: status === "revoked" ? "revoked" : status === "registered" ? null : "active",
+    health: status === "active" ? "healthy" : status === "revoked" || status === "retired" ? "offline" : "unknown",
+  };
+  if (status === "active") patch.last_seen_at = new Date().toISOString();
+  return updateRegisteredAgent(id, patch);
+}
+
 on("GET", "/v1/agents", ({ query }) => {
   const status = query.get("status");
   const q = query.get("q")?.toLowerCase();
   const limit = Number(query.get("limit") ?? "25");
   const offset = Number(query.get("offset") ?? "0");
-  let rows = demoAgents;
+  let rows = [...getRegisteredAgents(), ...demoAgents];
   if (status) rows = rows.filter((a) => a.status === status);
   if (q) rows = rows.filter((a) => a.name.toLowerCase().includes(q));
   const total = rows.length;
   const page = rows.slice(offset, offset + limit);
   return { agents: page, total, limit, offset };
 });
-on("GET", "/v1/principals", () => demoPrincipals);
-on("POST", "/v1/principals", ({ body }) => blocked({ id: "principal-new", name: body?.name ?? "New Principal", created_at: new Date().toISOString() }));
+on("GET", "/v1/principals", () => [...getRegisteredPrincipals(), ...demoPrincipals]);
+on("POST", "/v1/principals", ({ body }) => {
+  const principal: LivePrincipal = {
+    id: `principal-${crypto.randomUUID()}`,
+    name: body?.name ?? "New Principal",
+    created_at: new Date().toISOString(),
+    role: null,
+  };
+  addRegisteredPrincipal(principal);
+  return principal;
+});
 on("GET", "/v1/principals/:id/authority-context", ({ params }) => demoAuthorityContextByPrincipal[params.id] ?? demoAuthorityContextByPrincipal[PRINCIPAL_OKONKWO]);
 
-on("POST", "/v1/agents", ({ body }) =>
-  blocked({ ...findDemoAgent(AGENT_AP_INVOICE)!, id: "agent-new", name: body?.name ?? "New Agent", status: "registered" })
-);
+on("POST", "/v1/agents", ({ body }) => {
+  const id = `agent-${crypto.randomUUID()}`;
+  const now = new Date().toISOString();
+  const newAgent: LiveAgent = {
+    id,
+    certificate_id: `cert-${id}`,
+    certificate_status: null,
+    name: body?.name ?? "New Agent",
+    acting_for_principal_id: body?.acting_for_principal_id ?? PRINCIPAL_OKONKWO,
+    status: "registered",
+    owner: body?.owner ?? "IT Operations",
+    business_unit: "Corporate Services",
+    environment: "production",
+    tags: [],
+    description: body?.description ?? null,
+    purpose: null,
+    model: null,
+    version: null,
+    runtime: null,
+    platform: null,
+    labels: [],
+    sdk_version: null,
+    last_seen_at: null,
+    health: "unknown",
+    rotation_requested_at: null,
+    created_at: now,
+    updated_at: now,
+  };
+  addRegisteredAgent(newAgent);
+  return newAgent;
+});
 on("GET", "/v1/agents/:id", ({ params }) => buildAgentDetail(params.id));
-on("PATCH", "/v1/agents/:id", ({ params }) => blocked(findDemoAgent(params.id) ?? notFound("agent")));
-on("POST", "/v1/agents/:id/activate", ({ params }) => blocked(findDemoAgent(params.id) ?? notFound("agent")));
-on("POST", "/v1/agents/:id/suspend", ({ params }) => blocked(findDemoAgent(params.id) ?? notFound("agent")));
-on("POST", "/v1/agents/:id/retire", ({ params }) => blocked(findDemoAgent(params.id) ?? notFound("agent")));
-on("POST", "/v1/agents/:id/revoke", ({ params }) => blocked(findDemoAgent(params.id) ?? notFound("agent")));
-on("POST", "/v1/agents/:id/rotate", ({ params }) => blocked({ id: `cert-${params.id}`, agent_id: params.id, status: "active", public_key: "ed25519:demo", issued_at: new Date().toISOString(), activated_at: new Date().toISOString(), rotated_at: null, expires_at: null, revoked_at: null }));
-on("POST", "/v1/agents/:id/transfer", ({ params }) => blocked(findDemoAgent(params.id) ?? notFound("agent")));
+on("PATCH", "/v1/agents/:id", ({ params, body }) => {
+  if (findRegisteredAgent(params.id)) return updateRegisteredAgent(params.id, body ?? {}) ?? notFound("agent");
+  return blocked(findDemoAgent(params.id) ?? notFound("agent"));
+});
+on("POST", "/v1/agents/:id/activate", ({ params }) => {
+  if (findRegisteredAgent(params.id)) return transitionRegisteredAgent(params.id, "active") ?? notFound("agent");
+  return blocked(findDemoAgent(params.id) ?? notFound("agent"));
+});
+on("POST", "/v1/agents/:id/suspend", ({ params }) => {
+  if (findRegisteredAgent(params.id)) return transitionRegisteredAgent(params.id, "suspended") ?? notFound("agent");
+  return blocked(findDemoAgent(params.id) ?? notFound("agent"));
+});
+on("POST", "/v1/agents/:id/retire", ({ params }) => {
+  if (findRegisteredAgent(params.id)) return transitionRegisteredAgent(params.id, "retired") ?? notFound("agent");
+  return blocked(findDemoAgent(params.id) ?? notFound("agent"));
+});
+on("POST", "/v1/agents/:id/revoke", ({ params }) => {
+  if (findRegisteredAgent(params.id)) return transitionRegisteredAgent(params.id, "revoked") ?? notFound("agent");
+  return blocked(findDemoAgent(params.id) ?? notFound("agent"));
+});
+on("POST", "/v1/agents/:id/rotate", ({ params }) => {
+  const cert = { id: `cert-${params.id}`, agent_id: params.id, status: "active", public_key: "ed25519:demo", issued_at: new Date().toISOString(), activated_at: new Date().toISOString(), rotated_at: null, expires_at: null, revoked_at: null };
+  if (findRegisteredAgent(params.id)) {
+    updateRegisteredAgent(params.id, { rotation_requested_at: null });
+    return cert;
+  }
+  return blocked(cert);
+});
+on("POST", "/v1/agents/:id/transfer", ({ params, body }) => {
+  if (findRegisteredAgent(params.id)) {
+    return updateRegisteredAgent(params.id, { owner: body?.new_owner, business_unit: body?.new_business_unit }) ?? notFound("agent");
+  }
+  return blocked(findDemoAgent(params.id) ?? notFound("agent"));
+});
 on("GET", "/v1/agents/:id/certificates", ({ params }) => buildCertificates(params.id));
 on("GET", "/v1/agents/:id/audit", ({ params }) => buildAuditEvents(params.id));
 on("POST", "/v1/agents/:id/audit/:eventId/verify", () => ({ valid: true }));
@@ -139,7 +227,7 @@ on("POST", "/v1/agents/bulk/retire", ({ body }) => blocked({ results: (body?.age
 on("POST", "/v1/agents/bulk/rotate", ({ body }) => blocked({ results: (body?.agent_ids ?? []).map((id: string) => ({ agent_id: id, ok: false, error: BLOCKED_MESSAGE })), succeeded: 0, failed: (body?.agent_ids ?? []).length }));
 
 function buildCertificates(agentId: string) {
-  const agent = findDemoAgent(agentId);
+  const agent = findAnyDemoAgent(agentId);
   if (!agent || !agent.certificate_id) return [];
   return [
     {
@@ -147,8 +235,8 @@ function buildCertificates(agentId: string) {
       agent_id: agentId,
       status: agent.status === "registered" ? "issued" : agent.status === "revoked" ? "revoked" : "active",
       public_key: "ed25519:base64:demoPublicKeyMaterial==",
-      issued_at: agoMs(120 * DAY),
-      activated_at: agent.status === "registered" ? null : agoMs(119 * DAY),
+      issued_at: agent.created_at,
+      activated_at: agent.status === "registered" ? null : agent.created_at,
       rotated_at: null,
       expires_at: agoMs(-245 * DAY),
       revoked_at: agent.status === "revoked" ? agoMs(5 * DAY) : null,
@@ -157,13 +245,15 @@ function buildCertificates(agentId: string) {
 }
 
 function buildAuditEvents(agentId: string) {
-  const agent = findDemoAgent(agentId);
-  const base = [
-    { type: "registered", offsetDays: 120 },
-    { type: "activated", offsetDays: 119 },
+  const agent = findAnyDemoAgent(agentId);
+  // A freshly-registered agent hasn't been activated yet -- don't fabricate
+  // an "activated" event ahead of the real, session-local activation.
+  const base: Array<{ type: string; at: string }> = [
+    { type: "registered", at: agent?.created_at ?? agoMs(120 * DAY) },
   ];
-  if (agent?.status === "suspended") base.push({ type: "suspended", offsetDays: 3 });
-  if (agent?.status === "retired") base.push({ type: "retired", offsetDays: 10 });
+  if (agent && agent.status !== "registered") base.push({ type: "activated", at: agoMs(119 * DAY) });
+  if (agent?.status === "suspended") base.push({ type: "suspended", at: agoMs(3 * DAY) });
+  if (agent?.status === "retired") base.push({ type: "retired", at: agoMs(10 * DAY) });
   return base.map((e, i) => ({
     id: `audit-${agentId}-${i}`,
     agent_id: agentId,
@@ -172,14 +262,14 @@ function buildAuditEvents(agentId: string) {
     payload: {},
     key_id: "key-meridian-signing-2025-q1",
     signature: `ed25519:audit${i.toString(16).padStart(4, "0")}`,
-    created_at: agoMs(e.offsetDays * DAY),
+    created_at: e.at,
   }));
 }
 
 function buildAgentDetail(agentId: string) {
-  const agent = findDemoAgent(agentId);
+  const agent = findAnyDemoAgent(agentId);
   if (!agent) notFound("agent");
-  const principal = demoPrincipals.find((p) => p.id === agent.acting_for_principal_id);
+  const principal = findAnyPrincipal(agent.acting_for_principal_id);
   const linkedPolicies = demoPolicies
     .filter((p) => p.scope.agent === agentId)
     .map((p) => ({
@@ -1127,6 +1217,10 @@ function buildSimulationResult(policyKey: string, input: Record<string, unknown>
       receipt_hash: `sha256:preview${Math.abs(amount).toString(16)}${policyKey.length}`,
       preview: true,
     },
+    // DEMO_MODE has no real Trusted Enterprise Facts store to resolve
+    // against -- honestly empty, not a fabricated fact/warning.
+    facts_evaluated: {},
+    warnings: [],
   };
 }
 
