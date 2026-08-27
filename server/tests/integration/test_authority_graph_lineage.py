@@ -569,3 +569,27 @@ def test_get_approval_for_corpus_rejects_wrong_corpus(db, org):
 def test_get_approval_for_corpus_rejects_nonexistent_approval(db, corpus):
     with pytest.raises(ApprovalNotFoundError):
         authority_svc.get_approval_for_corpus(db, corpus.id, uuid.uuid4())
+
+
+# --- Issue #5's own explicit acceptance criterion ---------------------------
+
+
+def test_editing_a_live_principal_after_approval_never_alters_the_approved_snapshot(db, corpus):
+    """evidence_snapshot is a genuine value copy, not a live reference --
+    confirmed by actually mutating the row afterward and re-fetching the
+    approval fresh from the database, not just re-reading the in-memory
+    object this session already holds."""
+    david = _principal(db, corpus.id, "David Okonkwo", role="Finance Manager")
+    david_id = david.id
+    approval = _approve(db, corpus.id)
+    approval_id = approval.id
+
+    david.role = "Chief Financial Officer"
+    david.name = "David O. Okonkwo"
+    db.commit()
+
+    db.expunge_all()
+    reloaded = authority_svc.get_approval_by_id(db, approval_id)
+    saved_principal = next(p for p in reloaded.evidence_snapshot["principals"] if p["id"] == str(david_id))
+    assert saved_principal["role"] == "Finance Manager"
+    assert saved_principal["name"] == "David Okonkwo"
