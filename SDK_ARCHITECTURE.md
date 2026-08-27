@@ -2,7 +2,7 @@
 
 ## What this phase is, and isn't
 
-This is the first official PayReality SDK: a Python package (`sdk-python/payreality/`) that wraps the existing HTTP API (`docs/API_SPECIFICATION.md`) so a developer never has to hand-implement ED25519 signing, certificate management, request headers, or retry logic. It consumes `POST /v1/principals`, `POST /v1/agents`, `POST /v1/intents`, `GET /v1/decisions/{id}`, `GET /health`, and `GET /version` exactly as they exist today. Nothing in the Runtime Engine, Compiler V2, OPA, Evidence, Policy Studio, or either AI Policy Builder changed to make this possible; this SDK is a client, not a platform change.
+This is the first official PayReality SDK: a Python package (`sdk-python/payreality/`) that wraps the existing HTTP API (`docs/API_SPECIFICATION.md`) so a developer never has to hand-implement ED25519 signing, certificate management, request headers, or retry logic. It consumes `POST /v1/principals`, `POST /v1/agents`, `POST /v1/agents/{id}/activate`, `POST /v1/agents/{id}/rotate`, `POST /v1/agents/{id}/retire`, `POST /v1/agents/{id}/heartbeat`, `POST /v1/intents`, `GET /v1/decisions/{id}`, `GET /health`, and `GET /version` exactly as they exist today. Nothing in the Runtime Engine, Compiler V2, OPA, Evidence, Policy Studio, or either AI Policy Builder changed to make this possible; this SDK is a client, not a platform change.
 
 ## Package layout
 
@@ -10,7 +10,7 @@ This is the first official PayReality SDK: a Python package (`sdk-python/payreal
 sdk-python/
   payreality/
     __init__.py       public exports: Agent, Decision, RegisteredAgent, exceptions
-    agent.py           Agent: register(), authorize(), get_decision(), wait_for_resolution(), health(), version()
+    agent.py           Agent: register(), rotate_keys(), heartbeat(), retire(), authorize(), get_decision(), wait_for_resolution(), health(), version()
     auth.py            nonce/timestamp generation, header assembly
     client.py           the one place that makes an HTTP request; owns retries and exception mapping
     crypto.py           ED25519 keygen and signing (PyNaCl)
@@ -18,23 +18,23 @@ sdk-python/
     models.py           Decision, Resolution, RegisteredAgent (plain dataclasses)
     retry.py             retry policy: what's retryable, backoff schedule
     configuration.py     Configuration + the local credential store
-  tests/               56 tests, all mocked (no network), see SDK_REFERENCE.md's testing note
+  tests/               80 tests, all mocked (no network), see SDK_REFERENCE.md's testing note
   examples/            4 runnable scripts
 ```
 
 This layout is deliberately generic where it can be: `client.py`'s retry/exception-mapping logic and `configuration.py`'s credential store are not PayReality-specific ideas, and a future Node/Java/Go/.NET SDK (explicitly out of scope for this phase) can follow the same shape without needing to invent its own design from scratch.
 
-## The four real gaps between the requested interface and today's API
+## How `authorize()` maps onto the wire format
 
-The requested public interface is deliberately expressed in PayReality's target universal vocabulary (`UNIVERSAL_RUNTIME_AUTHORITY.md`: Principal, Operation, Resource), not in today's actual wire format (`docs/API_SPECIFICATION.md`'s `SubmitIntentRequest`: `agent_id`, `action`, `amount`, `currency`, `counterparty`, `context`). `MIGRATION_PLAN_V4.md` Phase B (introducing `operation`/`resource_type` as real, additive fields on `Scope`) has not shipped yet. This SDK cannot pretend it has; instead, `agent.py::authorize()` maps the nice interface onto the real one honestly, in four specific ways:
+The public interface is expressed in PayReality's universal vocabulary (`UNIVERSAL_RUNTIME_AUTHORITY.md`: Principal, Operation, Resource), and as of the Domain Generalization Milestone (SDK 0.4.0) that vocabulary is a real, honest mapping onto today's wire format (`docs/API_SPECIFICATION.md`'s `SubmitIntentRequest`: `agent_id`, `action`, `resource`, `amount`, `currency`, `counterparty`, `context`), not a workaround for a field the server doesn't have yet. `agent.py::authorize()` maps the interface onto the wire in four specific ways:
 
-1. **`resource` becomes `action`.** `"Vendor Payment"` is normalized (lowercased, spaces to underscores) to `"vendor_payment"`, which the Decision Engine's known-action vocabulary actually recognizes. A `resource` that doesn't normalize to a known action is not an SDK error: the request still gets sent, and the Decision Engine's own existing, correct behavior is to escalate an unrecognized action to `HUMAN_REVIEW` rather than silently allow it (`examples/approve_invoice.py` demonstrates this directly, on purpose, rather than only showing a happy path).
+1. **`operation` becomes `action`.** `"Approve"`/`"Disable User"` is normalized (lowercased, spaces to underscores) to `"approve"`/`"disable_user"`, which is what the Decision Engine actually evaluates a policy's `Scope.action` against. An `operation` that doesn't match any policy's scope is not an SDK error: the request still gets sent, and the Decision Engine's own existing, correct behavior is to escalate an unrecognized action to `HUMAN_REVIEW` rather than silently allow it (`examples/approve_invoice.py` demonstrates this directly, on purpose, rather than only showing a happy path).
 
-2. **`operation` is recorded, not enforced.** There is no separate operation field in today's Intent schema; the verb ("Approve", "Release") is written into the Intent's `context` dict so it's preserved on the resulting Evidence record, but it does not currently change how the Decision Engine evaluates the request; only the resource-derived `action` does. Once `MIGRATION_PLAN_V4.md` Phase B ships a real `operation` field server-side, this SDK's version can start sending it as a first-class field instead, without changing the public `authorize()` signature at all.
+2. **`resource` is sent as-is, as the wire's real `resource` field.** `"Vendor Payment"`, `"account:USR-829"`, `"invoice:INV-4821"` -- an opaque, organization-defined identifier for the real-world object the action concerns (`Intent.resource`, `server/app/db/models.py`), never normalized, and entirely optional. Before this milestone, `resource` was the field being misused to derive `action` from (see this SDK's own changelog in `agent.py`'s module docstring for the disclosed 0.3.0 -> 0.4.0 breaking change); it is not derived from anything now, it is the resource identifier.
 
 3. **`principal` is a local safety check, not a request field.** `SubmitIntentRequest` has no `principal` field: the server already knows which principal a given agent's certificate acts for, resolved from `agent.acting_for_principal_id` at registration time (`server/app/services/intent_service.py::submit_intent` never takes a principal argument). Sending a redundant principal on every call would just be ignored by the server, so instead `authorize()` checks the passed `principal` against the principal this specific `Agent` was registered for, and raises `ConfigurationError` on a mismatch. This turns a parameter that would otherwise be pure decoration into a real guard against a wrong-agent mistake.
 
-4. **`resource_data` is decomposed into the wire's actual required fields.** `amount` is required (mirroring `SubmitIntentRequest.amount: float`, itself required); `currency` defaults to `"USD"` if not given (the SDK's own quickstart example never supplies one); `vendor`/`counterparty` (either key works) maps to the wire's `counterparty`; everything else, plus `operation` and any `metadata`, lands in `context`.
+4. **`resource_data` is decomposed into the wire's actual fields.** `amount`/`currency` are optional, not required -- a non-financial action (`disable_user`, `employee_terminate`) supplies neither; `currency` defaults to `"USD"` only when `amount` is given and `currency` isn't. `vendor`/`counterparty` (either key works) maps to the wire's `counterparty`. Everything else in `resource_data`, plus `metadata`, lands in `context` as Runtime Authority context -- never silently dropped, and never required just to make a non-financial call.
 
 ## Identity and the local credential store
 
