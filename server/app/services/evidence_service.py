@@ -3,7 +3,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, nullsfirst, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -124,11 +124,22 @@ def verify_chain(
 
     v1 (pre-chaining) records never had a previous_hash field at all;
     their absence of the field is expected, never treated as a break.
+
+    Ordering (PayReality 1.0 Audit finding G01, chain-ordering follow-up):
+    `sequence` (services/intent_service.py's real, monotonic, per-
+    organization write ordinal, assigned under the same lock that
+    serializes concurrent appends) is the primary sort key, ascending
+    with nulls sorted first -- `created_at`/`id` alone are not reliable
+    tiebreakers, since two records appended close together can share a
+    timestamp, and `id` (a random UUID) has no relationship to true
+    write order. Historical rows predating this column are still
+    ordered among themselves by created_at/id exactly as before -- the
+    same ambiguity that already existed for them, not newly introduced.
     """
     stmt = select(Evidence).where(Evidence.organization_id == organization_id)
     if since is not None:
         stmt = stmt.where(Evidence.created_at >= since)
-    stmt = stmt.order_by(Evidence.created_at, Evidence.id)
+    stmt = stmt.order_by(nullsfirst(Evidence.sequence), Evidence.created_at, Evidence.id)
     records = list(db.scalars(stmt))
 
     invalid_signatures: list[uuid.UUID] = []
@@ -137,18 +148,22 @@ def verify_chain(
     # Seed expected_previous from whatever precedes this range (if
     # anything), so a real gap right at the range's own boundary is
     # still caught, not silently assumed fine just because verification
-    # started mid-chain.
+    # started mid-chain. Uses `sequence` (true write order), not
+    # `created_at`, whenever the boundary record has one -- a `since`
+    # cutoff landing on two records that share a timestamp would
+    # otherwise let the real predecessor slip past the `<` comparison
+    # unnoticed, exactly the ordering ambiguity `sequence` exists to
+    # remove (see this function's own docstring).
     expected_previous: str | None = None
     if records:
-        preceding = db.scalar(
-            select(Evidence)
-            .where(
-                Evidence.organization_id == organization_id,
-                Evidence.created_at < records[0].created_at,
-            )
-            .order_by(Evidence.created_at.desc(), Evidence.id.desc())
-            .limit(1)
-        )
+        preceding_stmt = select(Evidence).where(Evidence.organization_id == organization_id)
+        if records[0].sequence is not None:
+            preceding_stmt = preceding_stmt.where(Evidence.sequence < records[0].sequence)
+            preceding_stmt = preceding_stmt.order_by(Evidence.sequence.desc())
+        else:
+            preceding_stmt = preceding_stmt.where(Evidence.created_at < records[0].created_at)
+            preceding_stmt = preceding_stmt.order_by(Evidence.created_at.desc(), Evidence.id.desc())
+        preceding = db.scalar(preceding_stmt.limit(1))
         expected_previous = payload_hash(preceding.payload) if preceding is not None else None
 
     for record in records:

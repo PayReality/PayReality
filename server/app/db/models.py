@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, LargeBinary, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, LargeBinary, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -889,10 +889,28 @@ class Evidence(Base):
     organization_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("organizations.id")
     )
+    # PayReality 1.0 Audit finding G01: a genuine, monotonic per-
+    # organization write-ordinal, assigned by append_evidence itself
+    # (services/intent_service.py) under the same organization row lock
+    # that now serializes concurrent appends -- never assigned by the
+    # database. Exists because `created_at` alone is not a reliable
+    # chain-order tiebreaker: two records appended close together can
+    # share the same timestamp (certain under SQLite's one-second
+    # CURRENT_TIMESTAMP resolution; possible, if rarer, even under
+    # Postgres's microsecond resolution), and the previous tiebreaker --
+    # `Evidence.id`, a random UUID -- has no relationship whatsoever to
+    # true write order. verify_chain and _previous_chain_hash both now
+    # order by this column first. NULL for every historical row written
+    # before this column existed -- never backfilled or guessed (no
+    # migration may fabricate a write order that was never actually
+    # recorded); those rows keep falling back to created_at/id exactly
+    # as before, the same ambiguity that already existed for them.
+    sequence: Mapped[int | None] = mapped_column(BigInteger)
 
     __table_args__ = (
         Index("idx_evidence_decision", "decision_id"),
         Index("idx_evidence_organization_created", "organization_id", "created_at"),
+        Index("idx_evidence_organization_sequence", "organization_id", "sequence"),
         CheckConstraint(
             "status IN ('VERIFIED','PENDING','REJECTED')", name="ck_evidence_status"
         ),

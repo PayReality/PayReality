@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, nullslast, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from app.db.models import (
     Evidence,
     Intent,
     Mandate,
+    Organization,
     Policy,
     Principal,
 )
@@ -286,9 +287,75 @@ def _resolve_chain_scope(db: Session, agent_id: uuid.UUID) -> uuid.UUID | None:
     return principal.organization_id if principal else None
 
 
+def _lock_chain_scope(db: Session, organization_id: uuid.UUID | None) -> None:
+    """PayReality 1.0 Audit finding G01: without this, two concurrent
+    append_evidence calls for the SAME organization can both read the
+    same "current latest" Evidence row as their predecessor before
+    either commits, and both insert successfully -- nothing constrains
+    it, since previous_hash lives only inside the JSONB payload, never
+    as an indexed/constrained column. The result is a silent, permanent
+    fork of the audit chain, discovered (if ever) only much later by
+    verify_chain.
+
+    The fix is a real, database-enforced row lock (`SELECT ... FOR
+    UPDATE` on the organization's own row), taken *before* this
+    transaction reads "the current latest Evidence" and held until the
+    enclosing transaction commits or rolls back (append_evidence itself
+    never commits -- every caller commits once, after this and the new
+    Evidence row are both part of the same transaction). A concurrent
+    call for the SAME organization genuinely blocks on this SELECT until
+    the first transaction finishes, so it always re-reads a predecessor
+    that reflects the first transaction's own write. Different
+    organizations never block each other -- each locks only its own
+    row. This is a database-level guarantee, not an application-level
+    Python lock, so it holds correctly across multiple API workers,
+    containers, or replicas -- the exact deployment shapes an in-process
+    lock cannot protect.
+
+    organization_id is itself a valid, consistent chain scope even when
+    None (a Principal with no organisation set yet -- see
+    _resolve_chain_scope's own docstring) -- there is no Organization
+    row to lock in that case, so this intentionally does not serialize
+    that one narrow, non-multi-tenant edge case. Postgres enforces this
+    lock at the row level; SQLite has no row-level locking primitive at
+    all, so this call is a harmless no-op there -- production runs on
+    Postgres (see docker-compose.yml/config.py's own default
+    database_url), and every SQLite-based test in this codebase already
+    runs single-connection per test, so the missing lock in that dialect
+    never undermines what those tests actually exercise (the re-read-
+    latest-under-lock algorithm itself, driven by forced interleaving
+    hooks rather than real OS-thread races)."""
+    if organization_id is None:
+        return
+    db.execute(select(Organization.id).where(Organization.id == organization_id).with_for_update())
+
+
+def _next_chain_sequence(db: Session, organization_id: uuid.UUID | None) -> int:
+    """PayReality 1.0 Audit finding G01 (chain-ordering follow-up): must
+    only ever be called after _lock_chain_scope has already acquired the
+    lock for this same organization_id -- its own re-read-under-lock
+    guarantee is what makes this safe to call without a race of its own.
+    Returns a real, monotonically-increasing per-organization ordinal: 1
+    for the first Evidence record ever written for this scope, otherwise
+    one more than the highest sequence already recorded. Exists purely
+    to give verify_chain and _previous_chain_hash an unambiguous write-
+    order tiebreaker -- created_at alone is not reliable, since two
+    records appended close together can share a timestamp (guaranteed
+    under SQLite's one-second CURRENT_TIMESTAMP resolution, possible
+    even under Postgres's microsecond one), and Evidence.id (a random
+    UUID, the previous tiebreaker) has no relationship to true write
+    order at all."""
+    current_max = db.scalar(
+        select(func.max(Evidence.sequence)).where(Evidence.organization_id == organization_id)
+    )
+    return (current_max or 0) + 1
+
+
 def _previous_chain_hash(db: Session, organization_id: uuid.UUID | None) -> str | None:
     stmt = select(Evidence).where(Evidence.organization_id == organization_id)
-    stmt = stmt.order_by(Evidence.created_at.desc(), Evidence.id.desc()).limit(1)
+    stmt = stmt.order_by(
+        nullslast(Evidence.sequence.desc()), Evidence.created_at.desc(), Evidence.id.desc()
+    ).limit(1)
     prior = db.scalar(stmt)
     return payload_hash(prior.payload) if prior is not None else None
 
@@ -348,7 +415,9 @@ def append_evidence(
     facts_evaluated: list[dict] | None = None,
 ) -> Evidence:
     organization_id = _resolve_chain_scope(db, agent_id)
+    _lock_chain_scope(db, organization_id)
     previous_hash = _previous_chain_hash(db, organization_id)
+    sequence = _next_chain_sequence(db, organization_id)
     authority_ids = _resolve_authority_ids_for_mandates(db, mandate_ids) if mandate_ids else []
     # Runtime Governance Architecture, Phase 1: "who resolved"/"who is
     # responsible" collapse onto the same value today because no Resolver
@@ -418,6 +487,7 @@ def append_evidence(
         # (our HUMAN_REVIEW-resolution addition).
         status=status,
         organization_id=organization_id,
+        sequence=sequence,
     )
     db.add(evidence)
     db.flush()
