@@ -111,6 +111,7 @@ class BatchRowResponse(BaseModel):
     action: str
     decision: str | None
     error: str | None
+    limitation: str | None = None
 
 
 class BatchSimulationResponse(BaseModel):
@@ -119,6 +120,7 @@ class BatchSimulationResponse(BaseModel):
     denied: int
     escalated: int
     errors: int
+    cannot_simulate: int = 0
     sample_rows: list[BatchRowResponse]
     sample_truncated: bool
     policy_version: int

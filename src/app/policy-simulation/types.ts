@@ -107,6 +107,11 @@ export interface BatchRow {
   action: string;
   decision: SimulationDecision | null;
   error: string | null;
+  // PayReality 1.0 Audit finding G03: set instead of `decision` when this
+  // row's policy set needed a Trusted Enterprise Fact but the row gave no
+  // counterparty/vendor to resolve it against -- a real, visible
+  // limitation, never a silently-guessed decision.
+  limitation: string | null;
 }
 
 export interface BatchSimulationResult {
@@ -115,6 +120,7 @@ export interface BatchSimulationResult {
   denied: number;
   escalated: number;
   errors: number;
+  cannot_simulate: number;
   sample_rows: BatchRow[];
   sample_truncated: boolean;
   policy_version: number;

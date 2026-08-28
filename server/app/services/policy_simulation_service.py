@@ -430,6 +430,14 @@ class BatchRow:
     action: str
     decision: str | None
     error: str | None = None
+    # PayReality 1.0 Audit finding G03 (verification-closure pass): set,
+    # instead of `decision`, when this candidate policy set references an
+    # enterprise_knowledge.* fact and this row gave no `counterparty` to
+    # resolve it against -- a real, visible limitation, never a silent
+    # ALLOW/DENY/HUMAN_REVIEW guessed as if the fact requirement didn't
+    # exist. Distinct from `error`: this is not a malformed row, it is a
+    # row this simulator genuinely cannot evaluate truthfully.
+    limitation: str | None = None
 
 
 _BATCH_SAMPLE_LIMIT = 50
@@ -446,6 +454,14 @@ class BatchSimulationResult:
     sample_truncated: bool
     policy_version: int
     policy_bundle_hash: str
+    # PayReality 1.0 Audit finding G03 (verification-closure pass): rows
+    # this simulator declined to evaluate at all, rather than silently
+    # returning an ALLOW/DENY/HUMAN_REVIEW that ignored a Trusted
+    # Enterprise Fact requirement it had no subject to resolve against.
+    # Never folded into `errors` (which means "malformed row"), and never
+    # folded into `allowed`/`denied`/`escalated` (which would be exactly
+    # the silently-incorrect result this field exists to prevent).
+    cannot_simulate: int = 0
 
 
 def run_batch(
@@ -459,14 +475,32 @@ def run_batch(
     upload/query/delete cycle for every row -- the isolation guarantee
     is identical (a unique throwaway package, deleted afterward), only
     the amortization differs. Never persists a single row's result;
-    only the aggregate counts and a capped sample are ever returned."""
-    _row, _this_policy, _all_policies, compile_result = _compile_for_simulation(db, policy_key, organization_id)
+    only the aggregate counts and a capped sample are ever returned.
+
+    PayReality 1.0 Audit finding G03 (verification-closure pass): this
+    previously hand-built its OPA input exactly like simulate() used to,
+    with the identical Trusted Enterprise Facts gap -- a fact-gated
+    policy silently evaluated every row as if no facts existed at all.
+    Now reuses the same shared pieces simulate() itself uses --
+    build_opa_input and fact_service.resolve_facts, and
+    _enterprise_knowledge_keys_referenced to learn what this policy set
+    actually needs, computed once for the whole batch rather than
+    duplicated per row. A CSV `counterparty` (or `vendor`) column is the
+    minimal, natural per-row extension: it is already the exact same
+    field the wire format and the SDK both use, not a newly-invented
+    concept. Where a row lacks it AND the policy set needs a fact, this
+    is Option B, not a silent Option A degrade: the row is marked
+    CANNOT_SIMULATE and excluded from the allowed/denied/escalated
+    counts entirely, rather than evaluated as if the fact requirement
+    weren't there."""
+    _row, _this_policy, all_policies, compile_result = _compile_for_simulation(db, policy_key, organization_id)
     if not compile_result.ok:
         raise CompilationRequiredError(f"{policy_key} does not currently compile cleanly")
     bundle = compile_result.bundle
     resolved_opa_url = opa_url or settings.opa_url
+    needed_fact_keys = _enterprise_knowledge_keys_referenced(all_policies)
 
-    allowed = denied = escalated = errors = 0
+    allowed = denied = escalated = errors = cannot_simulate = 0
     sample: list[BatchRow] = []
 
     with loaded_bundle(bundle, resolved_opa_url) as data_path:
@@ -476,6 +510,21 @@ def run_batch(
             try:
                 if not principal or not action:
                     raise ValueError("principal and action are required")
+
+                counterparty = str(raw_row.get("counterparty") or raw_row.get("vendor") or "").strip() or None
+                if needed_fact_keys and not counterparty:
+                    cannot_simulate += 1
+                    if len(sample) < _BATCH_SAMPLE_LIMIT:
+                        sample.append(BatchRow(
+                            row_number=i, principal=principal, action=action, decision=None,
+                            limitation=(
+                                "This policy requires Trusted Enterprise Fact(s) "
+                                f"({', '.join(needed_fact_keys)}), but this row does not identify the fact "
+                                "subject (a `counterparty` or `vendor` column) required for truthful resolution."
+                            ),
+                        ))
+                    continue
+
                 amount_raw = raw_row.get("amount")
                 intent: dict[str, Any] = {"action": action}
                 if raw_row.get("resource"):
@@ -485,19 +534,30 @@ def run_batch(
                 if raw_row.get("currency"):
                     intent["currency"] = raw_row["currency"]
 
-                # Any column beyond the core five (principal/action/
-                # resource/amount/currency) is passed through as Runtime
-                # Authority Context, flat -- a batch CSV's own header row
-                # is the only vocabulary this needs to understand.
+                # Any column beyond the core six (principal/action/
+                # resource/amount/currency/counterparty|vendor) is passed
+                # through as Runtime Authority Context, flat -- a batch
+                # CSV's own header row is the only vocabulary this needs
+                # to understand.
                 context = {
                     k: v for k, v in raw_row.items()
-                    if k not in ("principal", "action", "resource", "amount", "currency") and v not in (None, "")
+                    if k not in ("principal", "action", "resource", "amount", "currency", "counterparty", "vendor")
+                    and v not in (None, "")
                 }
-                opa_input = {
-                    "intent": intent, "context": context,
-                    "agent": {"acting_for_principal_id": principal},
-                    "policy_version": bundle.version,
-                }
+
+                enterprise_knowledge: dict[str, Any] = {}
+                if needed_fact_keys and organization_id is not None:
+                    try:
+                        resolved_facts = fact_service.resolve_facts(
+                            db, organization_id, [(counterparty, key) for key in needed_fact_keys]
+                        )
+                    except fact_service.FactConflictError:
+                        resolved_facts = []
+                    enterprise_knowledge = {f.key: f.value for f in resolved_facts}
+
+                opa_input = build_opa_input(
+                    intent, context, principal, bundle.version, enterprise_knowledge=enterprise_knowledge
+                )
                 result = query_loaded_bundle(resolved_opa_url, data_path, opa_input)
                 decision = _decision_from_flags(
                     result.get("allow", False), result.get("deny", False), result.get("requires_review", False)
@@ -520,6 +580,7 @@ def run_batch(
 
     return BatchSimulationResult(
         total=len(rows), allowed=allowed, denied=denied, escalated=escalated, errors=errors,
+        cannot_simulate=cannot_simulate,
         sample_rows=sample, sample_truncated=len(rows) > _BATCH_SAMPLE_LIMIT,
         policy_version=bundle.version, policy_bundle_hash=bundle.bundle_hash,
     )

@@ -274,8 +274,10 @@ export function PolicySimulationPage() {
             <div style={sectionTitle}>Batch Simulation</div>
             <p style={{ fontSize: 12, color: "var(--pr-text-muted)", marginBottom: 10 }}>
               Upload a CSV of historical actions (columns: principal, action, resource, amount,
-              currency, plus any other column as context) to see the impact of this policy version
-              before deploying it. No row is ever persisted.
+              currency, counterparty, plus any other column as context) to see the impact of this
+              policy version before deploying it. No row is ever persisted. A row whose policy set
+              needs a Trusted Enterprise Fact and has no counterparty is reported separately, not
+              guessed.
             </p>
             <input
               type="file"
@@ -303,17 +305,38 @@ export function PolicySimulationPage() {
                 {batchResult.errors > 0 && (
                   <p style={{ fontSize: 12, color: "var(--pr-critical-red)" }}>{batchResult.errors} row(s) could not be evaluated.</p>
                 )}
+                {batchResult.cannot_simulate > 0 && (
+                  <p style={{ fontSize: 12, color: "var(--pr-warning-amber)" }}>
+                    {batchResult.cannot_simulate} row(s) reference a Trusted Enterprise Fact but gave no counterparty --
+                    excluded from the counts above rather than guessed. Add a `counterparty` (or `vendor`) column to
+                    simulate them truthfully.
+                  </p>
+                )}
                 <details style={{ fontSize: 12 }}>
                   <summary style={{ color: "var(--pr-authority-blue)", cursor: "pointer" }}>
                     Sample rows {batchResult.sample_truncated ? "(first 50 of the full batch)" : ""}
                   </summary>
                   <div style={{ marginTop: 8, maxHeight: 240, overflowY: "auto" }}>
                     {batchResult.sample_rows.map((r) => (
-                      <div key={r.row_number} className="flex items-center justify-between gap-3" style={{ padding: "4px 0", borderTop: "1px solid var(--pr-overlay-05)" }}>
-                        <span style={{ color: "var(--pr-text-secondary)" }}>#{r.row_number} {r.principal} &middot; {r.action}</span>
-                        <span style={{ flexShrink: 0, color: r.error ? "var(--pr-critical-red)" : DECISION_STYLE[r.decision ?? ""]?.color }}>
-                          {r.error ?? DECISION_STYLE[r.decision ?? ""]?.label ?? r.decision}
-                        </span>
+                      <div key={r.row_number} style={{ padding: "4px 0", borderTop: "1px solid var(--pr-overlay-05)" }}>
+                        <div className="flex items-center justify-between gap-3">
+                          <span style={{ color: "var(--pr-text-secondary)" }}>#{r.row_number} {r.principal} &middot; {r.action}</span>
+                          <span
+                            style={{
+                              flexShrink: 0,
+                              color: r.limitation
+                                ? "var(--pr-warning-amber)"
+                                : r.error
+                                  ? "var(--pr-critical-red)"
+                                  : DECISION_STYLE[r.decision ?? ""]?.color,
+                            }}
+                          >
+                            {r.limitation ? "Cannot simulate" : r.error ?? DECISION_STYLE[r.decision ?? ""]?.label ?? r.decision}
+                          </span>
+                        </div>
+                        {r.limitation && (
+                          <div style={{ color: "var(--pr-text-muted)", marginTop: 2 }}>{r.limitation}</div>
+                        )}
                       </div>
                     ))}
                   </div>

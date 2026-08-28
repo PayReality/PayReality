@@ -203,10 +203,17 @@ async def batch_simulate(
     organization: Organization = Depends(get_current_organization),
 ):
     """Task: Batch Simulation. CSV columns: `principal`, `action`
-    (both required), `resource`, `amount`, `currency` (all optional) --
-    any other column is passed through as flat Runtime Authority
-    Context. Never persists a single row's decision; only aggregate
-    counts and a capped sample are returned."""
+    (both required), `resource`, `amount`, `currency`, `counterparty`
+    (or `vendor`) (all optional) -- any other column is passed through
+    as flat Runtime Authority Context. Never persists a single row's
+    decision; only aggregate counts and a capped sample are returned.
+
+    PayReality 1.0 Audit finding G03 (verification-closure pass): a row
+    whose candidate policy set needs a Trusted Enterprise Fact but gives
+    no `counterparty`/`vendor` to resolve it against is never silently
+    evaluated as ALLOW/DENY/HUMAN_REVIEW -- it is excluded from those
+    counts and reported in `cannot_simulate` instead, with the specific
+    reason in that row's own `limitation` field."""
     raw = await file.read()
     try:
         text = raw.decode("utf-8-sig")
@@ -228,11 +235,11 @@ async def batch_simulate(
 
     return BatchSimulationResponse(
         total=result.total, allowed=result.allowed, denied=result.denied, escalated=result.escalated,
-        errors=result.errors, sample_truncated=result.sample_truncated,
+        errors=result.errors, cannot_simulate=result.cannot_simulate, sample_truncated=result.sample_truncated,
         policy_version=result.policy_version, policy_bundle_hash=result.policy_bundle_hash,
         sample_rows=[
             BatchRowResponse(row_number=r.row_number, principal=r.principal, action=r.action,
-                              decision=r.decision, error=r.error)
+                              decision=r.decision, error=r.error, limitation=r.limitation)
             for r in result.sample_rows
         ],
     )
