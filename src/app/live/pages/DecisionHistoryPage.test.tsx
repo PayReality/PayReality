@@ -31,6 +31,37 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// PayReality 1.0 Audit finding (verification-closure pass): this file's
+// original fixed `setTimeout(r, 50)` waits raced this page's own async
+// demo-data render -- fine in isolation, but under the full suite's
+// worker-thread CPU contention, 50ms is not always enough, producing a
+// real, reproducible-but-nondeterministic "Test timed out"/"expected
+// undefined to be truthy" flake (confirmed identical at this repo's
+// pre-hotfix commit 83e6c7e too -- not a regression from this milestone,
+// and not unique to this file: AgentDirectoryPage.test.tsx,
+// CorpusReviewPage.test.tsx, DecisionDetailPage.test.tsx, and
+// AuthorizationReceiptPage.test.tsx exhibit the identical timeout-under-
+// contention shape and are left for a separate test-hardening pass --
+// fixing all of them is outside this milestone's scope). Polls for the
+// actual condition instead of guessing a fixed delay, AND each `it()`
+// below raises its own per-test timeout from vitest's 5000ms default to
+// 15000ms -- under heavy full-suite contention the render itself (not
+// just this file's own wait) can take longer than 5s; polling alone
+// cannot outrun the surrounding test's own timeout ceiling. Both changes
+// are test-isolation robustness only; no product behavior changed, no
+// assertion weakened.
+async function waitForCondition(check: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) {
+      throw new Error("waitForCondition: condition was not met within the timeout");
+    }
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+  }
+}
+
 // Core Product Experience Redesign, section 22: focused coverage for
 // the Decision Center's history rendering and its demoted manual-test
 // entry point -- the two behaviors section 4 most depends on.
@@ -41,8 +72,8 @@ describe("DecisionHistoryPage (demo mode)", () => {
       root.render(
         createElement(MemoryRouter, { initialEntries: ["/decisions"] }, createElement(DecisionHistoryPage))
       );
-      await new Promise((r) => setTimeout(r, 50));
     });
+    await waitForCondition(() => container.querySelector("table") !== null);
 
     expect(container.textContent).toContain("Decisions");
     // The old page's always-visible submission form must not be the
@@ -50,7 +81,7 @@ describe("DecisionHistoryPage (demo mode)", () => {
     expect(container.textContent).not.toContain("Submit signed intent");
     // A real history row from the demo fixtures should be visible.
     expect(container.querySelector("table")).not.toBeNull();
-  });
+  }, 15000);
 
   it("demotes manual testing to a secondary drawer, opened explicitly, with no ref console error", async () => {
     // Visual Experience V2 (found via real browser QA): opening this
@@ -67,8 +98,10 @@ describe("DecisionHistoryPage (demo mode)", () => {
       root.render(
         createElement(MemoryRouter, { initialEntries: ["/decisions"] }, createElement(DecisionHistoryPage))
       );
-      await new Promise((r) => setTimeout(r, 50));
     });
+    await waitForCondition(() =>
+      Array.from(container.querySelectorAll("button")).some((b) => b.textContent?.includes("Test Runtime Authority"))
+    );
 
     // Not shown until the drawer is opened.
     expect(container.textContent).not.toContain("Submit signed test intent");
@@ -79,8 +112,8 @@ describe("DecisionHistoryPage (demo mode)", () => {
     expect(trigger).toBeTruthy();
     await act(async () => {
       trigger!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await new Promise((r) => setTimeout(r, 50));
     });
+    await waitForCondition(() => document.body.textContent?.includes("Submit signed test intent") ?? false);
 
     expect(document.body.textContent).toContain("creates a genuine Intent");
     expect(document.body.textContent).toContain("Submit signed test intent");
@@ -89,5 +122,5 @@ describe("DecisionHistoryPage (demo mode)", () => {
       String(args[0]).includes("Function components cannot be given refs")
     );
     expect(refWarnings).toHaveLength(0);
-  });
+  }, 15000);
 });
