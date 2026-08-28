@@ -12,6 +12,7 @@ import shutil
 import socket
 import subprocess
 import time
+import uuid
 
 import httpx
 import pytest
@@ -73,3 +74,93 @@ def opa_url():
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+# --- Real PostgreSQL (PayReality 1.0 Audit finding G01, verification-
+# closure pass) -------------------------------------------------------------
+#
+# The G01 concurrency fix relies on a REAL row-level lock
+# (SELECT ... FOR UPDATE), which SQLite cannot meaningfully exercise (it
+# compiles the clause away as a no-op). This fixture points tests at the
+# project's own existing docker-compose Postgres service -- reused, not a
+# new, separate test-infrastructure invention -- creating one throwaway
+# database per test session and migrating it with the project's real
+# Alembic chain (so the schema under test, including the `evidence.sequence`
+# column/index from migration 741abf7b0146, is identical to what a real
+# deployment runs), then dropping it afterward.
+#
+# Skips (never fails) when Postgres isn't reachable, with the exact command
+# to start it printed in the skip reason -- matching this file's own
+# opa_url fixture's "skip honestly, don't fake it" convention. To run this
+# for real:
+#
+#   docker compose up -d postgres
+#   (from the repository root; ADMIN_API_KEY/EVIDENCE_SIGNING_KEY_B64 need
+#   only be set to any placeholder value to satisfy compose's own
+#   variable interpolation for the unrelated `server` service in the same
+#   file -- postgres itself does not use them)
+_POSTGRES_ADMIN_URL = "postgresql://payreality:payreality_dev@localhost:5432/payreality_dev"
+
+
+def _postgres_reachable() -> bool:
+    try:
+        import psycopg
+
+        with psycopg.connect(_POSTGRES_ADMIN_URL, connect_timeout=2):
+            return True
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="session")
+def postgres_url():
+    if not _postgres_reachable():
+        pytest.skip(
+            "Real PostgreSQL not reachable at "
+            f"{_POSTGRES_ADMIN_URL} -- start it with `docker compose up -d postgres` "
+            "from the repository root (ADMIN_API_KEY/EVIDENCE_SIGNING_KEY_B64 env vars "
+            "need any placeholder value to satisfy compose's own interpolation)."
+        )
+
+    import psycopg
+
+    db_name = f"payreality_test_{uuid.uuid4().hex[:12]}"
+    admin_conn = psycopg.connect(_POSTGRES_ADMIN_URL, autocommit=True)
+    try:
+        admin_conn.execute(f'CREATE DATABASE "{db_name}"')
+    finally:
+        admin_conn.close()
+
+    test_url = f"postgresql+psycopg://payreality:payreality_dev@localhost:5432/{db_name}"
+    import os
+    import sys
+    from pathlib import Path
+
+    server_dir = Path(__file__).resolve().parents[2]  # .../server/tests/integration/conftest.py -> .../server
+    full_env = dict(os.environ)
+    full_env["DATABASE_URL"] = test_url
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=str(server_dir),
+        env=full_env,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        # Clean up the half-migrated throwaway database before failing loudly.
+        cleanup_conn = psycopg.connect(_POSTGRES_ADMIN_URL, autocommit=True)
+        try:
+            cleanup_conn.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+        finally:
+            cleanup_conn.close()
+        raise RuntimeError(f"alembic upgrade head failed against {db_name}:\n{result.stdout}\n{result.stderr}")
+
+    try:
+        yield test_url
+    finally:
+        cleanup_conn = psycopg.connect(_POSTGRES_ADMIN_URL, autocommit=True)
+        try:
+            cleanup_conn.execute(f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s", (db_name,))
+            cleanup_conn.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+        finally:
+            cleanup_conn.close()
