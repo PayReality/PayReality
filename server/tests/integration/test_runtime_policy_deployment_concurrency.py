@@ -378,7 +378,7 @@ def test_deploy_policy_gives_up_cleanly_after_max_attempts(db, opa_url, monkeypa
         raise IntegrityError("simulated permanent race", params=None, orig=Exception("duplicate"))
 
     monkeypatch.setattr(svc, "_deploy_policy_attempt", always_collide)
-    monkeypatch.setattr(svc, "reconcile_opa_with_active_policies", lambda db, opa_url=None: False)
+    monkeypatch.setattr(svc, "_reconcile_organization_opa_state", lambda db, organization_id, opa_url=None: None)
 
     with pytest.raises(ConcurrentDeploymentConflictError):
         svc.deploy_policy(db, policy_key, org.id, opa_url=opa_url)

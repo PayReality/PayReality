@@ -103,6 +103,22 @@ class HttpOpaClient:
         resp.raise_for_status()
         return resp.json().get("result", {}).get("revision", "")
 
+    def delete_policy(self, policy_path: str) -> None:
+        """DELETE a Rego module (standard OPA REST API, `DELETE /v1/
+        policies/<id>`). PayReality 1.0 Audit finding G02 (verification-
+        closure pass): the missing half of upload_policy -- reconciling
+        OPA to "this organization now has zero active RuntimePolicy"
+        requires actually removing what's there, not merely declining to
+        push anything new (which silently leaves stale, possibly never-
+        committed rego live and enforceable). A 404 (nothing was loaded
+        under this id) is treated as already-consistent, not an error --
+        the caller's intent is "make sure this id isn't serving stale
+        content," which is already true either way."""
+        resp = httpx.delete(f"{self.base_url}/v1/policies/{policy_path}", timeout=5.0)
+        if resp.status_code == 404:
+            return
+        resp.raise_for_status()
+
     def health(self) -> bool:
         try:
             resp = httpx.get(f"{self.base_url}/health", timeout=2.0)

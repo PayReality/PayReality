@@ -292,11 +292,21 @@ def retire_policy(
     """The one transition `runtime_policy_service` has no equivalent for:
     deploy_policy only ever retires the PRIOR version of the SAME
     policy_key when a NEW version of that key activates. This retires the
-    current active version with no replacement, then reuses
-    reconcile_opa_with_active_policies (unchanged -- it already iterates
-    every organization's own active set and own OPA package) to push the
-    remaining active set to OPA -- never re-implementing bundle
-    compilation here."""
+    current active version with no replacement, then reconciles OPA to
+    match -- never re-implementing bundle compilation here.
+
+    PayReality 1.0 Audit finding G02 (verification-closure pass): uses
+    the single-organization reconciler (_reconcile_organization_opa_
+    state), not the global reconcile_opa_with_active_policies -- this
+    retirement may have just left this organization with ZERO active
+    RuntimePolicy, which the global function (correctly, for its own
+    startup-reconciliation purpose) simply skips over rather than
+    clearing. Without this, retiring an organization's last active
+    policy left its previous rego live and enforceable in OPA
+    indefinitely, even though the database now shows nothing active for
+    it -- retirement is already durably committed (line above) before
+    this call, so this only ever corrects OPA to match, never risks
+    the reverse."""
     row = svc.get_latest(db, policy_key, organization_id)
     if row.status != "active":
         raise svc.InvalidTransitionError(row.status, "retire")
@@ -304,7 +314,7 @@ def retire_policy(
     row.status = "retired"
     db.commit()
     db.refresh(row)
-    svc.reconcile_opa_with_active_policies(db, opa_url=opa_url)
+    svc._reconcile_organization_opa_state(db, organization_id, opa_url)
     record_lifecycle_event(db, policy_key, row.version, "retired", actor=actor, reason=reason, organization_id=organization_id)
     return row
 

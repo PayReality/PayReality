@@ -764,6 +764,51 @@ def reconcile_opa_with_active_policies(db: Session, opa_url: str = "http://local
     return True
 
 
+def _reconcile_organization_opa_state(db: Session, organization_id: uuid.UUID | None, opa_url: str) -> None:
+    """PayReality 1.0 Audit finding G02 (verification-closure pass): a
+    single-organization counterpart to reconcile_opa_with_active_
+    policies above, for callers that already know exactly which
+    organization needs reconciling (a failed/abandoned deploy attempt, a
+    retirement) rather than "everything, at process startup." The
+    difference that matters: this organization may now have ZERO active
+    RuntimePolicy rows -- the global function silently skips any
+    organization with nothing currently active (correct for its own
+    call site, since OPA is freshly empty at startup and there is
+    nothing stale to remove), which is exactly wrong here, where OPA may
+    already be holding a stray push from an attempt whose transaction
+    never actually committed. Deletes this organization's OPA policy
+    entirely when it has no active RuntimePolicy, rather than merely
+    declining to touch it."""
+    active_rows = list(
+        db.scalars(
+            select(RuntimePolicyRecord)
+            .where(
+                RuntimePolicyRecord.status == "active",
+                RuntimePolicyRecord.organization_id == organization_id,
+            )
+            .order_by(RuntimePolicyRecord.policy_key)
+        )
+    )
+    opa = HttpOpaClient(base_url=opa_url)
+    package_path, policy_id = _opa_package_and_policy_id(organization_id)
+
+    if not active_rows:
+        opa.delete_policy(policy_id)
+        return
+
+    policies = [_row_to_policy(r) for r in active_rows]
+    result = compile_bundle(policies, bundle_id="reconcile", bundle_version=1)
+    if not result.ok:
+        raise CompilationRequiredError(
+            f"active RuntimePolicy set for organization {organization_id} no longer "
+            "compiles cleanly; cannot reconcile OPA"
+        )
+    rego_source = (
+        result.bundle.rego_source if organization_id is None else retarget_package(result.bundle.rego_source, package_path)
+    )
+    opa.upload_policy(policy_id, rego_source)
+
+
 def _other_active_policies(
     db: Session, exclude_policy_key: uuid.UUID, organization_id: uuid.UUID | None
 ) -> list[RuntimePolicy]:
@@ -957,7 +1002,7 @@ def deploy_policy(
         except IntegrityError:
             db.rollback()
             continue
-    reconcile_opa_with_active_policies(db, opa_url=opa_url)
+    _reconcile_organization_opa_state(db, organization_id, opa_url)
     raise ConcurrentDeploymentConflictError(str(policy_key))
 
 
@@ -1024,32 +1069,60 @@ def _deploy_policy_attempt(
     # secured a real, durable claim to be the winner.
     db.flush()
 
-    package_path, policy_id = _opa_package_and_policy_id(organization_id)
-    rego_source = (
-        result.bundle.rego_source if organization_id is None else retarget_package(result.bundle.rego_source, package_path)
-    )
-    opa = HttpOpaClient(base_url=opa_url)
-    opa.upload_policy(policy_id, rego_source)
-
-    prior_active_rp = db.scalar(
-        select(RuntimePolicyRecord).where(
-            RuntimePolicyRecord.policy_key == policy_key,
-            RuntimePolicyRecord.status == "active",
-            RuntimePolicyRecord.organization_id == organization_id,
+    # PayReality 1.0 Audit finding G02 (verification-closure pass):
+    # everything from here through db.commit() below still touches OPA
+    # -- an external, non-transactional system -- before this attempt's
+    # transaction is durable. _ensure_mandate performs its own internal
+    # flush (a second round-trip after the OPA push), and db.commit()
+    # itself can always fail for reasons unrelated to the two uniqueness
+    # constraints already reserved above (a dropped connection, a
+    # deadlock, disk pressure) -- none of those raise until this point,
+    # and none of them are IntegrityError, so deploy_policy's own retry
+    # wrapper would never have caught them. Without this try/except,
+    # such a failure would leave OPA serving rego content for a Policy
+    # row this attempt's own transaction just rolled back -- exactly the
+    # split-brain this milestone exists to close. On ANY failure here,
+    # roll back first (required before this session can be read again),
+    # then reconcile OPA back to whatever this organization's actual,
+    # now again-authoritative committed active policy set is (the same
+    # existing reconciliation deploy_policy's own give-up path already
+    # relies on -- reused here, not duplicated), before re-raising the
+    # original exception completely unchanged: an IntegrityError still
+    # reaches deploy_policy's retry loop exactly as before, anything
+    # else still propagates exactly as before. The only new behavior is
+    # that OPA is never left ahead of what the database actually
+    # committed.
+    try:
+        package_path, policy_id = _opa_package_and_policy_id(organization_id)
+        rego_source = (
+            result.bundle.rego_source if organization_id is None else retarget_package(result.bundle.rego_source, package_path)
         )
-    )
-    if prior_active_rp is not None and prior_active_rp.id != row.id:
-        prior_active_rp.status = "retired"
+        opa = HttpOpaClient(base_url=opa_url)
+        opa.upload_policy(policy_id, rego_source)
 
-    content = dict(row.content)
-    content["constraints"] = _ensure_mandate(db, dict(content.get("constraints") or {}), policy_row, now)
-    audit = dict(content.get("audit") or {})
-    audit["deployed"] = now.isoformat()
-    content["audit"] = audit
-    row.content = content
-    row.status = "active"
+        prior_active_rp = db.scalar(
+            select(RuntimePolicyRecord).where(
+                RuntimePolicyRecord.policy_key == policy_key,
+                RuntimePolicyRecord.status == "active",
+                RuntimePolicyRecord.organization_id == organization_id,
+            )
+        )
+        if prior_active_rp is not None and prior_active_rp.id != row.id:
+            prior_active_rp.status = "retired"
 
-    db.commit()
+        content = dict(row.content)
+        content["constraints"] = _ensure_mandate(db, dict(content.get("constraints") or {}), policy_row, now)
+        audit = dict(content.get("audit") or {})
+        audit["deployed"] = now.isoformat()
+        content["audit"] = audit
+        row.content = content
+        row.status = "active"
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        _reconcile_organization_opa_state(db, organization_id, opa_url)
+        raise
     db.refresh(policy_row)
     return DeployOutcome(
         policy_row_id=policy_row.id,
