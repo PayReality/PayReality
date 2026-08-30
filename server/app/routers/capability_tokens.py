@@ -46,6 +46,8 @@ def issue_capability(
         raise HTTPException(status_code=404, detail="decision_not_found")
     except capability_service.DecisionNotAllowError:
         raise HTTPException(status_code=409, detail="decision_not_allow")
+    except capability_service.CapabilityNotAvailableForIntegrationIntentError as e:
+        raise HTTPException(status_code=409, detail=f"capability_not_available_for_integration_intent: {e}")
     return IssueCapabilityResponse(
         token=issued.token, capability_id=issued.capability_id, expires_at=issued.expires_at
     )

@@ -147,6 +147,12 @@ def _build_evidence_payload(
     enterprise_system_id: str | None = None,
     enterprise_system_name: str | None = None,
     facts_evaluated: list[dict] | None = None,
+    integration_identity_id: str | None = None,
+    enforcement_binding_id: str | None = None,
+    integration_contract_version_id: str | None = None,
+    integration_contract_content_hash: str | None = None,
+    environment: str | None = None,
+    source_operation: str | None = None,
 ) -> dict:
     """spec 17.1's Evidence payload shape, adapted to Phase 1's fields.
 
@@ -268,6 +274,27 @@ def _build_evidence_payload(
     # matching every other optional key in this payload.
     if facts_evaluated:
         payload["facts_evaluated"] = facts_evaluated
+    # Trusted Integration Architecture, Phase 2: present only for an
+    # Intent that actually reached Runtime Authority via the trusted
+    # Adapter path -- absent (not null, not empty-string) for every
+    # Agent-direct Evidence record, exactly the same "optional key,
+    # never fabricated" discipline as every field above. Reuses the
+    # exact, already-immutable content_hash Phase 1 computed at the
+    # Contract version's own draft->validated transition -- never
+    # recomputed here, and never reinterpreting historical Contract
+    # meaning using whatever the Contract/Integration looks like today.
+    if integration_identity_id is not None:
+        payload["integration_identity_id"] = integration_identity_id
+    if enforcement_binding_id is not None:
+        payload["enforcement_binding_id"] = enforcement_binding_id
+    if integration_contract_version_id is not None:
+        payload["integration_contract_version_id"] = integration_contract_version_id
+    if integration_contract_content_hash is not None:
+        payload["integration_contract_content_hash"] = integration_contract_content_hash
+    if environment is not None:
+        payload["environment"] = environment
+    if source_operation is not None:
+        payload["source_operation"] = source_operation
     return payload
 
 
@@ -413,6 +440,12 @@ def append_evidence(
     review_outcome: str | None = None,
     enterprise_system_id: uuid.UUID | None = None,
     facts_evaluated: list[dict] | None = None,
+    integration_identity_id: uuid.UUID | None = None,
+    enforcement_binding_id: uuid.UUID | None = None,
+    integration_contract_version_id: uuid.UUID | None = None,
+    integration_contract_content_hash: str | None = None,
+    environment: str | None = None,
+    source_operation: str | None = None,
 ) -> Evidence:
     organization_id = _resolve_chain_scope(db, agent_id)
     _lock_chain_scope(db, organization_id)
@@ -474,6 +507,14 @@ def append_evidence(
         enterprise_system_id=str(enterprise_system.id) if enterprise_system else None,
         enterprise_system_name=enterprise_system.name if enterprise_system else None,
         facts_evaluated=facts_evaluated,
+        integration_identity_id=str(integration_identity_id) if integration_identity_id else None,
+        enforcement_binding_id=str(enforcement_binding_id) if enforcement_binding_id else None,
+        integration_contract_version_id=(
+            str(integration_contract_version_id) if integration_contract_version_id else None
+        ),
+        integration_contract_content_hash=integration_contract_content_hash,
+        environment=environment,
+        source_operation=source_operation,
     )
     signature = sign_payload(
         payload, settings.evidence_signing_key_b64, settings.evidence_signing_key_id
@@ -492,6 +533,133 @@ def append_evidence(
     db.add(evidence)
     db.flush()
     return evidence
+
+
+def _evaluate_and_record(
+    db: Session, intent: Intent, agent: Agent, action: str, amount: float | None, currency: str | None,
+    counterparty: str | None, resource: str | None, context: dict, requested_at: datetime,
+    *, integration_provenance: dict | None = None,
+) -> tuple[Decision, Evidence]:
+    """The shared tail of both submit_intent (Agent-direct, below) and
+    integration_runtime_service.submit_attested_intent (Trusted
+    Integration Architecture, Phase 2, Adapter-mediated): resolves
+    Runtime Truth, Trusted Enterprise Facts, evaluates via
+    decision_engine, and appends Evidence. Extracted verbatim from
+    submit_intent's own pre-existing body -- every existing test in
+    this codebase's regression suite passing unmodified is the proof
+    this is a zero-behavior-change extraction for the Agent-direct path,
+    not a rewrite.
+
+    `integration_provenance`, only ever supplied by the Adapter-
+    mediated path, is a plain dict with keys integration_identity_id /
+    enforcement_binding_id / integration_contract_version_id /
+    integration_contract_content_hash / environment / source_operation
+    -- passed straight through into append_evidence's own additive,
+    optional kwargs. None (the default) for every Agent-direct call,
+    which is exactly what keeps that path's Evidence payload byte-for-
+    byte unchanged."""
+    resolved = runtime_truth_service.resolve(db, agent, amount)
+
+    # Milestone 2 (Multi-Tenant Foundation): the same Principal already
+    # resolved above (via Agent.acting_for_principal_id) is the sole source
+    # of which organization this Intent evaluates against -- nothing here
+    # is re-resolved independently of Runtime Truth's own resolution.
+    organization_id = resolved.principal.organization_id if resolved.principal else None
+    opa_data_path = org_data_path(organization_id) if organization_id is not None else None
+
+    needed_fact_keys = runtime_policy_service.list_enterprise_knowledge_keys_for_active_policies(db, organization_id)
+    resolved_facts = []
+    if needed_fact_keys and organization_id is not None:
+        try:
+            resolved_facts = fact_service.resolve_facts(
+                db, organization_id, [(counterparty, key) for key in needed_fact_keys]
+            )
+        except fact_service.FactConflictError:
+            resolved_facts = []
+    enterprise_knowledge = {f.key: f.value for f in resolved_facts}
+
+    engine_decision = decision_engine.evaluate(
+        intent={"action": action, "amount": amount, "currency": currency, "resource": resource},
+        context={
+            **context,
+            "timestamp": to_utc_iso(requested_at),
+            "authority": resolved.authority_context,
+        },
+        acting_for_principal_id=resolved.principal_name,
+        policy_store=_DbPolicyStore(db, organization_id),
+        opa_client=_EngineOpaClient(HttpOpaClient(), data_path=opa_data_path),
+        agent_id=str(agent.id),
+        enterprise_knowledge=enterprise_knowledge,
+    )
+
+    policy_id = uuid.UUID(engine_decision.policy_id) if engine_decision.policy_id else None
+    mandate_ids = runtime_policy_service.resolve_mandate_ids(db, engine_decision.evaluated_mandates)
+    enterprise_system = runtime_policy_service.resolve_enterprise_system(db, engine_decision.evaluated_mandates)
+
+    final_outcome = engine_decision.outcome
+    final_reason = engine_decision.reason
+    if engine_decision.outcome == "ALLOW":
+        overdue_policy = runtime_policy_service.find_expired_high_risk_authority(
+            db, engine_decision.evaluated_mandates
+        )
+        if overdue_policy is not None:
+            final_outcome = "HUMAN_REVIEW"
+            final_reason = "authority_review_overdue"
+
+    decision = Decision(
+        intent_id=intent.id,
+        policy_id=policy_id,
+        outcome=final_outcome,
+        reason=final_reason,
+        evaluated_mandates=engine_decision.evaluated_mandates,
+        evaluated_mandate_ids=mandate_ids,
+        enterprise_system_id=enterprise_system.id if enterprise_system else None,
+    )
+    db.add(decision)
+    db.flush()
+
+    prov = integration_provenance or {}
+    evidence = append_evidence(
+        db,
+        decision.id,
+        agent.id,
+        action,
+        amount,
+        engine_decision.evaluated_mandates,
+        decision.outcome,
+        status=_evidence_status_for_outcome(decision.outcome),
+        resource=resource,
+        currency=currency,
+        principal_id=resolved.principal.id if resolved.principal else None,
+        principal_name=resolved.principal_name,
+        authority_context=resolved.authority_context,
+        mandate_ids=mandate_ids,
+        authority_version=engine_decision.authority_version,
+        policy_version=engine_decision.policy_version,
+        policy_bundle_hash=engine_decision.policy_bundle_hash,
+        enterprise_system_id=enterprise_system.id if enterprise_system else None,
+        facts_evaluated=[
+            {
+                "key": f.key,
+                "value": f.value,
+                "subject": f.subject,
+                "source_id": str(f.source_id),
+                "observed_at": f.observed_at.isoformat(),
+                "expires_at": f.expires_at.isoformat(),
+            }
+            for f in resolved_facts
+        ] or None,
+        integration_identity_id=prov.get("integration_identity_id"),
+        enforcement_binding_id=prov.get("enforcement_binding_id"),
+        integration_contract_version_id=prov.get("integration_contract_version_id"),
+        integration_contract_content_hash=prov.get("integration_contract_content_hash"),
+        environment=prov.get("environment"),
+        source_operation=prov.get("source_operation"),
+    )
+    db.commit()
+    db.refresh(intent)
+    db.refresh(decision)
+    return decision, evidence
 
 
 def submit_intent(
@@ -621,169 +789,17 @@ def submit_intent(
         db.refresh(decision)
         return intent, decision, evidence
 
-    # Runtime Governance Architecture, Phase 3
-    # (30_PHASE_3_RUNTIME_TRUTH_SPEC.md): Runtime Truth's resolution
-    # boundary, formalized as a single named call. RuntimePolicy.scope.
-    # principal is authored as the Principal's free-form *name*
-    # (AUTHORING_ARCHITECTURE.md), never a foreign key -- but
-    # Agent.acting_for_principal_id is a UUID FK into `principals`, so the
-    # raw FK must be resolved to a name before it can ever reach a
-    # compiled policy's scope match. Runtime Authority Context
-    # (PHASE_2_RUNTIME_CONTEXT.md) is resolved in the same step, from the
-    # same Principal, so a policy's Condition can reference e.g.
-    # context.authority.department. Resolution ends here; nothing past
-    # this point resolves anything further.
-    resolved = runtime_truth_service.resolve(db, agent, amount)
-
-    # Milestone 2 (Multi-Tenant Foundation): the same Principal already
-    # resolved above (via Agent.acting_for_principal_id) is the sole source
-    # of which organization this Intent evaluates against -- nothing here
-    # is re-resolved independently of Runtime Truth's own resolution.
-    organization_id = resolved.principal.organization_id if resolved.principal else None
-    opa_data_path = org_data_path(organization_id) if organization_id is not None else None
-
-    # Trusted Enterprise Facts (PAYREALITY_FUTURE_VISION.md Part A):
-    # resolve only the fact keys the organization's active policies
-    # actually reference (never every fact ever ingested), scoped to
-    # this Intent's own counterparty as `subject` -- the reference
-    # scenario's "is this supplier approved" shape. A fact with no
-    # matching row (missing, expired, or from a revoked/cross-org
-    # source) simply isn't in the resolved list; the compiled policy's
-    # own `enterprise_knowledge.<key>` condition then evaluates
-    # undefined, so that rule doesn't match, which is this platform's
-    # existing, ordinary fail-closed behavior -- no new mechanism, just
-    # a new kind of input reaching it. A genuine contradiction between
-    # two currently-trusted sources fails closed explicitly instead of
-    # ever picking one arbitrarily.
-    needed_fact_keys = runtime_policy_service.list_enterprise_knowledge_keys_for_active_policies(db, organization_id)
-    resolved_facts = []
-    if needed_fact_keys and organization_id is not None:
-        try:
-            resolved_facts = fact_service.resolve_facts(
-                db, organization_id, [(counterparty, key) for key in needed_fact_keys]
-            )
-        except fact_service.FactConflictError:
-            resolved_facts = []
-    enterprise_knowledge = {f.key: f.value for f in resolved_facts}
-
-    engine_decision = decision_engine.evaluate(
-        # Domain Generalization Milestone: `resource` joins the OPA
-        # input's `intent` dict -- previously never populated, so a
-        # RuntimePolicy authored with Scope.resource narrowing
-        # (rego_generator.py already emits `input.intent.resource ==
-        # ...` for one) could compile cleanly but never actually match
-        # any real Intent. None flows through unchanged when the
-        # caller supplied no resource, which correctly fails to match
-        # any resource-narrowed policy rather than silently matching.
-        intent={"action": action, "amount": amount, "currency": currency, "resource": resource},
-        context={
-            **context,
-            "timestamp": to_utc_iso(requested_at),
-            "authority": resolved.authority_context,
-        },
-        acting_for_principal_id=resolved.principal_name,
-        policy_store=_DbPolicyStore(db, organization_id),
-        opa_client=_EngineOpaClient(HttpOpaClient(), data_path=opa_data_path),
-        # Milestone 17.1 remediation: the real Agent's own id, so a
-        # RuntimePolicy authored with Scope.agent narrowing can actually
-        # match it -- see decision_engine.build_opa_input's own comment
-        # for the full root cause.
-        agent_id=str(agent.id),
-        enterprise_knowledge=enterprise_knowledge,
+    # Runtime Governance Architecture, Phase 3 (30_PHASE_3_RUNTIME_TRUTH_
+    # SPEC.md) through Runtime Governance Architecture, Phase 1: Runtime
+    # Truth resolution, Trusted Enterprise Facts, decision_engine
+    # evaluation, and Evidence -- extracted into _evaluate_and_record
+    # above (Trusted Integration Architecture, Phase 2), reused
+    # unchanged by the Adapter-mediated path. See that function's own
+    # docstring for the full account of each step; nothing about this
+    # call's behavior differs from what previously lived inline here.
+    decision, evidence = _evaluate_and_record(
+        db, intent, agent, action, amount, currency, counterparty, resource, context, requested_at,
     )
-
-    policy_id = uuid.UUID(engine_decision.policy_id) if engine_decision.policy_id else None
-    # Authority-as-a-continuous-object, Stage H: `evaluated_mandates`
-    # (legacy) keeps storing the matched RuntimePolicy policy_key
-    # strings exactly as before -- `evaluated_mandate_ids` is the new,
-    # additive column resolving those same keys to real Mandate row ids
-    # wherever Stage G has actually created one.
-    mandate_ids = runtime_policy_service.resolve_mandate_ids(db, engine_decision.evaluated_mandates)
-    # Phase 5, Release 2 (Enterprise System binding): the same matched-
-    # policy-keys list, read for whichever one a reviewer configured
-    # with a still-real EnterpriseSystem. Null whenever none was
-    # configured or the configured one no longer exists -- never guessed.
-    enterprise_system = runtime_policy_service.resolve_enterprise_system(db, engine_decision.evaluated_mandates)
-
-    # Authority Freshness (PAYREALITY_FUTURE_VISION.md Part B): a
-    # matched policy whose authority has genuinely expired must not
-    # silently keep auto-allowing, even though the compiled Rego bundle
-    # itself has no notion of this at all -- checked here, after OPA's
-    # own determination, the same "post-hoc enrichment before persisting"
-    # shape resolve_mandate_ids/resolve_enterprise_system already use.
-    # Deliberately does NOT touch a DENY or an already-HUMAN_REVIEW
-    # outcome: this only ever downgrades an ALLOW, never upgrades one.
-    final_outcome = engine_decision.outcome
-    final_reason = engine_decision.reason
-    if engine_decision.outcome == "ALLOW":
-        overdue_policy = runtime_policy_service.find_expired_high_risk_authority(
-            db, engine_decision.evaluated_mandates
-        )
-        if overdue_policy is not None:
-            final_outcome = "HUMAN_REVIEW"
-            final_reason = "authority_review_overdue"
-
-    decision = Decision(
-        intent_id=intent.id,
-        policy_id=policy_id,
-        outcome=final_outcome,
-        reason=final_reason,
-        evaluated_mandates=engine_decision.evaluated_mandates,
-        evaluated_mandate_ids=mandate_ids,
-        enterprise_system_id=enterprise_system.id if enterprise_system else None,
-    )
-    db.add(decision)
-    db.flush()
-
-    evidence = append_evidence(
-        db,
-        decision.id,
-        agent.id,
-        action,
-        amount,
-        engine_decision.evaluated_mandates,
-        decision.outcome,
-        status=_evidence_status_for_outcome(decision.outcome),
-        resource=resource,
-        currency=currency,
-        # Authority-as-a-continuous-object, Stage C: the exact Principal
-        # and authority_context already resolved above (now via
-        # runtime_truth_service.resolve) for the OPA query itself,
-        # carried into Evidence instead of being discarded once the
-        # decision is made. Nothing here is recomputed.
-        principal_id=resolved.principal.id if resolved.principal else None,
-        # Runtime Governance Architecture, Phase 4
-        # (36_PHASE_4_CONTEXT_INTELLIGENCE_SPEC.md): the exact string
-        # matched against a compiled RuntimePolicy's scope.principal
-        # inside OPA -- pinned here so replay never depends on
-        # Principal.name still meaning what it meant at evaluation time.
-        principal_name=resolved.principal_name,
-        authority_context=resolved.authority_context,
-        mandate_ids=mandate_ids,
-        # Runtime Governance Architecture, Phase 1: the exact values
-        # decision_engine.evaluate() already resolved and pinned onto its
-        # own Decision object -- carried into Evidence, never recomputed,
-        # the same discipline this module already applies to
-        # authority_context and principal_id above.
-        authority_version=engine_decision.authority_version,
-        policy_version=engine_decision.policy_version,
-        policy_bundle_hash=engine_decision.policy_bundle_hash,
-        enterprise_system_id=enterprise_system.id if enterprise_system else None,
-        facts_evaluated=[
-            {
-                "key": f.key,
-                "value": f.value,
-                "subject": f.subject,
-                "source_id": str(f.source_id),
-                "observed_at": f.observed_at.isoformat(),
-                "expires_at": f.expires_at.isoformat(),
-            }
-            for f in resolved_facts
-        ] or None,
-    )
-    db.commit()
-    db.refresh(intent)
-    db.refresh(decision)
     return intent, decision, evidence
 
 

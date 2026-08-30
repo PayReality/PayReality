@@ -20,6 +20,7 @@ from app.schemas.authorization_receipt import (
     ReceiptEvidenceSummary,
     ReceiptFactEntry,
     ReceiptHumanReviewSummary,
+    ReceiptIntegrationSummary,
     ReceiptRequestSummary,
     ReceiptVerification,
 )
@@ -114,6 +115,22 @@ def get_authorization_receipt(
             consumed_at=capability_row.consumed_at,
         )
 
+    # Trusted Integration Architecture, Phase 2: only present when the
+    # underlying Evidence payload actually carries integration
+    # provenance -- an Agent-direct decision's payload has none of
+    # these keys, so `integration` stays None rather than a summary of
+    # empty fields.
+    integration = None
+    if payload.get("integration_identity_id") is not None:
+        integration = ReceiptIntegrationSummary(
+            integration_identity_id=payload.get("integration_identity_id"),
+            enforcement_binding_id=payload.get("enforcement_binding_id"),
+            integration_contract_version_id=payload.get("integration_contract_version_id"),
+            integration_contract_content_hash=payload.get("integration_contract_content_hash"),
+            environment=payload.get("environment"),
+            source_operation=payload.get("source_operation"),
+        )
+
     valid, key_id = evidence_service.verify_evidence(db, earliest_evidence.id, organization_id)
 
     now = datetime.now(timezone.utc)
@@ -145,6 +162,7 @@ def get_authorization_receipt(
         facts=[ReceiptFactEntry(**f) for f in (payload.get("facts_evaluated") or [])],
         human_review=human_review,
         capability=capability,
+        integration=integration,
         evidence=ReceiptEvidenceSummary(
             evidence_id=earliest_evidence.id,
             key_id=earliest_evidence.key_id,

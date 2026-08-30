@@ -71,6 +71,17 @@ class ContractValidationError(Exception):
     report's own &sect;11)."""
 
 
+class ContractVersionHasActiveBindingError(Exception):
+    """Trusted Integration Architecture, Phase 2: Phase 1 allowed
+    explicit retirement freely because no runtime Binding existed yet
+    to depend on an APPROVED version. Now that EnforcementBinding
+    exists, an APPROVED version referenced by an ACTIVE Binding must not
+    be retired -- the caller must retire or replace the active Binding
+    first. Historical RETIRED Bindings may continue referencing RETIRED
+    Contract versions forever; nothing about a Binding's own history
+    is affected by this check."""
+
+
 class ConcurrentVersionConflictError(Exception):
     """Raised only after every bounded retry attempt at allocating the
     next monotonic version for one (integration_id, source_operation)
@@ -415,6 +426,20 @@ def retire_contract_version(
     row = get_contract_version(db, version_id, organization_id)
     if row.status != "approved":
         raise ContractInvalidTransitionError(row.status, "retire")
+
+    # Deferred import: enforcement_binding_service imports THIS module
+    # (to resolve the pinned Contract version at binding-creation/
+    # activation time), so a module-level import here would be circular.
+    # Resolved at call time instead -- Phase 1 has no Binding concept and
+    # never reaches this branch at all in practice for a Phase-1-only
+    # deployment, since has_active_binding_for_contract_version always
+    # returns False when the enforcement_bindings table is empty.
+    from app.services import enforcement_binding_service
+
+    if enforcement_binding_service.has_active_binding_for_contract_version(db, version_id):
+        raise ContractVersionHasActiveBindingError(
+            f"{version_id} is referenced by an active EnforcementBinding; retire or replace that binding first"
+        )
 
     row.status = "retired"
     row.retired_at = datetime.now(timezone.utc)

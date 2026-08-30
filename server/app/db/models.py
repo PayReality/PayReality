@@ -812,9 +812,55 @@ class Intent(Base):
     # provenance value here -- there is nothing to tag.
     source: Mapped[str | None] = mapped_column(Text)
 
+    # Trusted Integration Architecture, Phase 2: nullable, additive
+    # provenance for the trusted-Adapter runtime path -- every existing
+    # Agent-direct Intent, and every new one submitted through
+    # POST /v1/intents unchanged, leaves all four of these NULL. Immutable
+    # after creation (nothing in this codebase's Phase 2 code ever writes
+    # to these columns a second time). `agent_id` above keeps its one,
+    # permanent meaning regardless of path: the logical autonomous Agent
+    # whose organizational authority is being evaluated -- for an
+    # Adapter-mediated Intent, `agent_id` is still that same logical
+    # Agent (Adapter-attested, allow-list-authorized, never independently
+    # re-signed on this request), never the authenticated IntegrationIdentity
+    # itself; that identity is recorded separately, here.
+    integration_identity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_identities.id")
+    )
+    enforcement_binding_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("enforcement_bindings.id")
+    )
+    integration_contract_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_contract_versions.id")
+    )
+    # Copied from EnforcementBinding.environment at submission time --
+    # never reconstructed later from whatever the Binding's environment
+    # says today, since a Binding's environment is itself immutable once
+    # ACTIVE (see EnforcementBinding's own docstring) this is belt-and-
+    # braces historical pinning, matching this codebase's established
+    # "pin what was actually evaluated, never recompute from a live row"
+    # discipline (policy_version/policy_bundle_hash/principal_name all
+    # already follow this same rule).
+    environment: Mapped[str | None] = mapped_column(Text)
+
     __table_args__ = (
         Index("idx_intents_agent", "agent_id"),
         UniqueConstraint("agent_id", "nonce", name="uq_intents_agent_nonce"),
+        # Trusted Integration Architecture, Phase 2: Agent-direct nonce
+        # replay protection (above) is unchanged and untouched. This is a
+        # SEPARATE, additive invariant scoped to the actual authenticated
+        # signer of an Adapter-mediated request -- the same nonce reused
+        # by the same IntegrationIdentity must be rejected, independent of
+        # whatever Agent it happened to name as the logical actor. Partial
+        # (WHERE integration_identity_id IS NOT NULL) so it is silently
+        # absent -- never violated, never relevant -- for every existing
+        # Agent-direct Intent.
+        Index(
+            "idx_intents_integration_identity_nonce",
+            "integration_identity_id", "nonce",
+            unique=True,
+            postgresql_where="integration_identity_id IS NOT NULL",
+        ),
     )
 
 
@@ -1802,4 +1848,189 @@ class IntegrationContractVersion(Base):
         ),
         Index("idx_integration_contract_versions_org", "organization_id"),
         Index("idx_integration_contract_versions_lookup", "integration_id", "source_operation"),
+    )
+
+
+class IntegrationIdentity(Base):
+    """Trusted Integration Architecture, Phase 2: "a separately
+    authenticated customer-operated workload permitted to attest
+    external operations" -- a thin identity, deliberately not a second
+    Agent model. It is never `Scope.principal`, holds no delegated
+    organizational authority of its own, and is never the logical actor
+    a RuntimePolicy evaluates; `Intent.agent_id` keeps that role
+    permanently, for every Intent, regardless of which identity
+    authenticated the request that created it.
+
+    Lifecycle mirrors Agent's own five-state machine exactly
+    (registered -> active -> suspended/revoked/retired) -- see
+    services/integration_identity_service.py's own
+    _ALLOWED_TRANSITIONS, a direct copy of agent_service.py's, since
+    nothing about this identity's operational lifecycle differs from
+    Agent's."""
+
+    __tablename__ = "integration_identities"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="registered")
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('registered','active','suspended','revoked','retired')",
+            name="ck_integration_identities_status",
+        ),
+        Index("idx_integration_identities_organization", "organization_id"),
+    )
+
+
+class IntegrationIdentityCertificate(Base):
+    """Trusted Integration Architecture, Phase 2: the exact same
+    cryptographic and rotation semantics as Agent's own `Certificate`
+    (issued -> active -> rotated/expired/revoked, one active certificate
+    at a time, old certificates never deleted) -- deliberately a
+    SEPARATE table, not a shared row in `certificates`. Certificate.
+    agent_id is NOT NULL and every existing Evidence/Intent/Decision
+    reference and constraint around it assumes exactly one kind of
+    owner; making that column nullable and adding a second, alternate
+    owner FK would weaken an existing, proven constraint for every Agent
+    certificate that has ever existed, to save one small table. Private
+    keys never reach this table or anywhere else in this codebase --
+    only the public key, exactly like Agent's own certificate model."""
+
+    __tablename__ = "integration_identity_certificates"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    integration_identity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_identities.id"), nullable=False
+    )
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    activated_at: Mapped[datetime | None]
+    rotated_at: Mapped[datetime | None]
+    expires_at: Mapped[datetime | None]
+    revoked_at: Mapped[datetime | None]
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('issued','active','rotated','expired','revoked')",
+            name="ck_integration_identity_certificates_status",
+        ),
+        Index("idx_integration_identity_certificates_identity", "integration_identity_id"),
+        Index(
+            "idx_integration_identity_certificates_single_active",
+            "integration_identity_id",
+            unique=True,
+            postgresql_where="status = 'active'",
+        ),
+    )
+
+
+class EnforcementBinding(Base):
+    """Trusted Integration Architecture, Phase 2: "this Adapter, in this
+    environment, is approved to use this exact Integration Contract
+    version for these explicitly allowed Agents" -- the runtime-
+    deployment object. Contract approval (Phase 1) is deliberately
+    deployment-neutral; THIS is where "approved meaning" becomes "the
+    meaning currently permitted for this Adapter/environment." Despite
+    the name, this does not make PayReality a PEP -- it is still only
+    ever consulted by PayReality's own Runtime Authority evaluation, the
+    same PDP boundary as everywhere else in this codebase.
+
+    `integration_id`/`source_operation` are denormalized, immutable
+    copies of the pinned Contract version's own identity, set once at
+    creation and never updated -- purely so the single-ACTIVE-per-scope
+    invariant below can be a real, DB-enforced partial unique index
+    (the same idx_policies_single_active_per_org/idx_certificates_
+    single_active shape already proven twice in this codebase), rather
+    than a join-dependent constraint Postgres cannot express directly.
+
+    Lifecycle: draft -> active -> retired. A DRAFT binding is fully
+    mutable; once ACTIVE, its authority-relevant configuration
+    (integration_identity_id, integration_contract_version_id,
+    environment, and EnforcementBindingAgent membership) is immutable --
+    changing any of it requires a new Binding. Activating a new Binding
+    for the same (integration_identity_id, integration_id,
+    source_operation, environment) scope atomically retires whichever
+    Binding was previously ACTIVE for that exact scope (see
+    services/enforcement_binding_service.py's activate_binding) -- this
+    is deliberately NOT how Phase 1's Contract-version approval works
+    (multiple APPROVED Contract versions may coexist forever); binding
+    activation is the one place "exactly one current meaning" is a real
+    invariant, because it is the one place Runtime Authority is actually
+    reached."""
+
+    __tablename__ = "enforcement_bindings"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    integration_identity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_identities.id"), nullable=False
+    )
+    integration_contract_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_contract_versions.id"), nullable=False
+    )
+    # Denormalized from the pinned IntegrationContractVersion at creation
+    # time -- immutable, never independently supplied by a caller. See
+    # class docstring for why: this is what makes the single-active-per-
+    # scope index below a real DB constraint instead of a join.
+    integration_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integrations.id"), nullable=False
+    )
+    source_operation: Mapped[str] = mapped_column(Text, nullable=False)
+    environment: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="draft")
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    activated_at: Mapped[datetime | None]
+    retired_at: Mapped[datetime | None]
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft','active','retired')", name="ck_enforcement_bindings_status",
+        ),
+        Index("idx_enforcement_bindings_organization", "organization_id"),
+        Index(
+            "idx_enforcement_bindings_single_active_per_scope",
+            "integration_identity_id", "integration_id", "source_operation", "environment",
+            unique=True,
+            postgresql_where="status = 'active'",
+        ),
+    )
+
+
+class EnforcementBindingAgent(Base):
+    """Trusted Integration Architecture, Phase 2: the explicit allow-
+    list closing the origin-Agent binding invariant. An Adapter may
+    attest origin only for an Agent explicitly enumerated here for the
+    specific Binding it is presenting -- never "any Agent in the
+    organization." Insert/delete only, no lifecycle of its own; adding
+    or removing a row is itself only permitted while the owning Binding
+    is still `draft` (services/enforcement_binding_service.py enforces
+    this, not a DB constraint, matching this table's own pure-
+    membership shape -- it carries no status to check)."""
+
+    __tablename__ = "enforcement_binding_agents"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    enforcement_binding_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("enforcement_bindings.id"), nullable=False
+    )
+    agent_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agents.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "enforcement_binding_id", "agent_id", name="uq_enforcement_binding_agents_membership",
+        ),
+        Index("idx_enforcement_binding_agents_binding", "enforcement_binding_id"),
     )

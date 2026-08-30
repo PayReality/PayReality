@@ -15,10 +15,13 @@ from app.routers import (
     assurance,
     auth as auth_router,
     capability_tokens,
+    enforcement_bindings,
     enterprise_systems,
     evidence,
     facts,
     integration_contracts,
+    integration_identities,
+    integration_runtime,
     intents,
     organization as organization_router,
     organization_lifecycle,
@@ -282,6 +285,9 @@ def create_app() -> FastAPI:
     app.include_router(runtime_policy_lifecycle.router)
     app.include_router(runtime_policy_lifecycle.dashboard_router)
     app.include_router(integration_contracts.router)
+    app.include_router(integration_identities.router)
+    app.include_router(enforcement_bindings.router)
+    app.include_router(integration_runtime.router)
     app.include_router(policy_simulation.router)
     app.include_router(ai_policy_builder.router)
     app.include_router(ai_authority_builder.router)

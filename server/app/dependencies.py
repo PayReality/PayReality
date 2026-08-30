@@ -5,11 +5,11 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Agent, Organization, User
+from app.db.models import Agent, IntegrationIdentity, Organization, User
 from app.db.session import get_db
 from app.domain.auth.signature import verify_request_signature
 from app.domain.rbac.permissions import Permission, has_permission
-from app.services import agent_service, auth_service
+from app.services import agent_service, auth_service, integration_identity_service
 
 
 async def verify_agent_signature(
@@ -38,6 +38,44 @@ async def verify_agent_signature(
     if agent is None:
         raise HTTPException(status_code=401, detail="agent_not_found")
     return agent
+
+
+async def verify_integration_identity_signature(
+    request: Request,
+    x_payreality_key_id: str = Header(...),
+    x_payreality_signature: str = Header(...),
+    db: Session = Depends(get_db),
+) -> IntegrationIdentity:
+    """Trusted Integration Architecture, Phase 2: the Adapter-mediated
+    runtime path's own authentication, deliberately a distinct function
+    from verify_agent_signature above -- resolved against
+    IntegrationIdentityCertificate exclusively, never cross-checked
+    against Agent's own Certificate table. Which authentication path
+    applies is determined entirely by which endpoint a request reaches
+    (POST /v1/intents -> verify_agent_signature;
+    POST /v1/integration-runtime/intents -> this function) -- never
+    inferred from an ambiguous payload field, exactly as the
+    architecture requires. Same cryptographic primitive
+    (verify_request_signature, over the raw request body) and the same
+    "only an active certificate is accepted" rule as the Agent path;
+    nothing about the crypto itself is new."""
+    try:
+        certificate_id = uuid.UUID(x_payreality_key_id)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="invalid_key_id")
+
+    certificate = integration_identity_service.get_active_certificate(db, certificate_id)
+    if certificate is None:
+        raise HTTPException(status_code=401, detail="unknown_or_inactive_certificate")
+
+    body = await request.body()
+    if not verify_request_signature(body, x_payreality_signature, certificate.public_key):
+        raise HTTPException(status_code=401, detail="invalid_signature")
+
+    identity = db.get(IntegrationIdentity, certificate.integration_identity_id)
+    if identity is None:
+        raise HTTPException(status_code=401, detail="integration_identity_not_found")
+    return identity
 
 
 def _bearer_token(authorization: str | None) -> str | None:

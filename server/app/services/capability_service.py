@@ -33,6 +33,19 @@ class DecisionNotAllowError(Exception):
     permitted."""
 
 
+class CapabilityNotAvailableForIntegrationIntentError(Exception):
+    """Trusted Integration Architecture, Phase 2 (section 28): a
+    deliberate scope reduction, not an oversight. Issuing a Capability
+    for an Adapter-mediated Intent would hand out an unbound downstream
+    execution permission on top of a trust chain (Adapter attestation +
+    Binding authorization) that Phase 2 never designed to carry that
+    weight -- doing it safely is Phase 5's enforcement-mode work, not
+    this one's. Applies identically whether the decision resolved ALLOW
+    immediately or reached ALLOW later via HUMAN_REVIEW resolution: what
+    governs is the original Intent's provenance, not how the outcome was
+    reached."""
+
+
 class CapabilityTokenNotFoundError(Exception):
     pass
 
@@ -67,6 +80,12 @@ def issue_capability_for_decision(
         raise DecisionNotAllowError(f"decision {decision_id} outcome={decision.outcome!r}")
 
     intent = db.get(Intent, decision.intent_id)
+    if intent.integration_identity_id is not None:
+        raise CapabilityNotAvailableForIntegrationIntentError(
+            f"decision {decision_id} originates from an Adapter-mediated Intent; "
+            "Capability issuance for the trusted-integration path is not implemented in Phase 2"
+        )
+
     earliest_evidence = db.scalar(
         select(Evidence).where(Evidence.decision_id == decision.id).order_by(Evidence.created_at.asc()).limit(1)
     )

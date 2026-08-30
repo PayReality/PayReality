@@ -31,6 +31,7 @@ from app.services.integration_contract_service import (
     ConcurrentVersionConflictError,
     ContractInvalidTransitionError,
     ContractValidationError,
+    ContractVersionHasActiveBindingError,
     ContractVersionNotFoundError,
     IntegrationNotFoundError,
 )
@@ -225,4 +226,6 @@ def retire_contract_version(
         raise HTTPException(status_code=404, detail="contract_version_not_found")
     except ContractInvalidTransitionError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except ContractVersionHasActiveBindingError as e:
+        raise HTTPException(status_code=409, detail=f"contract_version_has_active_binding: {e}")
     return _version_to_response(row)

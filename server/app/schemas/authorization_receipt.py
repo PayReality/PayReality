@@ -107,6 +107,26 @@ class ReceiptFactEntry(BaseModel):
     expires_at: str | None = None
 
 
+class ReceiptIntegrationSummary(BaseModel):
+    """Trusted Integration Architecture, Phase 2: present only when this
+    decision's Intent actually carries integration provenance (an
+    Adapter-mediated request) -- read from the same Evidence payload
+    keys intent_service._build_evidence_payload additively wrote at
+    decision time, never recomputed from a possibly-since-changed live
+    row. Reporting this provenance is not a claim that the external
+    operation the Adapter attested to actually executed, or that no
+    other path to the same effect exists -- see
+    integration_runtime_service's own module docstring for the trust
+    claim this is allowed to make."""
+
+    integration_identity_id: str | None = None
+    enforcement_binding_id: str | None = None
+    integration_contract_version_id: str | None = None
+    integration_contract_content_hash: str | None = None
+    environment: str | None = None
+    source_operation: str | None = None
+
+
 class ReceiptHumanReviewSummary(BaseModel):
     """Present only when a DecisionResolution row exists. Reuses
     ResolutionSummary's own field set (resolution/resolved_by/reason/
@@ -167,5 +187,6 @@ class AuthorizationReceiptResponse(BaseModel):
     facts: list[ReceiptFactEntry] = []
     human_review: ReceiptHumanReviewSummary | None = None
     capability: CapabilitySummary | None = None
+    integration: ReceiptIntegrationSummary | None = None
     evidence: ReceiptEvidenceSummary
     verification: ReceiptVerification

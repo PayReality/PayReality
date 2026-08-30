@@ -106,6 +106,19 @@ class Permission(str, Enum):
     INTEGRATION_CONTRACT_MANAGE = "integration_contract.manage"
     INTEGRATION_CONTRACT_PUBLISH = "integration_contract.publish"
 
+    # Trusted Integration Architecture, Phase 2: IntegrationIdentity
+    # credential/workload lifecycle (register/rotate/suspend/revoke/
+    # retire) is a distinct privilege from EITHER Contract-mapping
+    # permission above -- deliberately granted to Agent Administrator,
+    # not Governance Administrator (Phase 2's own RBAC decision,
+    # section 32): the person who can register or rotate an Adapter's
+    # credential must not thereby also gain the authority to activate a
+    # new governed semantic path (EnforcementBinding activation stays
+    # gated on INTEGRATION_CONTRACT_PUBLISH alone). Mirrors exactly how
+    # Agent Administrator already manages Agent's own credential
+    # lifecycle without holding RUNTIME_POLICY_PUBLISH.
+    INTEGRATION_IDENTITY_MANAGE = "integration_identity.manage"
+
 
 # The full permission set, used to grant Owner "full platform control"
 # without hand-maintaining a second, parallel list that would drift
@@ -144,6 +157,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.AGENT_MANAGE,
             Permission.AGENT_VIEW,
             Permission.PRINCIPAL_MANAGE,
+            Permission.INTEGRATION_IDENTITY_MANAGE,
         }
     ),
     Role.REVIEWER: frozenset(
