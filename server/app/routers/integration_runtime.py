@@ -2,14 +2,18 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import EnterpriseSystem, IntegrationIdentity
+from app.db.models import DecisionResolution, EnterpriseSystem, IntegrationIdentity
 from app.db.session import get_db
 from app.dependencies import verify_integration_identity_signature
 from app.domain.auth.signature import check_timestamp_window
 from app.schemas.intent import DecisionSummary, SubmitIntentResponse
 from app.schemas.integration_runtime import AttestedIntentRequest
 from app.services import integration_runtime_service
-from app.services.integration_runtime_service import AdapterReplayDetectedError, IntegrationRejectionError
+from app.services.integration_runtime_service import (
+    AdapterReplayDetectedError,
+    ExternalOperationConflictError,
+    IntegrationRejectionError,
+)
 
 router = APIRouter(prefix="/v1", tags=["integration-runtime"])
 
@@ -65,13 +69,31 @@ def submit_attested_intent(
             requested_at=body.requested_at,
             nonce=body.nonce,
             correlation_id=body.correlation_id,
+            external_operation_id=body.external_operation_id,
         )
     except IntegrationRejectionError as e:
         raise HTTPException(status_code=422, detail=f"integration_rejection:{e.reason}")
     except AdapterReplayDetectedError:
         raise HTTPException(status_code=409, detail="replay_detected")
+    except ExternalOperationConflictError:
+        # Section 27: do not disclose the mismatched canonical values in
+        # the response body -- the typed detail code is enough for a
+        # legitimate caller to understand what happened (their retry's
+        # authority-relevant fields disagree with the original request
+        # for this external_operation_id) without leaking amount/
+        # resource/context specifics to whatever logged or observed
+        # this response.
+        raise HTTPException(status_code=409, detail="external_operation_conflict")
 
-    status = "PENDING" if decision.outcome == "HUMAN_REVIEW" else "RESOLVED"
+    # Trusted Integration Architecture, Phase 3: a matching retry can
+    # return a HUMAN_REVIEW decision that has since actually been
+    # resolved (section 12) -- the naive "HUMAN_REVIEW means PENDING"
+    # rule that's correct for a brand-new submission (nothing could have
+    # resolved it yet) is no longer sufficient once idempotent returns
+    # of an *older* Decision are possible. Matches _build_decision_
+    # response's own discipline in routers/intents.py.
+    resolution_row = db.query(DecisionResolution).filter_by(decision_id=decision.id).one_or_none()
+    status = "PENDING" if (decision.outcome == "HUMAN_REVIEW" and resolution_row is None) else "RESOLVED"
 
     return SubmitIntentResponse(
         intent_id=intent.id,

@@ -153,6 +153,8 @@ def _build_evidence_payload(
     integration_contract_content_hash: str | None = None,
     environment: str | None = None,
     source_operation: str | None = None,
+    external_operation_id: str | None = None,
+    canonical_operation_fingerprint: str | None = None,
 ) -> dict:
     """spec 17.1's Evidence payload shape, adapted to Phase 1's fields.
 
@@ -295,6 +297,17 @@ def _build_evidence_payload(
         payload["environment"] = environment
     if source_operation is not None:
         payload["source_operation"] = source_operation
+    # Trusted Integration Architecture, Phase 3: bound only for the
+    # trusted-Adapter path, exactly like every other integration_*
+    # field above -- absent for Agent-direct Evidence. Cryptographic
+    # historical proof of "this Decision was associated with this
+    # external operation id and this exact authority-relevant canonical
+    # meaning" -- not proof the external action itself executed (see
+    # operation_identity_service.py's own module docstring).
+    if external_operation_id is not None:
+        payload["external_operation_id"] = external_operation_id
+    if canonical_operation_fingerprint is not None:
+        payload["canonical_operation_fingerprint"] = canonical_operation_fingerprint
     return payload
 
 
@@ -446,6 +459,8 @@ def append_evidence(
     integration_contract_content_hash: str | None = None,
     environment: str | None = None,
     source_operation: str | None = None,
+    external_operation_id: str | None = None,
+    canonical_operation_fingerprint: str | None = None,
 ) -> Evidence:
     organization_id = _resolve_chain_scope(db, agent_id)
     _lock_chain_scope(db, organization_id)
@@ -515,6 +530,8 @@ def append_evidence(
         integration_contract_content_hash=integration_contract_content_hash,
         environment=environment,
         source_operation=source_operation,
+        external_operation_id=external_operation_id,
+        canonical_operation_fingerprint=canonical_operation_fingerprint,
     )
     signature = sign_payload(
         payload, settings.evidence_signing_key_b64, settings.evidence_signing_key_id
@@ -655,6 +672,8 @@ def _evaluate_and_record(
         integration_contract_content_hash=prov.get("integration_contract_content_hash"),
         environment=prov.get("environment"),
         source_operation=prov.get("source_operation"),
+        external_operation_id=prov.get("external_operation_id"),
+        canonical_operation_fingerprint=prov.get("canonical_operation_fingerprint"),
     )
     db.commit()
     db.refresh(intent)

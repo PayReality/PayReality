@@ -129,6 +129,7 @@ def get_authorization_receipt(
             integration_contract_content_hash=payload.get("integration_contract_content_hash"),
             environment=payload.get("environment"),
             source_operation=payload.get("source_operation"),
+            external_operation_id=payload.get("external_operation_id"),
         )
 
     valid, key_id = evidence_service.verify_evidence(db, earliest_evidence.id, organization_id)

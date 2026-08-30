@@ -843,6 +843,28 @@ class Intent(Base):
     # already follow this same rule).
     environment: Mapped[str | None] = mapped_column(Text)
 
+    # Trusted Integration Architecture, Phase 3 (business-operation
+    # identity, operation_identity_service.py): all three nullable and
+    # additive, present only for the trusted-Adapter runtime path --
+    # every Agent-direct Intent, and every pre-Phase-3 Adapter-mediated
+    # one, leaves all three NULL. `integration_id` is server-derived
+    # from the resolved EnforcementBinding/Contract version, never
+    # caller-chosen -- immutable historical provenance, and (together
+    # with `environment` above) the actual DB-level idempotency scope;
+    # deliberately NOT `enforcement_binding_id` (a Binding is replaceable
+    # configuration, section 10) and NOT `integration_identity_id` (Adapter
+    # rotation must not reset idempotency, section 11).
+    # `canonical_operation_fingerprint` is the authority-relevant meaning
+    # snapshot (operation_identity_service.compute_canonical_operation_
+    # fingerprint) used only to detect a genuine meaning conflict on a
+    # retry sharing the same external_operation_id -- never used to
+    # re-derive or reinterpret anything about this historical row itself.
+    external_operation_id: Mapped[str | None] = mapped_column(Text)
+    integration_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integrations.id")
+    )
+    canonical_operation_fingerprint: Mapped[str | None] = mapped_column(Text)
+
     __table_args__ = (
         Index("idx_intents_agent", "agent_id"),
         UniqueConstraint("agent_id", "nonce", name="uq_intents_agent_nonce"),
@@ -860,6 +882,21 @@ class Intent(Base):
             "integration_identity_id", "nonce",
             unique=True,
             postgresql_where="integration_identity_id IS NOT NULL",
+        ),
+        # Trusted Integration Architecture, Phase 3: at most one committed
+        # business operation per (integration, environment,
+        # external_operation_id) -- the real, DB-enforced invariant
+        # section 17 requires. `environment` and `external_operation_id`
+        # are only ever set together with `integration_id` in the same
+        # INSERT (never independently), so a single `external_operation_id
+        # IS NOT NULL` predicate is sufficient; organization scoping is
+        # implicit, since `integration_id` already belongs to exactly one
+        # organization (see this table's own Phase 3 docstring above).
+        Index(
+            "idx_intents_external_operation_scope",
+            "integration_id", "environment", "external_operation_id",
+            unique=True,
+            postgresql_where="external_operation_id IS NOT NULL",
         ),
     )
 

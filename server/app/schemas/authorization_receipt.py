@@ -125,6 +125,16 @@ class ReceiptIntegrationSummary(BaseModel):
     integration_contract_content_hash: str | None = None
     environment: str | None = None
     source_operation: str | None = None
+    # Trusted Integration Architecture, Phase 3: the external, business-
+    # meaningful operation identifier this Decision belongs to -- present
+    # only for a trusted-Adapter-mediated Decision that actually carries
+    # one (every Agent-direct Decision, and every Adapter-mediated one
+    # predating Phase 3, leaves this None). Deliberately does NOT expose
+    # the internal canonical-operation fingerprint here (section 25: no
+    # strong debugging/audit reason to -- Evidence's own signed payload
+    # already carries it for cryptographic historical proof, see
+    # ReceiptEvidenceSummary/intent_service._build_evidence_payload).
+    external_operation_id: str | None = None
 
 
 class ReceiptHumanReviewSummary(BaseModel):

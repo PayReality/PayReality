@@ -31,3 +31,17 @@ class AttestedIntentRequest(BaseModel):
     requested_at: datetime
     nonce: str
     correlation_id: str | None = None
+    # Trusted Integration Architecture, Phase 3 (business-operation
+    # identity): required, never defaulted -- the SDK's own Adapter
+    # class requires the caller to supply this explicitly for the same
+    # reason (a silently-generated value on every retry would defeat
+    # the entire point of idempotency). The customer Adapter is
+    # responsible for a value that remains stable across retries of the
+    # same real external operation (an ERP transaction id, an
+    # orchestrator execution id, a tool-call execution id, or a value
+    # the Adapter itself constructs deterministically when the source
+    # system provides none). Bounds/emptiness are validated server-side
+    # (operation_identity_service.validate_external_operation_id) --
+    # never format-restricted (no numeric/UUID requirement) and never
+    # case-normalized: treated as an opaque identifier throughout.
+    external_operation_id: str
