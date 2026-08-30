@@ -1,4 +1,4 @@
-import type { LiveDecision, LiveEvidence, EvidencePayload } from "../live/types";
+import type { LiveDecision, LiveEvidence, EvidencePayload, LiveAgent, LivePrincipal } from "../live/types";
 import { demoDecisions, demoDecisionCreatedAt } from "./fixtures/decisions";
 import { demoEvidence } from "./fixtures/evidence";
 import { AGENT_AP_INVOICE, AGENT_PO_APPROVAL, findDemoAgent } from "./fixtures/agents";
@@ -18,6 +18,14 @@ let decisions: LiveDecision[] = [...demoDecisions];
 let evidence: LiveEvidence[] = [...demoEvidence];
 let tickCount = 0;
 let started = false;
+
+// A visitor's own session-local creations (agent registration, principal
+// creation) aren't part of the shared curated demo dataset the rest of
+// this file replays, so they get their own small mutable overlay --
+// same architectural shape as `decisions`/`evidence` above, just seeded
+// empty instead of from a fixture, and never touched by the ticker.
+let registeredAgents: LiveAgent[] = [];
+let registeredPrincipals: LivePrincipal[] = [];
 
 const NEXT_EVENTS: Array<{ agentId: string; action: string; amount: number; policyId: string; mandateId: string | null; enterpriseSystemId: string; enterpriseSystemName: string }> = [
   { agentId: AGENT_AP_INVOICE, action: "vendor_payment", amount: 9800, policyId: POLICY_VENDOR_PAYMENT_UNDER_50K, mandateId: MANDATE_AP_INVOICE_50K, enterpriseSystemId: ES_SAP, enterpriseSystemName: "SAP S/4HANA" },
@@ -121,4 +129,39 @@ export function findLiveDecision(id: string): LiveDecision | undefined {
 
 export function findLiveEvidenceByDecision(decisionId: string): LiveEvidence | undefined {
   return evidence.find((e) => e.decision_id === decisionId);
+}
+
+export function getRegisteredAgents(): LiveAgent[] {
+  return registeredAgents;
+}
+
+export function findRegisteredAgent(id: string): LiveAgent | undefined {
+  return registeredAgents.find((a) => a.id === id);
+}
+
+export function addRegisteredAgent(agent: LiveAgent) {
+  registeredAgents = [agent, ...registeredAgents];
+}
+
+export function updateRegisteredAgent(id: string, patch: Partial<LiveAgent>): LiveAgent | undefined {
+  if (!findRegisteredAgent(id)) return undefined;
+  let updated: LiveAgent | undefined;
+  registeredAgents = registeredAgents.map((a) => {
+    if (a.id !== id) return a;
+    updated = { ...a, ...patch, updated_at: new Date().toISOString() };
+    return updated;
+  });
+  return updated;
+}
+
+export function getRegisteredPrincipals(): LivePrincipal[] {
+  return registeredPrincipals;
+}
+
+export function findRegisteredPrincipal(id: string): LivePrincipal | undefined {
+  return registeredPrincipals.find((p) => p.id === id);
+}
+
+export function addRegisteredPrincipal(principal: LivePrincipal) {
+  registeredPrincipals = [principal, ...registeredPrincipals];
 }
