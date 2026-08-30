@@ -18,6 +18,7 @@ from app.routers import (
     enterprise_systems,
     evidence,
     facts,
+    integration_contracts,
     intents,
     organization as organization_router,
     organization_lifecycle,
@@ -280,6 +281,7 @@ def create_app() -> FastAPI:
     app.include_router(runtime_policies.router)
     app.include_router(runtime_policy_lifecycle.router)
     app.include_router(runtime_policy_lifecycle.dashboard_router)
+    app.include_router(integration_contracts.router)
     app.include_router(policy_simulation.router)
     app.include_router(ai_policy_builder.router)
     app.include_router(ai_authority_builder.router)

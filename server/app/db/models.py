@@ -1682,3 +1682,124 @@ class PolicyActivationSchedule(Base):
         Index("idx_policy_activation_schedules_status", "status"),
         Index("idx_policy_activation_schedules_organization", "organization_id"),
     )
+
+
+class Integration(Base):
+    """Trusted Integration Architecture, Phase 1 (TRUSTED_INTEGRATION_
+    ARCHITECTURE.md): "this external enterprise system exists" -- nothing
+    more. Deliberately minimal, the same restraint already established by
+    EnterpriseSystem's own docstring: no connector credentials, no vendor
+    schema, no discovery configuration, no runtime identity, and (unlike
+    EnterpriseSystem) no status field at all, since Integration has no
+    real Phase 1 lifecycle to track one for. `external_system_label` is
+    a display label, not an identity -- IntegrationContractVersion below
+    never has any reason to reinterpret its own history if this label is
+    later renamed, since every version references `integration_id`, a
+    stable id, never the label itself."""
+
+    __tablename__ = "integrations"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    external_system_label: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (Index("idx_integrations_organization", "organization_id"),)
+
+
+class IntegrationContractVersion(Base):
+    """Trusted Integration Architecture, Phase 1: one immutable-from-
+    `validated`-onward row describing how one external system's one real
+    operation (`source_operation`, e.g. "ChangeSupplierBankDetails")
+    becomes PayReality's canonical meaning -- deterministic field
+    extraction only, never a transformation language. Phase 1 stores and
+    validates this; it is not yet consumed by any evaluation path
+    (services/integration_contract_service.py's own module docstring
+    covers this distinction in more depth).
+
+    Stable identity is `(integration_id, source_operation)`, not a
+    separate surrogate "IntegrationContract" table -- `version` is
+    monotonic within that composite key, the exact same shape
+    RuntimePolicyRecord's own `policy_key`+`version` already uses with no
+    separate "Policy identity" table either (Trusted Integration
+    Architecture report, corrected &sect;E). Editing the mapping for one
+    `source_operation` can never reinterpret an unrelated one under the
+    same Integration, because version scope is the full composite key,
+    not the bare `integration_id`.
+
+    Lifecycle: draft -> validated -> approved -> retired. There is no
+    `active` status here -- Contract approval is not runtime deployment
+    (Founder Decisions & Design Closure Addendum, corrected in this
+    milestone): approving a new version never automatically retires a
+    previously-approved sibling for the same operation. Multiple
+    APPROVED versions of the same operation may legitimately coexist
+    (e.g. production still pinned to v1 while staging trials v2) --
+    Phase 2's EnforcementBinding is what will eventually select exactly
+    one APPROVED version per binding; nothing in this table enforces
+    that, by design, since no binding exists yet to need it.
+
+    `content_hash` is computed once, at the draft-to-validated
+    transition, over the mapping's *semantic* content only
+    (source_operation, canonical_action, resource_path,
+    fact_subject_path, amount_path, currency_path, context_bindings) --
+    deliberately excluding `version` (which identifies the historical
+    row, not what the mapping means) and every lifecycle/provenance
+    field (status, created_at, approved_at, approved_by, retired_at,
+    source_schema_fingerprint). Two separately-versioned rows with
+    byte-equivalent semantic content hash identically.
+
+    `source_schema_fingerprint` is provenance, not semantic content --
+    excluded from content_hash on purpose. It exists only as a passive,
+    optionally-populated hook for a future mapping-drift detector
+    (explicitly not built in Phase 1); nothing reads it yet.
+
+    `context_bindings` (JSONB, {canonical_context_key: source_field_path})
+    is the ONLY channel through which caller-observed context is meant to
+    reach Runtime Authority once Phase 2 wires runtime evaluation --
+    locked in now as a schema/design decision, not yet enforced, since no
+    runtime filter exists in Phase 1 to enforce it
+    (services/integration_contract_service.py documents this same
+    decision at the point Phase 2 will need to act on it)."""
+
+    __tablename__ = "integration_contract_versions"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    integration_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integrations.id"), nullable=False
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    source_operation: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(nullable=False)
+    canonical_action: Mapped[str] = mapped_column(Text, nullable=False)
+    resource_path: Mapped[str | None] = mapped_column(Text)
+    fact_subject_path: Mapped[str | None] = mapped_column(Text)
+    amount_path: Mapped[str | None] = mapped_column(Text)
+    currency_path: Mapped[str | None] = mapped_column(Text)
+    context_bindings: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    content_hash: Mapped[str | None] = mapped_column(Text)
+    source_schema_fingerprint: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="draft")
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    validated_at: Mapped[datetime | None]
+    approved_by: Mapped[str | None] = mapped_column(Text)
+    approved_at: Mapped[datetime | None]
+    retired_at: Mapped[datetime | None]
+
+    __table_args__ = (
+        UniqueConstraint(
+            "integration_id", "source_operation", "version",
+            name="uq_integration_contract_versions_identity",
+        ),
+        CheckConstraint(
+            "status IN ('draft','validated','approved','retired')",
+            name="ck_integration_contract_versions_status",
+        ),
+        Index("idx_integration_contract_versions_org", "organization_id"),
+        Index("idx_integration_contract_versions_lookup", "integration_id", "source_operation"),
+    )
