@@ -139,7 +139,8 @@ def _setup(db, org_id, resource_path="supplier.id", amount_path=None, currency_p
 
 
 def _attest(db, identity, binding, agent, *, source_operation="ChangeSupplierBankDetails", action="vendor_payment",
-            resource="supplier:123", amount=None, currency=None, counterparty=None, context=None, nonce=None):
+            resource="supplier:123", amount=None, currency=None, counterparty=None, context=None, nonce=None,
+            external_operation_id=None):
     return runtime_svc.submit_attested_intent(
         db, identity,
         enforcement_binding_id=binding.id, origin_agent_id=agent.id,
@@ -147,6 +148,13 @@ def _attest(db, identity, binding, agent, *, source_operation="ChangeSupplierBan
         amount=amount, currency=currency, counterparty=counterparty,
         context=context or {}, requested_at=datetime.now(timezone.utc),
         nonce=nonce or uuid.uuid4().hex, correlation_id=None,
+        # Phase 3: each pre-existing Phase-2-era test call gets its own
+        # fresh, unique operation id by default -- these tests exercise
+        # trust/rejection/replay/receipt behavior, not idempotency, so
+        # nothing here should accidentally collide or idempotently
+        # return across calls unless a test explicitly asks for that by
+        # passing the same external_operation_id itself.
+        external_operation_id=external_operation_id or uuid.uuid4().hex,
     )
 
 

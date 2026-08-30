@@ -378,13 +378,18 @@ def test_creating_and_approving_contracts_has_zero_runtime_side_effects(db, org)
     assert db.scalars(select(Evidence)).all() == []
 
 
-def test_external_operation_id_is_still_phase_3_not_yet_built(db, org):
-    """Migration/backwards-compat proof at the schema level, updated for
-    Phase 2: Intent now legitimately carries integration_contract_
-    version_id/integration_identity_id/enforcement_binding_id/
-    environment (Trusted Integration Architecture, Phase 2) -- but
-    external_operation_id (business-operation idempotency) remains
-    correctly absent; that is Phase 3, not built here."""
+def test_business_operation_identity_columns_now_exist(db, org):
+    """Migration/backwards-compat proof at the schema level: Intent now
+    legitimately carries integration_contract_version_id/
+    integration_identity_id/enforcement_binding_id/environment (Trusted
+    Integration Architecture, Phase 2) and external_operation_id/
+    integration_id/canonical_operation_fingerprint (Phase 3, business-
+    operation idempotency, operation_identity_service.py) -- all
+    nullable and additive, none of it required for the Agent-direct
+    path this file's own zero-runtime-side-effects test above already
+    covers."""
     intent_columns = {c.name for c in Intent.__table__.columns}
     assert "integration_contract_version_id" in intent_columns
-    assert "external_operation_id" not in intent_columns
+    assert "external_operation_id" in intent_columns
+    assert "integration_id" in intent_columns
+    assert "canonical_operation_fingerprint" in intent_columns
