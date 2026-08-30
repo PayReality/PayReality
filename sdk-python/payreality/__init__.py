@@ -31,12 +31,15 @@ from .exceptions import (
     PayRealityError,
     ResolutionTimeoutError,
 )
+from .integration import Adapter, ContractShape
 from .models import Decision, RegisteredAgent, Resolution
 
 __version__ = "0.5.0"
 
 __all__ = [
     "Agent",
+    "Adapter",
+    "ContractShape",
     "Decision",
     "RegisteredAgent",
     "Resolution",
