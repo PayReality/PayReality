@@ -91,6 +91,21 @@ class Permission(str, Enum):
     # authorize the underlying action to actually execute.
     CAPABILITY_ISSUE = "capability.issue"
 
+    # Trusted Integration Architecture, Phase 1 (Founder Decisions &
+    # Design Closure Addendum, RBAC decision): deliberately NOT reusing
+    # RUNTIME_POLICY_PUBLISH -- mapping-semantic governance (does this
+    # Integration Contract mapping truthfully represent an external
+    # operation?) and RuntimePolicy governance (does this rule reflect
+    # organizational authority?) are different questions that may
+    # legitimately be delegated to different enterprise roles. MANAGE
+    # covers authoring a draft mapping and triggering its own
+    # deterministic validation (validation authorizes nothing, per the
+    # addendum's own validation-permission decision); PUBLISH is the one
+    # governance-relevant boundary -- approving a validated mapping, or
+    # retiring an approved one.
+    INTEGRATION_CONTRACT_MANAGE = "integration_contract.manage"
+    INTEGRATION_CONTRACT_PUBLISH = "integration_contract.publish"
+
 
 # The full permission set, used to grant Owner "full platform control"
 # without hand-maintaining a second, parallel list that would drift
@@ -114,6 +129,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.AGENT_VIEW,
             Permission.FACTS_MANAGE,
             Permission.CAPABILITY_ISSUE,
+            Permission.INTEGRATION_CONTRACT_MANAGE,
+            Permission.INTEGRATION_CONTRACT_PUBLISH,
         }
     ),
     Role.AGENT_ADMIN: frozenset(

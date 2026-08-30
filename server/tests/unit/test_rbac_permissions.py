@@ -113,3 +113,28 @@ def test_unknown_role_has_no_permissions():
 def test_permissions_for_role_is_sorted_and_stable():
     result = permissions_for_role(Role.OWNER)
     assert result == sorted(result)
+
+
+def test_governance_admin_can_manage_and_publish_integration_contracts():
+    """Trusted Integration Architecture, Phase 1 (Founder Decisions &
+    Design Closure Addendum, RBAC decision): two new, deliberately NOT-
+    reused permissions -- mapping-semantic governance is a different
+    privilege from RuntimePolicy governance, even though today's default
+    role holds both."""
+    assert has_permission(Role.GOVERNANCE_ADMIN, Permission.INTEGRATION_CONTRACT_MANAGE)
+    assert has_permission(Role.GOVERNANCE_ADMIN, Permission.INTEGRATION_CONTRACT_PUBLISH)
+
+
+def test_integration_contract_permissions_are_not_runtime_policy_publish():
+    """The whole point of the founder decision: these are structurally
+    independent permissions, not an alias for runtime_policy.publish --
+    a future custom role could hold one without the other."""
+    assert Permission.INTEGRATION_CONTRACT_PUBLISH != Permission.RUNTIME_POLICY_PUBLISH
+    assert Permission.INTEGRATION_CONTRACT_PUBLISH.value == "integration_contract.publish"
+    assert Permission.INTEGRATION_CONTRACT_MANAGE.value == "integration_contract.manage"
+
+
+def test_agent_admin_reviewer_auditor_executive_cannot_manage_integration_contracts():
+    for role in (Role.AGENT_ADMIN, Role.REVIEWER, Role.AUDITOR, Role.EXECUTIVE):
+        assert not has_permission(role, Permission.INTEGRATION_CONTRACT_MANAGE)
+        assert not has_permission(role, Permission.INTEGRATION_CONTRACT_PUBLISH)
