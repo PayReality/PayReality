@@ -49,6 +49,7 @@ ALLOWED_UNGATED = {
     ("GET", "/v1/ai-policy-builder/status"): "returns only a global ai_enabled boolean, no organization-scoped data",
     ("GET", "/v1/ai-authority-builder/status"): "returns only a global ai_enabled boolean, no organization-scoped data",
     ("POST", "/v1/facts"): "authenticated by the fact's own Ed25519 signature against its registered FactSource, the same machine-to-machine model as POST /v1/intents -- deliberately never trusts the requesting agent's own RBAC role or session to self-attest an external fact",
+    ("POST", "/v1/integration-runtime/intents"): "gated by verify_integration_identity_signature -- the Trusted Integration Architecture Phase 2 Adapter-mediated runtime path, authenticated by an Integration Identity's own Ed25519 request signature, the same machine-to-machine model as POST /v1/intents, deliberately not a human RBAC role",
 }
 
 

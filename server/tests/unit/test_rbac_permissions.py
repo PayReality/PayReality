@@ -138,3 +138,20 @@ def test_agent_admin_reviewer_auditor_executive_cannot_manage_integration_contra
     for role in (Role.AGENT_ADMIN, Role.REVIEWER, Role.AUDITOR, Role.EXECUTIVE):
         assert not has_permission(role, Permission.INTEGRATION_CONTRACT_MANAGE)
         assert not has_permission(role, Permission.INTEGRATION_CONTRACT_PUBLISH)
+
+
+def test_agent_admin_manages_integration_identity_but_cannot_publish_bindings():
+    """Trusted Integration Architecture, Phase 2's own RBAC decision
+    (section 32): registering/rotating an Adapter's credential must not
+    automatically grant authority to activate a new governed semantic
+    path -- the two permissions are held by different roles by design."""
+    assert has_permission(Role.AGENT_ADMIN, Permission.INTEGRATION_IDENTITY_MANAGE)
+    assert not has_permission(Role.AGENT_ADMIN, Permission.INTEGRATION_CONTRACT_PUBLISH)
+    assert not has_permission(Role.AGENT_ADMIN, Permission.INTEGRATION_CONTRACT_MANAGE)
+
+
+def test_governance_admin_cannot_manage_integration_identity_credentials():
+    """The reverse of the same separation-of-duties invariant: governance
+    can approve/activate a Binding but cannot itself register or rotate
+    the Adapter credential a Binding points at."""
+    assert not has_permission(Role.GOVERNANCE_ADMIN, Permission.INTEGRATION_IDENTITY_MANAGE)

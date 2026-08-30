@@ -378,10 +378,13 @@ def test_creating_and_approving_contracts_has_zero_runtime_side_effects(db, org)
     assert db.scalars(select(Evidence)).all() == []
 
 
-def test_integration_and_contract_tables_are_standalone_no_fk_from_intent(db, org):
-    """Migration/backwards-compat proof at the schema level: Intent has
-    no column referencing Integration or IntegrationContractVersion in
-    Phase 1 -- that FK lands only in Phase 2."""
+def test_external_operation_id_is_still_phase_3_not_yet_built(db, org):
+    """Migration/backwards-compat proof at the schema level, updated for
+    Phase 2: Intent now legitimately carries integration_contract_
+    version_id/integration_identity_id/enforcement_binding_id/
+    environment (Trusted Integration Architecture, Phase 2) -- but
+    external_operation_id (business-operation idempotency) remains
+    correctly absent; that is Phase 3, not built here."""
     intent_columns = {c.name for c in Intent.__table__.columns}
-    assert "integration_contract_version_id" not in intent_columns
+    assert "integration_contract_version_id" in intent_columns
     assert "external_operation_id" not in intent_columns
