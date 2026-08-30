@@ -21,6 +21,18 @@ constructed this Intent using an approved Integration Contract. It
 does not mean the external system actually executed the operation, that
 the Adapter's own code is free of bugs, or that no other path to the
 same effect exists.
+
+Trusted Integration Architecture, Phase 3 (business-operation
+identity): `attest()` requires an explicit `external_operation_id` --
+this SDK never generates one for you. A randomly generated value on
+every retry would defeat the entire point of idempotency: PayReality
+can only recognize "this is the same real operation as last time" if
+your Adapter presents the SAME identifier across retries of the SAME
+real external operation. Use a stable identifier your source system
+already provides (an ERP transaction id, an orchestrator execution
+id, a tool-call execution id); if the source system provides none,
+your own Adapter integration is responsible for constructing one that
+remains stable across retries -- not this SDK.
 """
 
 from __future__ import annotations
@@ -93,6 +105,27 @@ class ContractShape:
             )
 
 
+# Mirrors server/app/services/operation_identity_service.py's own
+# MAX_EXTERNAL_OPERATION_ID_LENGTH -- kept in sync by hand, same
+# discipline as agent.py's own _SDK_VERSION comment.
+_MAX_EXTERNAL_OPERATION_ID_LENGTH = 256
+
+
+def _validate_external_operation_id(value: str) -> None:
+    """Client-side pre-flight only -- catches an obviously wrong call
+    before a network round trip. The server's own validation
+    (operation_identity_service.validate_external_operation_id) remains
+    authoritative regardless. Deliberately does not restrict format
+    (no numeric/UUID requirement) and never normalizes case -- an
+    identifier is opaque, compared byte-for-byte exactly as supplied."""
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigurationError("external_operation_id must be a non-empty, non-whitespace string")
+    if len(value) > _MAX_EXTERNAL_OPERATION_ID_LENGTH:
+        raise ConfigurationError(
+            f"external_operation_id exceeds the maximum length of {_MAX_EXTERNAL_OPERATION_ID_LENGTH} characters"
+        )
+
+
 class Adapter:
     def __init__(
         self,
@@ -127,6 +160,7 @@ class Adapter:
         origin_agent_id: str,
         source_operation: str,
         action: str,
+        external_operation_id: str,
         resource: str | None = None,
         amount: float | None = None,
         currency: str | None = None,
@@ -147,11 +181,24 @@ class Adapter:
         or the request is rejected before evaluation, not routed to
         human review.
 
+        `external_operation_id` (Phase 3, required -- see this module's
+        own docstring): the stable identifier of the real external
+        business operation. Calling `attest()` again with the SAME
+        `external_operation_id` and the SAME authority-relevant values
+        (same origin Agent, action, resource, amount, currency,
+        counterparty, and Contract-bound context) returns the ORIGINAL
+        Decision -- no re-evaluation, no new Decision, no new Evidence.
+        Calling it again with the SAME id but DIFFERENT authority-
+        relevant values raises `ApiError` (HTTP 409): PayReality treats
+        that as a conflicting claim about the same operation, not a new
+        attempt.
+
         This method does not itself observe the external operation it
         describes, and its return value is not proof that operation
         executed -- see this module's own docstring for the full,
         deliberately unsoftened trust claim.
         """
+        _validate_external_operation_id(external_operation_id)
         context = context or {}
         if self._contract_shape is not None:
             self._contract_shape.check(
@@ -164,6 +211,7 @@ class Adapter:
             "origin_agent_id": origin_agent_id,
             "source_operation": source_operation,
             "action": action,
+            "external_operation_id": external_operation_id,
             "resource": resource,
             "amount": amount,
             "currency": currency,
