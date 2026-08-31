@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import { ShieldCheck, ShieldX, RefreshCw } from "lucide-react";
 import { decisionsApi } from "../decisionsApi";
+import { integrationsApi } from "../../integrations/api";
+import { humanizeAction } from "../../integrations/helpers";
 import { describeApiError, formatStatus } from "../format";
 import { ContextRow, OUTCOME_STYLE, describeFreshnessStatus, describeSource } from "../components/decisionDisplay";
 import { Card } from "../../components/ui/card";
@@ -35,6 +37,11 @@ export function AuthorizationReceiptPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showTechnical, setShowTechnical] = useState(false);
+  // Trusted Integration Architecture, Phase 4 (section 29): resolved
+  // only when this receipt actually carries integration provenance.
+  const [systemName, setSystemName] = useState<string | null>(null);
+  const [trustedConnectionName, setTrustedConnectionName] = useState<string | null>(null);
+  const [mappingLabel, setMappingLabel] = useState<string | null>(null);
 
   function load() {
     if (!decisionId) return;
@@ -48,6 +55,27 @@ export function AuthorizationReceiptPage() {
   }
 
   useEffect(load, [decisionId]);
+
+  useEffect(() => {
+    const integration = receipt?.integration;
+    if (!integration) {
+      setSystemName(null);
+      setTrustedConnectionName(null);
+      setMappingLabel(null);
+      return;
+    }
+    if (integration.integration_id) {
+      integrationsApi.getSystem(integration.integration_id).then((s) => setSystemName(s.external_system_label)).catch(() => setSystemName(null));
+    }
+    if (integration.integration_identity_id) {
+      integrationsApi.getTrustedConnection(integration.integration_identity_id).then((t) => setTrustedConnectionName(t.name)).catch(() => setTrustedConnectionName(null));
+    }
+    if (integration.integration_id && integration.integration_contract_version_id) {
+      integrationsApi.getMapping(integration.integration_id, integration.integration_contract_version_id)
+        .then((m) => setMappingLabel(`${m.source_operation} → ${humanizeAction(m.canonical_action)}`))
+        .catch(() => setMappingLabel(null));
+    }
+  }, [receipt?.integration]);
 
   if (loadError) {
     return (
@@ -162,6 +190,23 @@ export function AuthorizationReceiptPage() {
           )}
         </Card>
       </div>
+
+      {receipt.integration && (
+        <div className="mb-4 pr-enter">
+          <Card padding={20}>
+            <p className="text-sm font-semibold mb-2" style={{ color: "var(--pr-text-primary)" }}>Reported through a trusted connection</p>
+            <ContextRow label="Reported through" value={trustedConnectionName ? `${trustedConnectionName} trusted connection` : "Loading..."} muted={!trustedConnectionName} />
+            <ContextRow label="System" value={systemName ?? "Loading..."} muted={!systemName} />
+            <ContextRow label="Mapping" value={mappingLabel ?? "Loading..."} muted={!mappingLabel} />
+            <ContextRow label="Environment" value={receipt.integration.environment ? formatStatus(receipt.integration.environment) : "Not recorded"} muted={!receipt.integration.environment} />
+            <ContextRow label="External operation" value={receipt.integration.external_operation_id ?? "Not recorded"} muted={!receipt.integration.external_operation_id} />
+            <p className="text-[11px] mt-2 pt-2" style={{ color: "var(--pr-text-disabled)", borderTop: "1px solid var(--pr-overlay-05)" }}>
+              An authenticated trusted connection attested it observed this operation -- this is not proof
+              the external system actually executed it.
+            </p>
+          </Card>
+        </div>
+      )}
 
       {receipt.human_review && (
         <div className="mb-4 pr-enter">

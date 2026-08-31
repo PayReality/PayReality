@@ -4,6 +4,7 @@ import { CheckCircle2, XCircle, ShieldOff } from "lucide-react";
 import { apiClient } from "../apiClient";
 import { decisionsApi } from "../decisionsApi";
 import { agentsApi } from "../../agents/api";
+import { integrationsApi } from "../../integrations/api";
 import {
   describeApiError,
   describeExplanationUnavailable,
@@ -60,6 +61,13 @@ export function DecisionDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [agent, setAgent] = useState<AgentDetail | null>(null);
+  // Trusted Integration Architecture, Phase 4 (section 28): resolved
+  // only when this decision actually carries integration provenance --
+  // the system/trusted-connection NAMES aren't in GetDecisionResponse
+  // itself (only ids), so this is a small, additional lookup, exactly
+  // like the existing agent lookup right above.
+  const [integrationSystemName, setIntegrationSystemName] = useState<string | null>(null);
+  const [trustedConnectionName, setTrustedConnectionName] = useState<string | null>(null);
 
   const [evidenceRecords, setEvidenceRecords] = useState<LiveEvidence[]>([]);
   const [evidenceError, setEvidenceError] = useState<string | null>(null);
@@ -100,6 +108,16 @@ export function DecisionDetailPage() {
   useEffect(() => {
     if (decision) loadEvidence(decision.id);
   }, [decision?.id]);
+  useEffect(() => {
+    if (!decision?.integration) {
+      setIntegrationSystemName(null);
+      setTrustedConnectionName(null);
+      return;
+    }
+    const { integration_id, integration_identity_id } = decision.integration;
+    if (integration_id) integrationsApi.getSystem(integration_id).then((s) => setIntegrationSystemName(s.external_system_label)).catch(() => setIntegrationSystemName(null));
+    if (integration_identity_id) integrationsApi.getTrustedConnection(integration_identity_id).then((t) => setTrustedConnectionName(t.name)).catch(() => setTrustedConnectionName(null));
+  }, [decision?.integration]);
   // Milestone 13 Phase 6A: a resolution or new evidence record from
   // another tab (e.g. the Pending Review queue) should reach this page
   // too, not just whichever tab performed it.
@@ -389,6 +407,27 @@ export function DecisionDetailPage() {
           )}
         </Card>
       </div>
+
+      {/* TRUSTED CONNECTION PROVENANCE (Trusted Integration Architecture,
+          Phase 4): only rendered when this Decision actually carries
+          integration provenance -- an Agent-direct Decision shows none
+          of this section, never an empty/placeholder version of it. */}
+      {decision.integration && (
+        <div className="mb-4 pr-enter" style={enterDelay(60)}>
+          <Card padding={20}>
+            <p className="text-sm font-semibold mb-2" style={{ color: "var(--pr-text-primary)" }}>Reported through a trusted connection</p>
+            <ContextRow label="System" value={integrationSystemName ?? "Loading..."} muted={!integrationSystemName} />
+            <ContextRow label="Trusted connection" value={trustedConnectionName ?? "Loading..."} muted={!trustedConnectionName} />
+            <ContextRow label="External action" value={decision.integration.source_operation ?? "Not recorded"} muted={!decision.integration.source_operation} />
+            <ContextRow label="Environment" value={decision.integration.environment ? formatStatus(decision.integration.environment) : "Not recorded"} muted={!decision.integration.environment} />
+            <ContextRow label="External operation ID" value={decision.integration.external_operation_id ?? "Not recorded"} muted={!decision.integration.external_operation_id} />
+            <p className="text-[11px] mt-2 pt-2" style={{ color: "var(--pr-text-disabled)", borderTop: "1px solid var(--pr-overlay-05)" }}>
+              An authenticated trusted connection attested it observed this operation -- this is not proof
+              the external system actually executed it.
+            </p>
+          </Card>
+        </div>
+      )}
 
       {/* TRUSTED FACTS + AUTHORITY FRESHNESS + CAPABILITY */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4 pr-enter" style={enterDelay(80)}>

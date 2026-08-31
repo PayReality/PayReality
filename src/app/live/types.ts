@@ -190,6 +190,28 @@ export interface LiveDecision {
   // originating Intent (or null if none was supplied) -- never an
   // authority signal, never used to select a policy.
   correlation_id: string | null;
+  // Trusted Integration Architecture, Phase 4: present only for a
+  // trusted-Adapter-mediated Decision -- null for every Agent-direct
+  // one. Reuses the exact same DecisionIntegrationSummary shape the
+  // Authorization Receipt already carries.
+  integration: DecisionIntegrationSummary | null;
+}
+
+// Trusted Integration Architecture, Phase 2-4 (server/app/schemas/intent.py's
+// ReceiptIntegrationSummary): present only when the Decision's Intent
+// actually carries integration provenance. Reporting this is not a
+// claim that the external operation itself executed, or that no other
+// path to the same effect exists -- an authenticated Adapter attested
+// it observed the operation and constructed this canonical meaning.
+export interface DecisionIntegrationSummary {
+  integration_identity_id: string | null;
+  enforcement_binding_id: string | null;
+  integration_contract_version_id: string | null;
+  integration_contract_content_hash: string | null;
+  integration_id: string | null;
+  environment: string | null;
+  source_operation: string | null;
+  external_operation_id: string | null;
 }
 
 // Issue #4 (Authorization Receipts), GET /v1/decisions/{id}/receipt: a
@@ -288,6 +310,9 @@ export interface AuthorizationReceipt {
   facts: ReceiptFactEntry[];
   human_review: ReceiptHumanReviewSummary | null;
   capability: CapabilitySummary | null;
+  // Trusted Integration Architecture, Phase 4: present only for a
+  // trusted-Adapter-mediated Decision.
+  integration: DecisionIntegrationSummary | null;
   evidence: ReceiptEvidenceSummary;
   verification: ReceiptVerification;
 }

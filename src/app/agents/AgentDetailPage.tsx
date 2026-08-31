@@ -4,6 +4,9 @@ import { agentsApi } from "./api";
 import { AgentStatusBadge } from "./components/AgentStatusBadge";
 import { HealthDot } from "./components/HealthDot";
 import { LifecycleTimeline } from "./components/LifecycleTimeline";
+import { integrationsApi } from "../integrations/api";
+import { ConnectionStatusBadge } from "../integrations/components/StatusBadges";
+import type { RuntimeConnection, IntegrationSystem, TrustedConnection } from "../integrations/types";
 import { describeApiError, formatStatus } from "../live/format";
 import { generateKeyPair } from "../live/crypto";
 import { saveAgentKeyPair } from "../live/agentKeyStore";
@@ -48,6 +51,14 @@ export function AgentDetailPage() {
   // loaded, and stays null (rather than throwing) if the principal has
   // nothing resolved yet.
   const [authorityContext, setAuthorityContext] = useState<PrincipalAuthorityContext | null>(null);
+  // Trusted Integration Architecture, Phase 4 (section 27): read-only --
+  // this page never manages a connection, only shows where this agent's
+  // authority is exercised via the Adapter path. null until resolved;
+  // stays an empty array (not an error state) for an agent no runtime
+  // connection currently allows.
+  const [trustedConnections, setTrustedConnections] = useState<
+    { connection: RuntimeConnection; system: IntegrationSystem | null; identity: TrustedConnection | null }[] | null
+  >(null);
 
   function load() {
     if (!agentId) return;
@@ -71,6 +82,26 @@ export function AgentDetailPage() {
       .then(setAuthorityContext)
       .catch(() => setAuthorityContext(null));
   }, [detail?.agent.acting_for_principal_id]);
+
+  useEffect(() => {
+    if (!agentId) return;
+    Promise.all([
+      integrationsApi.listConnections(),
+      integrationsApi.listSystems(),
+      integrationsApi.listTrustedConnections(),
+    ])
+      .then(([connections, systems, identities]) => {
+        const mine = connections.filter((c) => c.allowed_agent_ids.includes(agentId));
+        setTrustedConnections(
+          mine.map((connection) => ({
+            connection,
+            system: systems.find((s) => s.id === connection.integration_id) ?? null,
+            identity: identities.find((i) => i.id === connection.integration_identity_id) ?? null,
+          }))
+        );
+      })
+      .catch(() => setTrustedConnections([]));
+  }, [agentId]);
 
   // Only disable when we positively know the signed-in user lacks the
   // permission -- with no session (Operator Key bypass still active),
@@ -362,6 +393,31 @@ export function AgentDetailPage() {
                 {p.resource ? ` → ${p.resource}` : ""}
               </div>
             )}
+          </div>
+        ))}
+      </Card>
+
+      <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
+        Trusted connections
+      </p>
+      <Card style={{ marginBottom: 16 }}>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-medium" style={{ color: "var(--pr-text-primary)" }}>Where this agent is allowed to act via a trusted connection</h2>
+          <Link to="/organization/integrations" style={{ color: "var(--pr-authority-blue)", fontSize: 12, flexShrink: 0 }}>Manage integrations &rarr;</Link>
+        </div>
+        {trustedConnections === null && <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>Loading...</p>}
+        {trustedConnections?.length === 0 && (
+          <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>
+            No runtime connection currently allows this agent to act through the trusted Adapter path.
+          </p>
+        )}
+        {trustedConnections?.map(({ connection, system, identity }) => (
+          <div key={connection.id} className="flex items-center justify-between gap-3 py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
+            <div>
+              <span style={{ color: "var(--pr-text-primary)" }}>{system?.external_system_label ?? "Unknown system"}</span>
+              <span style={{ color: "var(--pr-text-muted)" }}> via {identity?.name ?? "unknown connection"} &middot; {formatStatus(connection.environment)}</span>
+            </div>
+            <ConnectionStatusBadge status={connection.status} />
           </div>
         ))}
       </Card>

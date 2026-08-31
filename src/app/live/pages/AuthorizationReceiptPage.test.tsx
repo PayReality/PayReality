@@ -84,3 +84,56 @@ describe("AuthorizationReceiptPage (demo mode)", () => {
     }
   });
 });
+
+// Trusted Integration Architecture, Phase 4 (section 29): the Receipt's
+// own "Reported through a trusted connection" card, isolated from the
+// shared demo fixture set the same way DecisionDetailPage's own
+// equivalent test is.
+describe("AuthorizationReceiptPage integration provenance (mocked Adapter-mediated receipt)", () => {
+  it("shows reported-through / system / mapping / environment / external operation, and never claims execution", async () => {
+    vi.resetModules();
+    const { DEMO_SYSTEM_SAP, DEMO_TRUSTED_CONNECTION_SAP, DEMO_MAPPING_SAP_APPROVED } = await import("../../demo/fixtures/integrations");
+    vi.doMock("../decisionsApi", () => ({
+      decisionsApi: {
+        getReceipt: () => Promise.resolve({
+          receipt_id: "evidence-adapter-test", evidence_id: "evidence-adapter-test", generated_at: new Date().toISOString(),
+          decision: { decision_id: "decision-adapter-test", outcome: "ALLOW", created_at: new Date().toISOString(), source: "runtime" },
+          actor: { agent_id: "agent-ap-invoice", agent_name: "AP Invoice Agent", principal_id: null, principal_name: "David Okonkwo" },
+          request: { action: "vendor_payment", resource: "supplier:123", amount: 9800, currency: "USD", context: {}, correlation_id: null },
+          authority: { policy_id: null, bundle_hash: null, bundle_version: null, compiled_at: null, activated_at: null, retired_at: null, authority_version: null, policies: [] },
+          facts: [], human_review: null, capability: null,
+          integration: {
+            integration_identity_id: DEMO_TRUSTED_CONNECTION_SAP, enforcement_binding_id: "connection-sap-demo",
+            integration_contract_version_id: DEMO_MAPPING_SAP_APPROVED, integration_contract_content_hash: "sha256:demo",
+            integration_id: DEMO_SYSTEM_SAP, environment: "production", source_operation: "ChangeSupplierBankDetails",
+            external_operation_id: "OP-92819",
+          },
+          evidence: { evidence_id: "evidence-adapter-test", key_id: "key-1", signature: "sig", previous_hash: null, payload_hash: "hash", status: "VERIFIED", created_at: new Date().toISOString() },
+          verification: { signature_valid: true, key_id: "key-1", algorithm: "ed25519", verified_at: new Date().toISOString() },
+        }),
+      },
+    }));
+
+    const { AuthorizationReceiptPage } = await import("./AuthorizationReceiptPage");
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          { initialEntries: ["/decisions/decision-adapter-test/receipt"] },
+          createElement(Routes, null, createElement(Route, { path: "/decisions/:decisionId/receipt", element: createElement(AuthorizationReceiptPage) }))
+        )
+      );
+      await new Promise((r) => setTimeout(r, 150));
+    });
+
+    expect(container.textContent).toContain("Reported through a trusted connection");
+    expect(container.textContent).toContain("SAP Procurement Adapter trusted connection");
+    expect(container.textContent).toContain("SAP S/4HANA");
+    expect(container.textContent).toContain("ChangeSupplierBankDetails");
+    expect(container.textContent).toContain("Vendor Payment");
+    expect(container.textContent).toContain("OP-92819");
+    expect(container.textContent).not.toMatch(/action (actually )?executed/i);
+
+    vi.doUnmock("../decisionsApi");
+  });
+});
