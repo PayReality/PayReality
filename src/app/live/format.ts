@@ -31,6 +31,21 @@ const NOT_FOUND_DETAIL: Record<string, string> = {
   decision_not_found: "this decision could not be found.",
 };
 
+// Trusted Integration Architecture, Phase 4: the backend's own typed
+// conflict/not-found codes for systems, action mappings, trusted
+// connections, and runtime connections -- translated the same way every
+// other domain's status codes already are, never shown as raw JSON.
+const INTEGRATION_DETAIL: Record<string, string> = {
+  integration_not_found: "this system could not be found.",
+  contract_version_not_found: "this action mapping could not be found.",
+  enforcement_binding_not_found: "this connection setup could not be found.",
+  integration_identity_not_found: "this trusted connection could not be found.",
+  contract_version_has_active_binding: "an active connection is using this mapping -- retire that connection first.",
+  concurrent_activation_conflict: "another change to this connection happened at the same time. Try again.",
+  no_active_certificate_to_rotate: "this trusted connection has no active credential to rotate.",
+  referenced_resource_not_found: "one of the things this depends on (trusted connection or action mapping) could not be found.",
+};
+
 export function describeApiError(e: unknown, action: string): string {
   if (e instanceof ApiError) {
     const detail = e.body && typeof e.body === "object" ? (e.body as { detail?: string }).detail : undefined;
@@ -42,6 +57,9 @@ export function describeApiError(e: unknown, action: string): string {
     }
     if (detail && NOT_FOUND_DETAIL[detail]) {
       return `${action} failed: ${NOT_FOUND_DETAIL[detail]}`;
+    }
+    if (detail && INTEGRATION_DETAIL[detail]) {
+      return `${action} failed: ${INTEGRATION_DETAIL[detail]}`;
     }
     if (e.status === 401 || e.status === 403) {
       return `${action} failed: this action needs the Operator Key set in the sidebar (bottom left). Enter it there and try again.`;

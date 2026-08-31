@@ -131,6 +131,14 @@ export const router = createBrowserRouter([
           { path: "organization", lazy: () => import("./organization/OrganizationSettingsPage").then((m) => ({ Component: m.OrganizationSettingsPage })) },
           { path: "organization/users", lazy: () => import("./organization/UsersPage").then((m) => ({ Component: m.UsersPage })) },
           { path: "organization/platform", lazy: () => import("./organization/PlatformOrganizationsPage").then((m) => ({ Component: m.PlatformOrganizationsPage })) },
+          // Trusted Integration Architecture, Phase 4: Settings -> Integrations.
+          // Deliberately three top-level routes (not tabs) mirroring organization/
+          // users and organization/platform's own precedent -- this is a full
+          // guided setup journey (systems -> action mappings -> trusted
+          // connections -> runtime connections), not tab-sized content.
+          { path: "organization/integrations", lazy: () => import("./integrations/IntegrationsListPage").then((m) => ({ Component: m.IntegrationsListPage })) },
+          { path: "organization/integrations/:systemId", lazy: () => import("./integrations/IntegrationDetailPage").then((m) => ({ Component: m.IntegrationDetailPage })) },
+          { path: "organization/integrations/:systemId/connect", lazy: () => import("./integrations/ConnectionSetupPage").then((m) => ({ Component: m.ConnectionSetupPage })) },
 
           // Policy Studio is the single entry point for all policy work: manual
           // authoring, the AI Authority Builder (multi-document corpus

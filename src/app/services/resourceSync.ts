@@ -30,7 +30,8 @@ export type ResourceKind =
   | "policies"
   | "decisions"
   | "evidence"
-  | "organization";
+  | "organization"
+  | "integrations";
 
 const STORAGE_KEY_PREFIX = "pr:resource-changed:";
 

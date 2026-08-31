@@ -32,12 +32,24 @@ const cardStyle: React.CSSProperties = {
 // "Decisions" already fixed once (see Layout.tsx's own comment on why
 // "Authority" was renamed away from the nav). Frontend label only --
 // no backend field or settings key is renamed.
+//
+// Trusted Integration Architecture, Phase 4: the same collision
+// happened again -- this tab was ALSO called "Integrations", but it
+// only ever reported the health of the components Runtime Authority
+// itself runs on (Azure AI Foundry, Anthropic, OPA, PostgreSQL), not
+// the new customer-facing "connect an external system" feature that
+// now genuinely deserves the name "Integrations" (organization/
+// integrations, linked from this page's own header below). Renamed to
+// "Platform Health" -- the same fix pattern as the "Authority" rename
+// above, not a new one. IntegrationsTab's own function name is kept
+// (its content/behavior is completely unchanged) to keep this diff to
+// the label only.
 const TABS = [
   "General",
   "Organisation Structure",
   "Security",
   "Decision Defaults",
-  "Integrations",
+  "Platform Health",
   "Enterprise Systems",
   "Notifications",
   "Audit",
@@ -1051,6 +1063,8 @@ export function OrganizationSettingsPage() {
           <h1 className="mb-2" style={{ color: "var(--pr-text-primary)" }}>Organisation Settings</h1>
           <p style={{ color: "var(--pr-text-muted)", fontSize: 13, maxWidth: 640 }}>
             How this organisation is configured, who has access, and whether the platform is healthy.{" "}
+            <Link to="/organization/integrations" style={{ color: "var(--pr-authority-blue)" }}>Manage integrations →</Link>
+            {" "}
             <Link to="/organization/users" style={{ color: "var(--pr-authority-blue)" }}>Manage users and roles →</Link>
             {" "}
             <Link to="/organization/platform" style={{ color: "var(--pr-authority-blue)" }}>Platform administration →</Link>
@@ -1107,7 +1121,7 @@ export function OrganizationSettingsPage() {
             {tab === "Organisation Structure" && <OrganisationStructureTab settings={settings} />}
             {tab === "Security" && <SecurityTab settings={settings} onSaved={setSettings} />}
             {tab === "Decision Defaults" && <RuntimeAuthorityTab settings={settings} onSaved={setSettings} />}
-            {tab === "Integrations" && <IntegrationsTab />}
+            {tab === "Platform Health" && <IntegrationsTab />}
             {tab === "Enterprise Systems" && <EnterpriseSystemsTab />}
             {tab === "Notifications" && <NotificationsTab settings={settings} onSaved={setSettings} />}
             {tab === "Audit" && <AuditTab settings={settings} onSaved={setSettings} />}
