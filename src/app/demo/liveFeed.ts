@@ -128,11 +128,11 @@ export function findLiveDecision(id: string): LiveDecision | undefined {
 }
 
 // Demo V2 (Trusted Authority Story): simulates an enterprise system
-// retrying the same real business operation -- the exact scenario
+// retrying the same real business operation, the exact scenario
 // Trusted Integration Architecture Phase 3's operation idempotency
 // exists for (see SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md
-// §50.7). This can only ever return an id already present in `decisions`
-// -- there is no code path here that fabricates a new one -- which is
+// §50.7). This can only ever return an id already present in `decisions`;
+// there is no code path here that fabricates a new one, which is
 // itself the honest demonstration: the mechanism cannot create a second
 // decision for an operation it already has one for, not just "doesn't
 // happen to" in this particular call.

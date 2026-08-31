@@ -30,7 +30,7 @@ afterEach(() => {
 });
 
 // Demo V2 (Trusted Authority Story): guards the guided tour's own copy
-// directly, independent of rendering -- the cheapest, most direct check
+// directly, independent of rendering: the cheapest, most direct check
 // that a prohibited execution claim never regresses back into the tour.
 describe("TOUR_STEPS copy", () => {
   it("never claims PayReality observed or proved the external system executed", () => {

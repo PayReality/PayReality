@@ -84,7 +84,7 @@ export function DecisionDetailPage() {
   const [resolverName, setResolverName] = useState("");
   const [resolveError, setResolveError] = useState<string | null>(null);
   // Demo V2 (Trusted Authority Story): the "simulate a retry" affordance's
-  // own result text -- demo-mode only, see the integration-provenance
+  // own result text, demo-mode only, see the integration-provenance
   // card below.
   const [replayMessage, setReplayMessage] = useState<string | null>(null);
 
@@ -443,8 +443,8 @@ export function DecisionDetailPage() {
                     const existing = findDecisionForExternalOperation(decision.integration!.external_operation_id!);
                     setReplayMessage(
                       existing
-                        ? `Recognized as the same operation (${decision.integration!.external_operation_id}) -- returned the existing Decision ${existing.id}. No new decision was created.`
-                        : "This operation wasn't found in the demo's own record -- nothing to replay."
+                        ? `Recognized as the same operation (${decision.integration!.external_operation_id}), returned the existing Decision ${existing.id}. No new decision was created.`
+                        : "This operation wasn't found in the demo's own record, nothing to replay."
                     );
                   }}
                 >

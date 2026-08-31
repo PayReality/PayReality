@@ -13,7 +13,7 @@ sdk-python/
   payreality/
     __init__.py       public exports: Agent, Decision, RegisteredAgent, exceptions
     agent.py           Agent: register(), rotate_keys(), heartbeat(), retire(), authorize(), get_decision(), wait_for_resolution(), health(), version()
-    integration.py     Adapter: attest() -- the Trusted Adapter path, POST /v1/integration-runtime/intents. ContractShape: the request shape an Action Mapping expects.
+    integration.py     Adapter: attest(), the Trusted Adapter path, POST /v1/integration-runtime/intents. ContractShape: the request shape an Action Mapping expects.
     auth.py            nonce/timestamp generation, header assembly
     client.py           the one place that makes an HTTP request; owns retries and exception mapping
     crypto.py           ED25519 keygen and signing (PyNaCl)

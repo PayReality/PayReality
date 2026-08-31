@@ -16,29 +16,29 @@ const VALUE_BULLETS = [
 ];
 
 // Demo V2 (Trusted Authority Story): the three-question model is now the
-// primary explanation of what PayReality does -- the "nine AI agents"
+// primary explanation of what PayReality does. The "nine AI agents"
 // world (last explainer below) is retained as supporting context, per
 // this milestone's own instruction, not as the lead.
 const EXPLAINERS = [
   {
     key: "three-questions",
     title: "The three questions PayReality answers",
-    body: "Agent: who is acting? Trusted Adapter: what company-controlled component is reporting what action is being attempted? PayReality: has the organization actually authorized that agent to do this, under these conditions? PayReality only ever answers the third question -- it never claims the Adapter proves the action happened, and it never assumes an agent is trustworthy just because a Trusted Adapter exists.",
+    body: "Agent: who is acting? Trusted Adapter: what company-controlled component is reporting what action is being attempted? PayReality: has the organization actually authorized that agent to do this, under these conditions? PayReality only ever answers the third question. It never claims the Adapter proves the action happened, and it never assumes an agent is trustworthy just because a Trusted Adapter exists.",
   },
   {
     key: "architecture",
     title: "Platform Architecture",
-    body: "Runtime Authority evaluates every AI agent's requested action before it reaches production systems -- ERPs, procurement platforms, identity systems -- and returns a deterministic Allow, Deny, or Human Review decision. It is not a logging layer bolted on after the fact; it is a decision made in time for an enterprise's own systems to act on it before the consequence exists.",
+    body: "Runtime Authority evaluates every AI agent's requested action before it reaches production systems (ERPs, procurement platforms, identity systems) and returns a deterministic Allow, Deny, or Human Review decision. It is not a logging layer bolted on after the fact; it is a decision made in time for an enterprise's own systems to act on it before the consequence exists.",
   },
   {
     key: "runtime-authority",
     title: "Runtime Authority Explained",
-    body: "Most AI governance today checks a role name. Runtime Authority checks a continuous chain: who delegated what, to whom, under which conditions, and whether this specific action still falls within it -- at the moment the action is attempted, not in a quarterly audit.",
+    body: "Most AI governance today checks a role name. Runtime Authority checks a continuous chain: who delegated what, to whom, under which conditions, and whether this specific action still falls within it, at the moment the action is attempted, not in a quarterly audit.",
   },
   {
     key: "enterprise-ai",
     title: "Enterprise AI Architecture",
-    body: `At ${ORG_NAME}, nine AI agents act across Finance, Procurement, and IT -- each operating under a named human's delegated authority, each action checked against active policy, each outcome evidenced. This is what "AI workforce" looks like with real governance underneath it.`,
+    body: `At ${ORG_NAME}, nine AI agents act across Finance, Procurement, and IT, each operating under a named human's delegated authority, each action checked against active policy, each outcome evidenced. This is what "AI workforce" looks like with real governance underneath it.`,
   },
 ];
 
@@ -60,7 +60,7 @@ export function DemoLanding() {
         </h1>
         <p style={{ color: "var(--pr-text-muted)", fontSize: 15, maxWidth: 560 }}>
           PayReality is the Runtime Authority layer that checks every AI-initiated action against real delegated
-          authority and enterprise policy, before it executes -- then produces a signed, verifiable record of
+          authority and enterprise policy, before it executes, then produces a signed, verifiable record of
           the decision. It doesn't observe or prove what happens afterward inside the enterprise system itself;
           it decides, and proves that it decided.
         </p>
