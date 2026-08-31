@@ -10,6 +10,8 @@ import { Card } from "../../components/ui/card";
 import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import { SkeletonRows } from "../../components/ui/skeleton";
+import { EvidenceCard } from "../../components/ui/evidence-card";
+import { EmptyState } from "../../components/ui/empty-state";
 import { DEMO_MODE } from "../../demo/config";
 import { useNow, formatRelativeTime } from "../../demo/liveClock";
 import type {
@@ -261,14 +263,19 @@ export function LiveEvidence() {
 
       <div className="space-y-3">
         {records?.length === 0 && (
-          <p className="text-sm" style={{ color: "var(--pr-text-muted)" }}>
-            No evidence yet. Go to Decisions and test one.
-          </p>
+          <Card padding={0}>
+            <EmptyState
+              icon={Database}
+              title="No evidence yet"
+              description="Go to Decisions and test one to see its signed record appear here."
+            />
+          </Card>
         )}
         {records?.slice(0, visibleCount).map((e) => {
           const verified = verifyResults[e.evidence_id];
           return (
-            <Card key={e.evidence_id} padding={20} data-tour={e === records?.[0] ? "evidence-record" : undefined}>
+            <div key={e.evidence_id} data-tour={e === records?.[0] ? "evidence-record" : undefined}>
+            <EvidenceCard padding={20}>
               <div className="flex items-start justify-between mb-3">
                 <div>
                   <p className="text-sm font-mono" style={{ color: "var(--pr-authority-blue)" }}>{e.evidence_id}</p>
@@ -409,7 +416,8 @@ export function LiveEvidence() {
                   Signing key: {e.key_id}
                 </p>
               )}
-            </Card>
+            </EvidenceCard>
+            </div>
           );
         })}
       </div>

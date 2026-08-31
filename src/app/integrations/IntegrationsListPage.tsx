@@ -9,6 +9,8 @@ import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { SkeletonRows } from "../components/ui/skeleton";
+import { PageHeader } from "../components/ui/page-header";
+import { EmptyState } from "../components/ui/empty-state";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from "../components/ui/sheet";
 import { SETUP_STATE_COLOR, SETUP_STATE_LABEL, summarizeSystem, type SystemSummary } from "./helpers";
 import type { ActionMapping, IntegrationSystem, RuntimeConnection } from "./types";
@@ -145,20 +147,17 @@ export function IntegrationsListPage() {
 
   return (
     <div className="p-8" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-      <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
-        <div>
-          <h1 className="mb-2" style={{ color: "var(--pr-text-primary)" }}>Integrations</h1>
-          <p style={{ color: "var(--pr-text-muted)", fontSize: 13, maxWidth: 640 }}>
-            The enterprise systems your AI agents act through -- what their actions mean to
-            PayReality, which agents may use each connection, and whether it's live.
-          </p>
-        </div>
-        {canManage && rows && rows.length > 0 && (
-          <Button onClick={() => setSheetOpen(true)} className="flex-shrink-0">
-            <Plus className="w-4 h-4 mr-1.5 inline" /> Connect a system
-          </Button>
-        )}
-      </div>
+      <PageHeader
+        title="Integrations"
+        description="The enterprise systems your AI agents act through: what their actions mean to PayReality, which agents may use each connection, and whether it's live."
+        primaryAction={
+          canManage && rows && rows.length > 0 ? (
+            <Button onClick={() => setSheetOpen(true)} className="flex-shrink-0">
+              <Plus className="w-4 h-4 mr-1.5 inline" /> Connect a system
+            </Button>
+          ) : undefined
+        }
+      />
 
       {loadError && (
         <Alert severity="warning" style={{ marginBottom: 16 }}>
@@ -178,21 +177,19 @@ export function IntegrationsListPage() {
       )}
 
       {rows && rows.length === 0 && (
-        <Card padding={40} style={{ textAlign: "center" }}>
-          <Plug className="w-6 h-6 mx-auto mb-3" style={{ color: "var(--pr-text-disabled)" }} />
-          <p className="text-sm mb-1" style={{ color: "var(--pr-text-primary)" }}>
-            Connect the systems your AI agents act through, then tell PayReality what those actions
-            mean.
-          </p>
-          <p className="text-xs mb-4" style={{ color: "var(--pr-text-muted)", maxWidth: 420, marginInline: "auto" }}>
-            No systems connected yet. This is a guided setup, not a one-click connector -- you'll
-            describe what one action means, approve it, and choose which agents can use it.
-          </p>
-          {canManage && (
-            <Button onClick={() => setSheetOpen(true)}>
-              <Plus className="w-4 h-4 mr-1.5 inline" /> Connect a system
-            </Button>
-          )}
+        <Card padding={0}>
+          <EmptyState
+            icon={Plug}
+            title="No systems connected yet"
+            description="This is a guided setup, not a one-click connector: you'll describe what one action means, approve it, and choose which agents can use it."
+            action={
+              canManage ? (
+                <Button onClick={() => setSheetOpen(true)}>
+                  <Plus className="w-4 h-4 mr-1.5 inline" /> Connect a system
+                </Button>
+              ) : undefined
+            }
+          />
         </Card>
       )}
 

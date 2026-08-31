@@ -10,6 +10,7 @@ import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { SkeletonRows } from "../components/ui/skeleton";
 import { HelpIcon } from "../help/HelpIcon";
+import { PageHeader } from "../components/ui/page-header";
 import type { LifecycleDashboard, PolicyLifecycleSummary, PolicySearchParams } from "./types";
 
 // Authority Freshness (Milestone 17, Part B): REVIEW DUE and AUTHORITY
@@ -131,10 +132,11 @@ export function RuntimePolicyDashboardPage() {
 
   return (
     <div className="p-8" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-      <div className="mb-6 flex items-center justify-between">
-        <h1 style={{ color: "var(--pr-text-primary)" }}>Runtime Policy Dashboard</h1>
-        <Link to="/governance" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>Back to list</Link>
-      </div>
+      <PageHeader
+        title="Runtime Policy Dashboard"
+        description="The deterministic execution boundary derived from your organization's authority: what's active, what's due for review, and what's overdue."
+        secondaryAction={<Link to="/governance" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>Back to list</Link>}
+      />
 
       <Card style={{ marginBottom: 24 }}>
         <h2 className="text-sm font-medium mb-3" style={{ color: "var(--pr-text-primary)" }}>Search</h2>

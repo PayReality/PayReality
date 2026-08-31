@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
-import { ShieldCheck, ShieldX, RefreshCw } from "lucide-react";
+import { ShieldCheck, ShieldX, RefreshCw, Info } from "lucide-react";
 import { decisionsApi } from "../decisionsApi";
 import { integrationsApi } from "../../integrations/api";
 import { humanizeAction } from "../../integrations/helpers";
 import { describeApiError, formatStatus } from "../format";
-import { ContextRow, OUTCOME_STYLE, describeFreshnessStatus, describeSource } from "../components/decisionDisplay";
+import { ContextRow, describeFreshnessStatus, describeSource } from "../components/decisionDisplay";
 import { Card } from "../../components/ui/card";
 import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
+import { DecisionOutcomeBadge } from "../../components/ui/decision-outcome-badge";
+import { EvidenceCard } from "../../components/ui/evidence-card";
 import type { AuthorizationReceipt } from "../types";
 
 // Issue #4 (Authorization Receipts): the stable, named artifact an
@@ -104,8 +106,6 @@ export function AuthorizationReceiptPage() {
     );
   }
 
-  const style = OUTCOME_STYLE[receipt.decision.outcome];
-
   return (
     <div className="p-8 max-w-3xl mx-auto" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
       <div className="flex items-center justify-between gap-3 mb-4">
@@ -113,20 +113,12 @@ export function AuthorizationReceiptPage() {
         <span style={{ fontSize: 11, color: "var(--pr-text-disabled)", fontFamily: "monospace" }}>{receipt.receipt_id}</span>
       </div>
 
-      <Card padding={24} className="mb-4 pr-enter">
-        <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: "var(--pr-text-muted)" }}>
-          Authorization Receipt
-        </p>
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: style.bg }}>
-            <style.icon className="w-5 h-5" style={{ color: style.fg }} />
-          </div>
-          <div>
-            <p className="font-semibold text-lg" style={{ color: style.fg }}>{formatStatus(receipt.decision.outcome)}</p>
-            <p className="text-xs" style={{ color: "var(--pr-text-disabled)" }}>
-              {new Date(receipt.decision.created_at).toLocaleString()} &middot; Source: {describeSource(receipt.decision.source)}
-            </p>
-          </div>
+      <EvidenceCard label="Authorization Receipt" padding={24} >
+        <div className="mb-3 pr-enter">
+          <DecisionOutcomeBadge outcome={receipt.decision.outcome} />
+          <p className="text-xs mt-2" style={{ color: "var(--pr-text-disabled)" }}>
+            {new Date(receipt.decision.created_at).toLocaleString()} &middot; Source: {describeSource(receipt.decision.source)}
+          </p>
         </div>
         <p className="text-sm" style={{ color: "var(--pr-text-secondary)" }}>
           {receipt.actor.agent_name ?? "An agent"} requested <strong>{formatStatus(receipt.request.action)}</strong>
@@ -164,7 +156,7 @@ export function AuthorizationReceiptPage() {
             <RefreshCw className="w-3 h-3" /> {loading ? "Checking..." : "Re-check"}
           </button>
         </div>
-      </Card>
+      </EvidenceCard>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4 pr-enter">
         <Card padding={20}>
@@ -200,10 +192,16 @@ export function AuthorizationReceiptPage() {
             <ContextRow label="Mapping" value={mappingLabel ?? "Loading..."} muted={!mappingLabel} />
             <ContextRow label="Environment" value={receipt.integration.environment ? formatStatus(receipt.integration.environment) : "Not recorded"} muted={!receipt.integration.environment} />
             <ContextRow label="External operation" value={receipt.integration.external_operation_id ?? "Not recorded"} muted={!receipt.integration.external_operation_id} />
-            <p className="text-[11px] mt-2 pt-2" style={{ color: "var(--pr-text-disabled)", borderTop: "1px solid var(--pr-overlay-05)" }}>
-              An authenticated trusted connection attested it observed this operation -- this is not proof
-              the external system actually executed it.
-            </p>
+            <div
+              className="flex items-start gap-2 mt-3 p-3 rounded-lg"
+              style={{ backgroundColor: "var(--pr-overlay-05)" }}
+            >
+              <Info className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "var(--pr-text-muted)" }} />
+              <p className="text-sm" style={{ color: "var(--pr-text-secondary)" }}>
+                An authenticated trusted connection attested it observed this operation. This does not
+                prove the external system actually executed it.
+              </p>
+            </div>
           </Card>
         </div>
       )}
@@ -234,10 +232,16 @@ export function AuthorizationReceiptPage() {
               value={receipt.capability.consumed_at ? new Date(receipt.capability.consumed_at).toLocaleString() : "Not yet"}
               muted={!receipt.capability.consumed_at}
             />
-            <p className="text-[11px] mt-2 pt-2" style={{ color: "var(--pr-text-disabled)", borderTop: "1px solid var(--pr-overlay-05)" }}>
-              Consumption means a downstream system redeemed this token -- it is not confirmation that the
-              downstream action actually completed.
-            </p>
+            <div
+              className="flex items-start gap-2 mt-3 p-3 rounded-lg"
+              style={{ backgroundColor: "var(--pr-overlay-05)" }}
+            >
+              <Info className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "var(--pr-text-muted)" }} />
+              <p className="text-sm" style={{ color: "var(--pr-text-secondary)" }}>
+                Consumption means a downstream system redeemed this token. It is not confirmation that
+                the downstream action actually completed.
+              </p>
+            </div>
           </Card>
         </div>
       )}

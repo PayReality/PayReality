@@ -5,7 +5,7 @@ import { decisionsApi } from "../decisionsApi";
 import { agentsApi } from "../../agents/api";
 import { policyStudioApi } from "../../policy-studio/api";
 import { describeApiError, describeReason, formatStatus } from "../format";
-import { OUTCOME_STYLE, describeSource, describeSourceCompact } from "../components/decisionDisplay";
+import { describeSource, describeSourceCompact } from "../components/decisionDisplay";
 import { ManualDecisionSheet } from "../components/ManualDecisionSheet";
 import { HelpIcon } from "../../help/HelpIcon";
 import { Card } from "../../components/ui/card";
@@ -14,23 +14,13 @@ import { Button } from "../../components/ui/button";
 import { Select } from "../../components/ui/select";
 import { SkeletonRows } from "../../components/ui/skeleton";
 import { useResourceSync } from "../../services/resourceSync";
+import { PageHeader } from "../../components/ui/page-header";
+import { EmptyState } from "../../components/ui/empty-state";
+import { DecisionOutcomeBadge } from "../../components/ui/decision-outcome-badge";
+import { AgentIdentity } from "../../components/ui/agent-identity";
 import type { DecisionHistoryItem, LiveAgent } from "../types";
 
 const PAGE_SIZE = 25;
-
-function OutcomeBadge({ outcome }: { outcome: string }) {
-  const style = OUTCOME_STYLE[outcome];
-  if (!style) return <span>{formatStatus(outcome)}</span>;
-  return (
-    <span
-      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium"
-      style={{ backgroundColor: style.bg, color: style.fg }}
-    >
-      <style.icon className="w-3 h-3" />
-      {formatStatus(outcome)}
-    </span>
-  );
-}
 
 // Core Product Experience Redesign, section 4: "THIS IS THE MOST
 // IMPORTANT REDESIGN." Replaces LiveTestIntent.tsx as the /decisions
@@ -97,24 +87,21 @@ export function DecisionHistoryPage() {
 
   return (
     <div className="p-8 max-w-6xl mx-auto" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-      <div className="flex items-start justify-between gap-3 mb-2">
-        <div className="flex items-center gap-1.5">
-          <h1 style={{ color: "var(--pr-text-primary)" }}>Decisions</h1>
-          <HelpIcon articleId="runtime_decision" />
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
+      <PageHeader
+        title="Decisions"
+        description="Every request an AI agent has made to act, and what your rules decided: approved, blocked, or sent to a human, each with the evidence it produced."
+        status={<HelpIcon articleId="runtime_decision" />}
+        secondaryAction={
           <Link to="/decisions/queue" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
             Pending review
           </Link>
+        }
+        primaryAction={
           <Button ref={testTriggerRef} variant="ghost" size="sm" onClick={() => setSheetOpen(true)}>
             <span className="flex items-center gap-1.5"><FlaskConical className="w-3.5 h-3.5" /> Test Runtime Authority</span>
           </Button>
-        </div>
-      </div>
-      <p style={{ color: "var(--pr-text-muted)", fontSize: 13, maxWidth: 680, marginBottom: 24 }}>
-        Every request an AI agent has made to act, and what your rules decided: approved, blocked, or
-        sent to a human, each with the evidence it produced.
-      </p>
+        }
+      />
 
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <Select
@@ -213,11 +200,16 @@ export function DecisionHistoryPage() {
                 <td className="p-3" style={{ color: "var(--pr-text-muted)", fontSize: 12, whiteSpace: "nowrap" }}>
                   {new Date(d.created_at).toLocaleString()}
                 </td>
-                <td className="p-3">{d.agent_name ?? d.agent_id}</td>
+                <td className="p-3">
+                  <span className="flex items-center gap-2">
+                    <AgentIdentity name={d.agent_name ?? d.agent_id} size="sm" />
+                    {d.agent_name ?? d.agent_id}
+                  </span>
+                </td>
                 <td className="p-3">{formatStatus(d.action)}</td>
                 <td className="p-3" style={{ color: "var(--pr-text-muted)" }}>{d.resource ?? "-"}</td>
                 <td className="p-3">
-                  <OutcomeBadge outcome={d.outcome} />
+                  <DecisionOutcomeBadge outcome={d.outcome} size="sm" />
                   {d.human_review_state === "pending" && (
                     <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--pr-warning-amber)" }}>
                       Awaiting review
@@ -232,23 +224,31 @@ export function DecisionHistoryPage() {
                 </td>
               </tr>
             ))}
-            {decisions?.length === 0 && (
-              <tr>
-                <td colSpan={7} className="p-10 text-center">
-                  <History className="w-6 h-6 mx-auto mb-3" style={{ color: "var(--pr-text-disabled)" }} />
-                  <p style={{ color: "var(--pr-text-muted)", fontSize: 13, marginBottom: 4 }}>
-                    {total === 0 && !outcomeFilter && !sourceFilter && !agentFilter && !actionFilter && !resourceFilter
-                      ? "No decisions yet. Once an agent requests to act, it'll show up here."
-                      : "No decisions match these filters."}
-                  </p>
-                  {total === 0 && !outcomeFilter && !sourceFilter && !agentFilter && !actionFilter && !resourceFilter && (
-                    <button onClick={() => setSheetOpen(true)} style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
-                      Test Runtime Authority to see one now &rarr;
-                    </button>
-                  )}
-                </td>
-              </tr>
-            )}
+            {decisions?.length === 0 && (() => {
+              const noFilters = !outcomeFilter && !sourceFilter && !agentFilter && !actionFilter && !resourceFilter;
+              return (
+                <tr>
+                  <td colSpan={7}>
+                    <EmptyState
+                      icon={History}
+                      title={total === 0 && noFilters ? "No decisions yet" : "No decisions match these filters"}
+                      description={
+                        total === 0 && noFilters
+                          ? "Once an agent requests to act, it'll show up here."
+                          : "Try different filters."
+                      }
+                      action={
+                        total === 0 && noFilters ? (
+                          <button onClick={() => setSheetOpen(true)} style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
+                            Test Runtime Authority to see one now &rarr;
+                          </button>
+                        ) : undefined
+                      }
+                    />
+                  </td>
+                </tr>
+              );
+            })()}
           </tbody>
         </table>
         </div>

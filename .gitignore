@@ -6,3 +6,5 @@ dist
 vite.log
 __pycache__
 *.pyc
+qa-screenshots
+scripts/qa-output

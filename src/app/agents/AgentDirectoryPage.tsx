@@ -15,6 +15,9 @@ import { Select } from "../components/ui/select";
 import { SkeletonRows } from "../components/ui/skeleton";
 import { useToast } from "../components/ui/toast";
 import { ConfirmButton } from "../components/ui/confirm-button";
+import { PageHeader } from "../components/ui/page-header";
+import { EmptyState } from "../components/ui/empty-state";
+import { AgentIdentity } from "../components/ui/agent-identity";
 
 const BULK_ACTION_LABEL: Record<"suspend" | "activate" | "retire" | "rotate", string> = {
   suspend: "suspend",
@@ -132,23 +135,19 @@ export function AgentDirectoryPage() {
 
   return (
     <div className="p-8" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-      <div className="flex items-start justify-between gap-3 mb-6">
-        <div>
-          <h1 className="mb-2" style={{ color: "var(--pr-text-primary)" }}>Agents</h1>
-          <p style={{ color: "var(--pr-text-muted)", fontSize: 13, maxWidth: 640 }}>
-            Every AI worker operating under this platform, managed the same way an enterprise manages
-            a human workforce identity and delegates authority to it: registered, activated,
-            suspended, rotated, retired, or revoked, with a signed audit trail for every change.
-          </p>
-        </div>
-        <Link
-          to="/agents/register"
-          className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 flex-shrink-0"
-          style={{ backgroundColor: "var(--pr-authority-blue)", color: "#fff" }}
-        >
-          <Plus className="w-4 h-4" /> Register agent
-        </Link>
-      </div>
+      <PageHeader
+        title="Agents"
+        description="Every AI worker operating under this platform, managed the same way an enterprise manages a human workforce identity and delegates authority to it: registered, activated, suspended, rotated, retired, or revoked, with a signed audit trail for every change."
+        primaryAction={
+          <Link
+            to="/agents/register"
+            className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 flex-shrink-0"
+            style={{ backgroundColor: "var(--pr-authority-blue)", color: "#fff" }}
+          >
+            <Plus className="w-4 h-4" /> Register agent
+          </Link>
+        }
+      />
 
       {justActivatedName && (
         <NextStepGuidance
@@ -274,7 +273,10 @@ export function AgentDirectoryPage() {
                     />
                   </td>
                   <td className="p-3">
-                    <Link to={`/agents/${a.id}`} style={{ color: "var(--pr-authority-blue)" }}>{a.name}</Link>
+                    <Link to={`/agents/${a.id}`} className="flex items-center gap-2" style={{ color: "var(--pr-authority-blue)" }}>
+                      <AgentIdentity name={a.name} status={a.status} size="sm" />
+                      {a.name}
+                    </Link>
                   </td>
                   <td className="p-3" style={{ color: "var(--pr-text-muted)" }}>{principalById[a.acting_for_principal_id] ?? "-"}</td>
                   <td className="p-3" style={{ color: "var(--pr-text-muted)" }}>{a.owner ?? "-"}</td>
@@ -322,18 +324,23 @@ export function AgentDirectoryPage() {
               const filtersActive = !!(q || statusFilter || environmentFilter);
               return (
                 <tr>
-                  <td colSpan={9} className="p-10 text-center">
-                    <Bot className="w-6 h-6 mx-auto mb-3" style={{ color: "var(--pr-text-disabled)" }} />
-                    <p style={{ color: "var(--pr-text-muted)", fontSize: 13, marginBottom: filtersActive ? 0 : 8 }}>
-                      {filtersActive
-                        ? "No agents match these filters."
-                        : "No agents yet. Register the first AI agent operating in your enterprise."}
-                    </p>
-                    {!filtersActive && (
-                      <Link to="/agents/register" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
-                        Register an agent &rarr;
-                      </Link>
-                    )}
+                  <td colSpan={9}>
+                    <EmptyState
+                      icon={Bot}
+                      title={filtersActive ? "No agents match these filters" : "No agents yet"}
+                      description={
+                        filtersActive
+                          ? "Try a different search, status, or environment."
+                          : "Register the first AI agent operating in your enterprise."
+                      }
+                      action={
+                        !filtersActive ? (
+                          <Link to="/agents/register" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
+                            Register an agent &rarr;
+                          </Link>
+                        ) : undefined
+                      }
+                    />
                   </td>
                 </tr>
               );

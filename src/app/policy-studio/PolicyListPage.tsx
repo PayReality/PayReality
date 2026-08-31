@@ -10,6 +10,9 @@ import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { Select } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
+import { PageHeader } from "../components/ui/page-header";
+import { EmptyState } from "../components/ui/empty-state";
+import { ShieldCheck } from "lucide-react";
 
 type SortKey = "name" | "version" | "status" | "created_at" | "owner";
 type SortDir = "asc" | "desc";
@@ -88,33 +91,32 @@ export function PolicyListPage() {
 
   return (
     <div className="p-8" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <h1 style={{ color: "var(--pr-text-primary)" }}>Governance</h1>
-          <HelpIcon articleId="runtime_policy" />
-        </div>
-        <div className="flex items-center gap-3">
-          <Link to="/governance/dashboard" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
-            Dashboard
-          </Link>
-          <Link to="/governance/approvals" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
-            Approvals
-          </Link>
-          <Link
-            to="/governance/new"
-            className="px-4 py-2 rounded-lg text-sm font-medium border"
-            style={{ borderColor: "var(--pr-authority-blue)", color: "var(--pr-authority-blue)" }}
-          >
-            + Write a rule
-          </Link>
-          <Link
-            to="/governance/authority-builder"
-            className="px-4 py-2 rounded-lg text-sm font-medium"
-            style={{ backgroundColor: "var(--pr-authority-blue)", color: "#fff" }}
-          >
-            Discover from documents
-          </Link>
-        </div>
+      <PageHeader
+        title="Governance"
+        description="Where your organization's authority is established: the rules that decide what an agent may do, and on whose delegated authority."
+        status={<HelpIcon articleId="runtime_policy" />}
+      />
+      <div className="flex items-center gap-3 mb-4">
+        <Link to="/governance/dashboard" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
+          Dashboard
+        </Link>
+        <Link to="/governance/approvals" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
+          Approvals
+        </Link>
+        <Link
+          to="/governance/new"
+          className="px-4 py-2 rounded-lg text-sm font-medium border ml-auto"
+          style={{ borderColor: "var(--pr-authority-blue)", color: "var(--pr-authority-blue)" }}
+        >
+          + Write a rule
+        </Link>
+        <Link
+          to="/governance/authority-builder"
+          className="px-4 py-2 rounded-lg text-sm font-medium"
+          style={{ backgroundColor: "var(--pr-authority-blue)", color: "#fff" }}
+        >
+          Discover from documents
+        </Link>
       </div>
 
       <div className="flex gap-3 mb-4">
@@ -251,8 +253,16 @@ export function PolicyListPage() {
             ))}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={6} className="py-6 text-center" style={{ color: "var(--pr-text-muted)" }}>
-                  {policies.length === 0 ? "No policies yet." : "No policies match your filters."}
+                <td colSpan={6}>
+                  <EmptyState
+                    icon={ShieldCheck}
+                    title={policies.length === 0 ? "No policies yet" : "No policies match your filters"}
+                    description={
+                      policies.length === 0
+                        ? "Write a rule, or discover authority from your organization's own documents."
+                        : "Try a different search or status."
+                    }
+                  />
                 </td>
               </tr>
             )}

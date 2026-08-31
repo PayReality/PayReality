@@ -11,6 +11,8 @@ import {
   ScrollText,
   Settings,
   LogOut,
+  Moon,
+  Sun,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
 import { useIsMobile } from "./ui/use-mobile";
@@ -23,6 +25,7 @@ import { page as trackPage } from "../services/analytics";
 import { DEMO_MODE } from "../demo/config";
 import { DemoBanner } from "./DemoBanner";
 import { TourProvider } from "../demo/tour/TourProvider";
+import { getTheme, setTheme, type Theme } from "../lib/theme";
 
 // One workflow, in order: Agents -> Governance -> Decisions -> Evidence
 // -> Assurance. No department-shaped groups, no duplicate "real" vs
@@ -173,9 +176,54 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
           </p>
         </div>
         <OperatorKeyField />
+        <ThemeToggle />
         <CurrentUserWidget />
       </div>
     </>
+  );
+}
+
+// Visual System V3, section 5: the shell had a real, working per-browser
+// theme preference (lib/theme.ts, applied before first paint) but no
+// visible control to change it -- only Organisation Settings -> General
+// exposed one, one navigation away from every other page. Same
+// mechanism, just reachable from the shell itself now.
+function ThemeToggle() {
+  const [theme, setThemeState] = useState<Theme>(() => getTheme());
+
+  function toggle() {
+    const next: Theme = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    setThemeState(next);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+      className="w-full mt-2 flex items-center justify-between gap-2 px-3 py-2 rounded-xl"
+      style={{ backgroundColor: "var(--pr-overlay-03)", border: "1px solid var(--pr-overlay-04)" }}
+    >
+      <span className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: "var(--pr-text-secondary)" }}>
+        {theme === "dark" ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
+        {theme === "dark" ? "Dark" : "Light"} mode
+      </span>
+      <span
+        aria-hidden="true"
+        className="relative rounded-full flex-shrink-0"
+        style={{ width: 28, height: 16, backgroundColor: theme === "dark" ? "var(--pr-authority-blue)" : "var(--pr-overlay-10)" }}
+      >
+        <span
+          className="absolute rounded-full transition-all"
+          style={{
+            width: 12, height: 12, top: 2, backgroundColor: "#fff",
+            left: theme === "dark" ? 14 : 2,
+            transitionDuration: "var(--pr-motion-fast)",
+          }}
+        />
+      </span>
+    </button>
   );
 }
 

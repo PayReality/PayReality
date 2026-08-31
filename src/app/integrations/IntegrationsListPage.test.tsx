@@ -126,7 +126,8 @@ describe("IntegrationsListPage empty state (isolated store)", () => {
       await new Promise((r) => setTimeout(r, 80));
     });
 
-    expect(container.textContent).toContain("Connect the systems your AI agents act through");
+    expect(container.textContent).toContain("No systems connected yet");
+    expect(container.textContent).toContain("guided setup");
     expect(container.textContent).not.toMatch(/api documentation|architecture diagram/i);
     vi.doUnmock("./api");
   });

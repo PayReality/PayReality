@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
+import { Bot, ShieldCheck, FlaskConical, Building2, History, FileCheck } from "lucide-react";
 import { agentsApi } from "./api";
 import { AgentStatusBadge } from "./components/AgentStatusBadge";
 import { HealthDot } from "./components/HealthDot";
@@ -20,6 +21,11 @@ import { FieldLabel } from "../components/ui/label";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { ConfirmButton } from "../components/ui/confirm-button";
+import { PageHeader } from "../components/ui/page-header";
+import { AgentIdentity } from "../components/ui/agent-identity";
+import { AuthorityChain } from "../components/ui/authority-chain";
+import { DecisionOutcomeBadge } from "../components/ui/decision-outcome-badge";
+import { EmptyState } from "../components/ui/empty-state";
 import { DEMO_MODE } from "../demo/config";
 import { useNow, formatRelativeTime } from "../demo/liveClock";
 
@@ -31,6 +37,14 @@ function Field({ label, value }: { label: string; value: string | null | undefin
       <FieldLabel size={11}>{label}</FieldLabel>
       <div style={valueStyle}>{value || "-"}</div>
     </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
+      {children}
+    </p>
   );
 }
 
@@ -51,7 +65,7 @@ export function AgentDetailPage() {
   // loaded, and stays null (rather than throwing) if the principal has
   // nothing resolved yet.
   const [authorityContext, setAuthorityContext] = useState<PrincipalAuthorityContext | null>(null);
-  // Trusted Integration Architecture, Phase 4 (section 27): read-only --
+  // Trusted Integration Architecture, Phase 4 (section 27): read-only,
   // this page never manages a connection, only shows where this agent's
   // authority is exercised via the Adapter path. null until resolved;
   // stays an empty array (not an error state) for an agent no runtime
@@ -104,10 +118,17 @@ export function AgentDetailPage() {
   }, [agentId]);
 
   // Only disable when we positively know the signed-in user lacks the
-  // permission -- with no session (Operator Key bypass still active),
+  // permission: with no session (Operator Key bypass still active),
   // stay permissive rather than guessing (same rule ReviewQueuePage uses).
   function lacksPermission(permission: string): boolean {
     return !!user && !hasPermission(permission);
+  }
+
+  // A permission-disabled button with no explanation reads as broken, not
+  // as "not for you": this is the only signal a visitor whose role
+  // doesn't carry the permission gets for why the control won't respond.
+  function permissionTitle(permission: string): string | undefined {
+    return lacksPermission(permission) ? `Your role doesn't have the "${permission}" permission.` : undefined;
   }
 
   async function runAction(fn: () => Promise<unknown>, label: string): Promise<boolean> {
@@ -130,7 +151,7 @@ export function AgentDetailPage() {
     const { publicKeyB64, privateKeyB64 } = generateKeyPair();
     const succeeded = await runAction(() => agentsApi.rotate(agentId, `ed25519:base64:${publicKeyB64}`), "Rotate certificate");
     // Only persist the new private key locally if the server actually
-    // accepted the rotation -- runAction used to swallow the failure and
+    // accepted the rotation: runAction used to swallow the failure and
     // this ran unconditionally, silently desyncing the stored key from
     // the agent's real active certificate.
     if (succeeded) saveAgentKeyPair(agentId, privateKeyB64, publicKeyB64);
@@ -162,81 +183,115 @@ export function AgentDetailPage() {
 
   const { agent } = detail;
   const activeCert = detail.certificates.find((c) => c.status === "active");
+  const authoritySegments = authorityContext
+    ? [authorityContext.role, authorityContext.team, authorityContext.department, authorityContext.business_unit, authorityContext.organization].filter(
+        (s): s is string => !!s
+      )
+    : [];
 
   return (
     <div className="p-8 max-w-4xl" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
       <Link to="/agents" style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>&lt; Back to Agents</Link>
 
-      <div className="flex items-center justify-between gap-3 mt-2 mb-1">
-        <h1 style={{ color: "var(--pr-text-primary)" }}>{agent.name}</h1>
-        <AgentStatusBadge status={agent.status} />
-      </div>
-      <div className="flex items-center gap-3 mb-6">
-        <HealthDot health={agent.health} />
-        <span style={{ fontSize: 12, color: "var(--pr-text-disabled)", fontFamily: "monospace" }}>{agent.id}</span>
+      <div className="flex items-start gap-4 mt-3 mb-1">
+        <AgentIdentity name={agent.name} status={agent.status} size="lg" />
+        <div className="flex-1 min-w-0">
+          <PageHeader
+            title={agent.name}
+            status={<AgentStatusBadge status={agent.status} />}
+            primaryAction={
+              <>
+                {(agent.status === "registered" || agent.status === "suspended") && (
+                  <Button
+                    variant="tint-success"
+                    size="sm"
+                    disabled={!!pendingAction || lacksPermission("agent.activate")}
+                    title={permissionTitle("agent.activate")}
+                    onClick={() => runAction(() => agentsApi.activate(agentId!), "Activate")}
+                  >
+                    {pendingAction === "Activate" ? "Activating..." : "Activate"}
+                  </Button>
+                )}
+                {agent.status === "active" && (
+                  <ConfirmButton
+                    size="sm"
+                    confirmLabel="Confirm suspend"
+                    disabled={!!pendingAction || lacksPermission("agent.suspend")}
+                    title={permissionTitle("agent.suspend")}
+                    className="disabled:opacity-40"
+                    style={{ backgroundColor: "rgba(245,158,11,0.1)", color: "var(--pr-warning-amber)" }}
+                    onConfirm={() => runAction(() => agentsApi.suspend(agentId!), "Suspend")}
+                  >
+                    Suspend
+                  </ConfirmButton>
+                )}
+              </>
+            }
+            secondaryAction={
+              <>
+                {(agent.status === "active" || agent.status === "suspended") && (
+                  <ConfirmButton
+                    size="sm"
+                    confirmLabel="Confirm rotate"
+                    disabled={!!pendingAction || lacksPermission("agent.rotate")}
+                    title={permissionTitle("agent.rotate")}
+                    className="disabled:opacity-40"
+                    style={{ backgroundColor: "rgba(77,124,254,0.1)", color: "var(--pr-authority-blue)" }}
+                    onConfirm={handleRotate}
+                  >
+                    Rotate certificate
+                  </ConfirmButton>
+                )}
+                {(agent.status === "registered" || agent.status === "active" || agent.status === "suspended") && (
+                  <>
+                    <ConfirmButton
+                      size="sm"
+                      confirmLabel="Confirm retire"
+                      disabled={!!pendingAction || lacksPermission("agent.retire")}
+                      title={permissionTitle("agent.retire")}
+                      className="disabled:opacity-40"
+                      style={{ backgroundColor: "var(--pr-overlay-06)", color: "var(--pr-text-secondary)" }}
+                      onConfirm={() => runAction(() => agentsApi.retire(agentId!), "Retire")}
+                    >
+                      Retire
+                    </ConfirmButton>
+                    <ConfirmButton
+                      variant="tint-danger"
+                      size="sm"
+                      confirmLabel="Confirm revoke"
+                      disabled={!!pendingAction || lacksPermission("agent.revoke")}
+                      title={permissionTitle("agent.revoke")}
+                      onConfirm={() => runAction(() => agentsApi.revoke(agentId!), "Revoke")}
+                    >
+                      Revoke
+                    </ConfirmButton>
+                  </>
+                )}
+              </>
+            }
+          />
+          <div className="flex items-center gap-3 -mt-3 mb-4">
+            <HealthDot health={agent.health} />
+            <span style={{ fontSize: 12, color: "var(--pr-text-disabled)", fontFamily: "monospace" }}>{agent.id}</span>
+          </div>
+        </div>
       </div>
 
       {message && <Alert severity="error" className="text-sm mb-4">{message}</Alert>}
 
-      <div className="flex flex-wrap gap-2 mb-6">
-        {(agent.status === "registered" || agent.status === "suspended") && (
-          <Button
-            variant="tint-success"
-            size="sm"
-            disabled={!!pendingAction || lacksPermission("agent.activate")}
-            onClick={() => runAction(() => agentsApi.activate(agentId!), "Activate")}
-          >
-            {pendingAction === "Activate" ? "Activating..." : "Activate"}
-          </Button>
-        )}
-        {agent.status === "active" && (
-          <ConfirmButton
-            size="sm"
-            confirmLabel="Confirm suspend"
-            disabled={!!pendingAction || lacksPermission("agent.suspend")}
-            className="disabled:opacity-40"
-            style={{ backgroundColor: "rgba(245,158,11,0.1)", color: "var(--pr-warning-amber)" }}
-            onConfirm={() => runAction(() => agentsApi.suspend(agentId!), "Suspend")}
-          >
-            Suspend
-          </ConfirmButton>
-        )}
-        {(agent.status === "active" || agent.status === "suspended") && (
-          <ConfirmButton
-            size="sm"
-            confirmLabel="Confirm rotate"
-            disabled={!!pendingAction || lacksPermission("agent.rotate")}
-            className="disabled:opacity-40"
-            style={{ backgroundColor: "rgba(77,124,254,0.1)", color: "var(--pr-authority-blue)" }}
-            onConfirm={handleRotate}
-          >
-            Rotate certificate
-          </ConfirmButton>
-        )}
-        {(agent.status === "registered" || agent.status === "active" || agent.status === "suspended") && (
-          <>
-            <ConfirmButton
-              size="sm"
-              confirmLabel="Confirm retire"
-              disabled={!!pendingAction || lacksPermission("agent.retire")}
-              className="disabled:opacity-40"
-              style={{ backgroundColor: "var(--pr-overlay-06)", color: "var(--pr-text-secondary)" }}
-              onConfirm={() => runAction(() => agentsApi.retire(agentId!), "Retire")}
-            >
-              Retire
-            </ConfirmButton>
-            <ConfirmButton
-              variant="tint-danger"
-              size="sm"
-              confirmLabel="Confirm revoke"
-              disabled={!!pendingAction || lacksPermission("agent.revoke")}
-              onConfirm={() => runAction(() => agentsApi.revoke(agentId!), "Revoke")}
-            >
-              Revoke
-            </ConfirmButton>
-          </>
-        )}
-      </div>
+      {/* Visual System V3, section 9/10: the identity/authority summary
+          as one chain, answering "who is this, whose authority, is it
+          fresh" at a glance before the detail cards below. */}
+      <Card padding={20} className="mb-6">
+        <AuthorityChain
+          links={[
+            { icon: Bot, label: "Agent", value: agent.name },
+            { icon: ShieldCheck, label: "Delegated by", value: detail.principal_name ?? "Unresolved", inactive: !detail.principal_name },
+            { icon: Building2, label: "Environment", value: agent.environment ?? "Not set", inactive: !agent.environment },
+            { icon: FlaskConical, label: "Runtime activity", value: `${detail.recent_decisions.length} recent decision${detail.recent_decisions.length === 1 ? "" : "s"}` },
+          ]}
+        />
+      </Card>
 
       {/* Core Product Experience Redesign, section 3C: this page is an
           operational authority profile, organized around the five
@@ -244,29 +299,18 @@ export function AgentDetailPage() {
           is, whose authority it acts under, what it's authorized to do,
           what it's actually done, and its current lifecycle state --
           rather than an undifferentiated stack of cards. */}
-      <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
-        Who is this
-      </p>
+      <SectionLabel>Who is this</SectionLabel>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card style={{ marginBottom: 16 }}>
           <h2 className="text-sm font-medium mb-1" style={{ color: "var(--pr-text-primary)" }}>Identity</h2>
           <p className="mb-3" style={{ fontSize: 12, color: "var(--pr-text-muted)" }}>
             Acting under {detail.principal_name ? <strong style={{ color: "var(--pr-text-secondary)" }}>{detail.principal_name}</strong> : "its principal"}'s delegated authority, the same way a human employee's actions are governed by the role they hold, not by the employee personally.
           </p>
-          {authorityContext && (() => {
-            const segments = [
-              authorityContext.role,
-              authorityContext.team,
-              authorityContext.department,
-              authorityContext.business_unit,
-              authorityContext.organization,
-            ].filter((s): s is string => !!s);
-            return segments.length > 0 ? (
-              <p className="mb-3" style={{ fontSize: 13, color: "var(--pr-text-primary)" }}>
-                {segments.join(" · ")}
-              </p>
-            ) : null;
-          })()}
+          {authoritySegments.length > 0 && (
+            <p className="mb-3" style={{ fontSize: 13, color: "var(--pr-text-primary)" }}>
+              {authoritySegments.join(" · ")}
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Principal" value={detail.principal_name} />
             <Field label="Owner" value={agent.owner} />
@@ -342,6 +386,7 @@ export function AgentDetailPage() {
                 }
               }}
               disabled={!newOwner.trim() || !!pendingAction || lacksPermission("agent.manage")}
+              title={permissionTitle("agent.manage")}
               className="px-3 py-1.5 rounded-lg text-xs disabled:opacity-40 flex-shrink-0"
               style={{ backgroundColor: "rgba(77,124,254,0.1)", color: "var(--pr-authority-blue)" }}
             >
@@ -351,9 +396,7 @@ export function AgentDetailPage() {
         </Card>
       </div>
 
-      <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
-        Whose authority
-      </p>
+      <SectionLabel>Whose authority</SectionLabel>
       <Card style={{ marginBottom: 16 }}>
         <h2 className="text-sm font-medium mb-3" style={{ color: "var(--pr-text-primary)" }}>Active delegations</h2>
         {authorityContext && authorityContext.delegations.length > 0 ? (
@@ -366,40 +409,34 @@ export function AgentDetailPage() {
             </div>
           ))
         ) : (
-          <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>
-            No active delegations resolved for this principal.
-          </p>
+          <EmptyState icon={ShieldCheck} title="No active delegations" description="Nothing was resolved for this principal yet." />
         )}
       </Card>
 
-      <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
-        What can it do
-      </p>
+      <SectionLabel>What can it do</SectionLabel>
       <Card style={{ marginBottom: 16 }}>
         <h2 className="text-sm font-medium mb-3" style={{ color: "var(--pr-text-primary)" }}>Rules</h2>
-        {detail.policies.length === 0 && <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>No rules target this agent's principal yet.</p>}
-        {detail.policies.map((p) => (
-          <div key={p.policy_key} className="py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
-            <div className="flex items-center justify-between">
-              <Link to={`/governance/${p.policy_key}`} style={{ color: "var(--pr-authority-blue)" }}>{p.name || p.policy_key}</Link>
-              <span style={{ color: "var(--pr-text-muted)" }}>v{p.version} &middot; {formatStatus(p.status)}</span>
-            </div>
-            {/* Product Experience Remediation Milestone 1: what this rule
-                actually governs -- previously invisible without opening
-                Governance separately. */}
-            {(p.action || p.resource) && (
-              <div style={{ color: "var(--pr-text-disabled)", fontSize: 11.5 }}>
-                {p.action ?? "any action"}
-                {p.resource ? ` → ${p.resource}` : ""}
+        {detail.policies.length === 0 ? (
+          <EmptyState icon={FileCheck} title="No rules target this agent's principal yet" description="Authority granted in Governance will appear here." />
+        ) : (
+          detail.policies.map((p) => (
+            <div key={p.policy_key} className="py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
+              <div className="flex items-center justify-between">
+                <Link to={`/governance/${p.policy_key}`} style={{ color: "var(--pr-authority-blue)" }}>{p.name || p.policy_key}</Link>
+                <span style={{ color: "var(--pr-text-muted)" }}>v{p.version} &middot; {formatStatus(p.status)}</span>
               </div>
-            )}
-          </div>
-        ))}
+              {(p.action || p.resource) && (
+                <div style={{ color: "var(--pr-text-disabled)", fontSize: 11.5 }}>
+                  {p.action ?? "any action"}
+                  {p.resource ? ` → ${p.resource}` : ""}
+                </div>
+              )}
+            </div>
+          ))
+        )}
       </Card>
 
-      <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
-        Trusted connections
-      </p>
+      <SectionLabel>Trusted connections</SectionLabel>
       <Card style={{ marginBottom: 16 }} data-tour="agent-trusted-connections">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-medium" style={{ color: "var(--pr-text-primary)" }}>Where this agent is allowed to act via a trusted connection</h2>
@@ -407,9 +444,11 @@ export function AgentDetailPage() {
         </div>
         {trustedConnections === null && <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>Loading...</p>}
         {trustedConnections?.length === 0 && (
-          <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>
-            No runtime connection currently allows this agent to act through the trusted Adapter path.
-          </p>
+          <EmptyState
+            icon={Building2}
+            title="No runtime connection currently allows this agent"
+            description="This agent can still act directly, with its own signed request; a Trusted Connection would let a customer-controlled Adapter corroborate what it reports."
+          />
         )}
         {trustedConnections?.map(({ connection, system, identity }) => (
           <div key={connection.id} className="flex items-center justify-between gap-3 py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
@@ -422,32 +461,29 @@ export function AgentDetailPage() {
         ))}
       </Card>
 
-      <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
-        What has it done
-      </p>
+      <SectionLabel>What has it done</SectionLabel>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card style={{ marginBottom: 16 }}>
           <h2 className="text-sm font-medium mb-3" style={{ color: "var(--pr-text-primary)" }}>Decision history</h2>
-          {detail.recent_decisions.length === 0 && <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>No decisions yet.</p>}
-          {detail.recent_decisions.map((d) => (
-            <div key={d.id} className="py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
-              <div className="flex items-center justify-between">
-                <span style={{ color: "var(--pr-text-primary)" }}>{formatStatus(d.outcome)}</span>
-                <span style={{ fontSize: 11, color: "var(--pr-text-disabled)" }}>{new Date(d.created_at).toLocaleString()}</span>
-              </div>
-              {/* Product Experience Remediation Milestone 1: what was
-                  actually attempted -- previously only outcome/reason,
-                  with no action or resource at all. Deliberately no
-                  amount/currency: contextual, not universal. */}
-              {(d.action || d.resource) && (
-                <div style={{ color: "var(--pr-text-disabled)", fontSize: 11.5 }}>
-                  {d.action ?? "unknown action"}
-                  {d.resource ? ` → ${d.resource}` : ""}
+          {detail.recent_decisions.length === 0 ? (
+            <EmptyState icon={FlaskConical} title="No decisions yet" description="This agent hasn't submitted a request PayReality has evaluated." />
+          ) : (
+            detail.recent_decisions.map((d) => (
+              <div key={d.id} className="py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
+                <div className="flex items-center justify-between gap-2">
+                  <DecisionOutcomeBadge outcome={d.outcome} size="sm" />
+                  <span style={{ fontSize: 11, color: "var(--pr-text-disabled)" }}>{new Date(d.created_at).toLocaleString()}</span>
                 </div>
-              )}
-              {d.reason && <div style={{ color: "var(--pr-text-muted)", fontSize: 12 }}>{d.reason}</div>}
-            </div>
-          ))}
+                {(d.action || d.resource) && (
+                  <div style={{ color: "var(--pr-text-disabled)", fontSize: 11.5 }} className="mt-1">
+                    {d.action ?? "unknown action"}
+                    {d.resource ? ` → ${d.resource}` : ""}
+                  </div>
+                )}
+                {d.reason && <div style={{ color: "var(--pr-text-muted)", fontSize: 12 }}>{d.reason}</div>}
+              </div>
+            ))
+          )}
           <Link to="/decisions" style={{ color: "var(--pr-authority-blue)", fontSize: 12, display: "inline-block", marginTop: 8 }}>View all Decisions &rarr;</Link>
         </Card>
 
@@ -456,20 +492,21 @@ export function AgentDetailPage() {
             <h2 className="text-sm font-medium" style={{ color: "var(--pr-text-primary)" }}>Evidence</h2>
             <HelpIcon articleId="evidence" />
           </div>
-          {detail.recent_evidence.length === 0 && <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>No evidence yet.</p>}
-          {detail.recent_evidence.map((e) => (
-            <div key={e.id} className="flex items-center justify-between py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
-              <span style={{ color: "var(--pr-text-primary)" }}>{formatStatus(e.status)}</span>
-              <span style={{ fontSize: 11, color: "var(--pr-text-disabled)" }}>{new Date(e.created_at).toLocaleString()}</span>
-            </div>
-          ))}
+          {detail.recent_evidence.length === 0 ? (
+            <EmptyState icon={History} title="No evidence yet" description="A signed record appears here the moment this agent's first decision is made." />
+          ) : (
+            detail.recent_evidence.map((e) => (
+              <div key={e.id} className="flex items-center justify-between py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
+                <span style={{ color: "var(--pr-text-primary)" }}>{formatStatus(e.status)}</span>
+                <span style={{ fontSize: 11, color: "var(--pr-text-disabled)" }}>{new Date(e.created_at).toLocaleString()}</span>
+              </div>
+            ))
+          )}
           <Link to="/evidence" style={{ color: "var(--pr-authority-blue)", fontSize: 12, display: "inline-block", marginTop: 8 }}>View all Evidence &rarr;</Link>
         </Card>
       </div>
 
-      <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
-        Lifecycle state
-      </p>
+      <SectionLabel>Lifecycle state</SectionLabel>
       <Card style={{ marginBottom: 16 }}>
         <div className="flex items-center gap-1.5 mb-3">
           <h2 className="text-sm font-medium" style={{ color: "var(--pr-text-primary)" }}>Certificates</h2>

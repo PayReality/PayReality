@@ -4,6 +4,7 @@ import { organizationApi, organizationStructureApi } from "./api";
 import { RequirePermission } from "../auth/RequireAuth";
 import { describeApiError } from "../live/format";
 import { getTheme, setTheme, type Theme } from "../lib/theme";
+import { PageHeader } from "../components/ui/page-header";
 import type {
   BusinessUnit,
   Department,
@@ -1059,17 +1060,14 @@ export function OrganizationSettingsPage() {
   return (
     <RequirePermission permission="settings.view">
       <div className="p-8" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-        <div className="mb-6">
-          <h1 className="mb-2" style={{ color: "var(--pr-text-primary)" }}>Organisation Settings</h1>
-          <p style={{ color: "var(--pr-text-muted)", fontSize: 13, maxWidth: 640 }}>
-            How this organisation is configured, who has access, and whether the platform is healthy.{" "}
-            <Link to="/organization/integrations" style={{ color: "var(--pr-authority-blue)" }}>Manage integrations →</Link>
-            {" "}
-            <Link to="/organization/users" style={{ color: "var(--pr-authority-blue)" }}>Manage users and roles →</Link>
-            {" "}
-            <Link to="/organization/platform" style={{ color: "var(--pr-authority-blue)" }}>Platform administration →</Link>
-          </p>
-        </div>
+        <PageHeader title="Organisation Settings" description="How this organisation is configured, who has access, and whether the platform is healthy." />
+        <p className="mb-6 -mt-4" style={{ color: "var(--pr-text-muted)", fontSize: 13, maxWidth: 640 }}>
+          <Link to="/organization/integrations" style={{ color: "var(--pr-authority-blue)" }}>Manage integrations →</Link>
+          {" "}
+          <Link to="/organization/users" style={{ color: "var(--pr-authority-blue)" }}>Manage users and roles →</Link>
+          {" "}
+          <Link to="/organization/platform" style={{ color: "var(--pr-authority-blue)" }}>Platform administration →</Link>
+        </p>
 
         <div
           role="tablist"

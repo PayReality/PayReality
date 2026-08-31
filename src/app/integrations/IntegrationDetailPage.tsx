@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { ArrowLeft, ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, Plus, FileCode2, Network } from "lucide-react";
 import { integrationsApi } from "./api";
 import { agentsApi } from "../agents/api";
 import { describeApiError, formatStatus } from "../live/format";
@@ -11,6 +11,8 @@ import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { ConfirmButton } from "../components/ui/confirm-button";
 import { SkeletonRows } from "../components/ui/skeleton";
+import { PageHeader } from "../components/ui/page-header";
+import { EmptyState } from "../components/ui/empty-state";
 import { MappingStatusBadge, ConnectionStatusBadge, TrustedConnectionStatusBadge } from "./components/StatusBadges";
 import { MappingFormSheet } from "./components/MappingFormSheet";
 import { describeMapping, humanizeAction, summarizeSystem, SETUP_STATE_LABEL, SETUP_STATE_COLOR } from "./helpers";
@@ -261,17 +263,11 @@ export function IntegrationDetailPage() {
         <ArrowLeft className="w-3.5 h-3.5" /> Integrations
       </Link>
 
-      <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
-        <div>
-          <h1 className="mb-2" style={{ color: "var(--pr-text-primary)" }}>{system.external_system_label}</h1>
-          <p style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>
-            <span style={{ color: SETUP_STATE_COLOR[summary.setupState] }}>{SETUP_STATE_LABEL[summary.setupState]}</span>
-            {" -- "}
-            {summary.mappedActionsCount} action{summary.mappedActionsCount === 1 ? "" : "s"} mapped,{" "}
-            {summary.approvedMappingsCount} approved
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title={system.external_system_label}
+        status={<span className="text-sm font-medium" style={{ color: SETUP_STATE_COLOR[summary.setupState] }}>{SETUP_STATE_LABEL[summary.setupState]}</span>}
+        description={`${summary.mappedActionsCount} action${summary.mappedActionsCount === 1 ? "" : "s"} mapped, ${summary.approvedMappingsCount} approved`}
+      />
 
       <section className="mb-8">
         <div className="flex items-center justify-between mb-3">
@@ -287,9 +283,11 @@ export function IntegrationDetailPage() {
         </div>
         <Card padding={0}>
           {mappings.length === 0 ? (
-            <p className="text-sm p-6 text-center" style={{ color: "var(--pr-text-muted)" }}>
-              No action mappings yet. Add one to tell PayReality what an action in this system means.
-            </p>
+            <EmptyState
+              icon={FileCode2}
+              title="No action mappings yet"
+              description="Add one to tell PayReality what an action in this system means."
+            />
           ) : (
             mappings
               .slice()
@@ -329,10 +327,11 @@ export function IntegrationDetailPage() {
         </div>
         <Card padding={0}>
           {connections.length === 0 ? (
-            <p className="text-sm p-6 text-center" style={{ color: "var(--pr-text-muted)" }}>
-              No runtime connections yet. Once a mapping is approved, set up a connection to make it
-              usable by your agents.
-            </p>
+            <EmptyState
+              icon={Network}
+              title="No runtime connections yet"
+              description="Once a mapping is approved, set up a connection to make it usable by your agents."
+            />
           ) : (
             connections.map((c) => (
               <ConnectionRow

@@ -1,7 +1,8 @@
 import { useEffect, useId, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { Plus } from "lucide-react";
+import { Plus, Info } from "lucide-react";
 import { agentsApi } from "./api";
+import { useAuth } from "../auth/AuthContext";
 import { generateKeyPair } from "../live/crypto";
 import { saveAgentKeyPair } from "../live/agentKeyStore";
 import { describeApiError } from "../live/format";
@@ -23,6 +24,8 @@ import { Button } from "../components/ui/button";
 export function AgentRegisterPage() {
   const formId = useId();
   const navigate = useNavigate();
+  const { user, hasPermission } = useAuth();
+  const canActivate = !user || hasPermission("agent.activate");
   const [principals, setPrincipals] = useState<LivePrincipal[]>([]);
   const [name, setName] = useState("");
   const [principalId, setPrincipalId] = useState("");
@@ -85,11 +88,14 @@ export function AgentRegisterPage() {
         <Card padding={24}>
           <p className="text-sm font-semibold mb-2" style={{ color: "var(--pr-trust-green)" }}>Agent registered</p>
           <p className="text-sm mb-4" style={{ color: "var(--pr-text-secondary)" }}>
-            "{registeredName}" now exists in "Registered" status -- not yet operational. Activate it
-            before it can sign requests and be checked against your rules.
+            "{registeredName}" now exists in "Registered" status -- not yet operational. It needs to be
+            activated before it can sign requests and be checked against your rules
+            {canActivate ? "." : ", which requires the agent.activate permission your signed-in role doesn't carry."}
           </p>
           <div className="flex gap-2">
-            <Button onClick={() => navigate(`/agents/${registeredId}`)}>Go to agent &amp; activate</Button>
+            <Button onClick={() => navigate(`/agents/${registeredId}`)}>
+              {canActivate ? "Go to agent & activate" : "Go to agent"}
+            </Button>
             <Button variant="ghost" onClick={() => { setRegisteredName(null); setRegisteredId(null); setName(""); }}>
               Register another
             </Button>
@@ -103,10 +109,21 @@ export function AgentRegisterPage() {
     <div className="p-8 max-w-xl mx-auto" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
       <Link to="/agents" style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>&lt; Back to Agents</Link>
       <h1 className="mt-2 mb-2" style={{ color: "var(--pr-text-primary)" }}>Register an agent</h1>
-      <p style={{ color: "var(--pr-text-muted)", fontSize: 13, marginBottom: 24 }}>
+      <p style={{ color: "var(--pr-text-muted)", fontSize: 13, marginBottom: 16 }}>
         Gives an AI agent an identity, a signing keypair generated in this browser, and the principal
         whose delegated authority it will act under. It won't be operational until you activate it.
       </p>
+
+      <div
+        className="flex items-start gap-2 p-3 rounded-lg mb-6"
+        style={{ backgroundColor: "var(--pr-overlay-05)" }}
+      >
+        <Info className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "var(--pr-text-muted)" }} />
+        <p className="text-sm" style={{ color: "var(--pr-text-secondary)" }}>
+          This creates an identity, not authority. What this agent is actually allowed to do is
+          decided separately, in Governance, once it's active.
+        </p>
+      </div>
 
       <Card padding={24}>
         <div className="grid grid-cols-1 gap-4 mb-4">
