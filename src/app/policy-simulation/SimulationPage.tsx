@@ -9,6 +9,8 @@ import { FieldLabel } from "../components/ui/label";
 import { Input, getInputStyle } from "../components/ui/input";
 import { Button } from "../components/ui/button";
 import { Alert } from "../components/ui/alert";
+import { PageHeader } from "../components/ui/page-header";
+import { FlaskConical } from "lucide-react";
 import { describeApiError } from "../live/format";
 
 // Runtime Policy Simulator (Authority Intelligence Program, Phase 4,
@@ -176,15 +178,10 @@ export function PolicySimulationPage() {
       <Link to={`/governance/${policyKey}`} style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>
         &lt; Back
       </Link>
-      <div className="flex items-center gap-3 mt-2 mb-1">
-        <h1 style={{ color: "var(--pr-text-primary)" }}>Simulation</h1>
-        <span style={{ color: "var(--pr-text-muted)" }}>{policy.name} (v{policy.version})</span>
-      </div>
-      <p style={{ color: "var(--pr-text-muted)", fontSize: 12, marginBottom: 24, maxWidth: 720 }}>
-        A dry run of Runtime Authority: this executes the exact same OPA evaluation production uses,
-        isolated from it entirely. It never modifies this policy or any other, and nothing simulated
-        here is ever persisted as a real Decision or Evidence record.
-      </p>
+      <PageHeader
+        title="Simulation"
+        description={`${policy.name} (v${policy.version}): a dry run of Runtime Authority, isolated from production. It never modifies this policy or any other, and nothing simulated here is ever persisted as a real Decision or Evidence record.`}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* LEFT: Simulation Inputs */}
@@ -357,9 +354,18 @@ export function PolicySimulationPage() {
             </Card>
           ) : (
             <>
-              <Card style={{ textAlign: "center", marginBottom: 16 }}>
+              <div
+                className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg"
+                style={{ backgroundColor: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)" }}
+              >
+                <FlaskConical className="w-4 h-4 flex-shrink-0" style={{ color: "var(--pr-warning-amber)" }} />
+                <span style={{ color: "var(--pr-warning-amber)", fontSize: 12, fontWeight: 600 }}>
+                  SIMULATED RESULT &middot; not a real Decision, not persisted as Evidence
+                </span>
+              </div>
+              <Card style={{ textAlign: "center", marginBottom: 16 }} borderColor="rgba(245,158,11,0.25)">
                 <div style={{ fontSize: 11, color: "var(--pr-text-muted)", textTransform: "uppercase", marginBottom: 10 }}>
-                  Runtime Decision
+                  Simulated Runtime Decision
                 </div>
                 <DecisionBadge decision={result.decision} />
                 {(result.review_reason || result.deny_reason) && (

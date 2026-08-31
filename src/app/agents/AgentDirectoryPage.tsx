@@ -18,6 +18,7 @@ import { ConfirmButton } from "../components/ui/confirm-button";
 import { PageHeader } from "../components/ui/page-header";
 import { EmptyState } from "../components/ui/empty-state";
 import { AgentIdentity } from "../components/ui/agent-identity";
+import { Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell } from "../components/ui/table";
 
 const BULK_ACTION_LABEL: Record<"suspend" | "activate" | "retire" | "rotate", string> = {
   suspend: "suspend",
@@ -223,10 +224,10 @@ export function AgentDirectoryPage() {
 
       <Card padding={0} style={{ overflow: "hidden" }}>
         <div className="overflow-x-auto">
-        <table className="w-full text-sm" style={{ color: "var(--pr-text-primary)" }}>
-          <thead>
-            <tr style={{ color: "var(--pr-text-muted)", textAlign: "left", fontSize: 12, borderBottom: "1px solid var(--pr-overlay-05)" }}>
-              <th className="p-3" style={{ width: 32 }}>
+        <Table>
+          <TableHead>
+            <TableRow style={{ color: "var(--pr-text-muted)", textAlign: "left", fontSize: 12, borderTop: "none", borderBottom: "1px solid var(--pr-overlay-05)" }}>
+              <TableHeaderCell style={{ width: 32 }}>
                 {agents && agents.length > 0 && (
                   <input
                     type="checkbox"
@@ -235,58 +236,57 @@ export function AgentDirectoryPage() {
                     aria-label="Select all agents on this page"
                   />
                 )}
-              </th>
-              <th className="p-3">Name</th>
-              <th className="p-3">Principal</th>
-              <th className="p-3">Owner</th>
-              <th className="p-3">Environment</th>
-              <th className="p-3">Status</th>
-              <th className="p-3">Certificate</th>
-              <th className="p-3">Last seen</th>
-              <th className="p-3">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
+              </TableHeaderCell>
+              <TableHeaderCell>Name</TableHeaderCell>
+              <TableHeaderCell>Principal</TableHeaderCell>
+              <TableHeaderCell>Owner</TableHeaderCell>
+              <TableHeaderCell>Environment</TableHeaderCell>
+              <TableHeaderCell>Status</TableHeaderCell>
+              <TableHeaderCell>Certificate</TableHeaderCell>
+              <TableHeaderCell>Last seen</TableHeaderCell>
+              <TableHeaderCell>Actions</TableHeaderCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
             {!agents && (
-              <tr>
-                <td colSpan={9} className="p-3">
+              <TableRow>
+                <TableCell colSpan={9} truncate={false}>
                   <SkeletonRows count={5} height={20} />
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
             {agents?.map((a) => {
               const rowAction = rowActionFor(a);
               return (
-                <tr
+                <TableRow
                   key={a.id}
                   className="transition-colors"
-                  style={{ borderTop: "1px solid var(--pr-overlay-05)" }}
                   onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--pr-bg-hover)")}
                   onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
                 >
-                  <td className="p-3">
+                  <TableCell truncate={false}>
                     <input
                       type="checkbox"
                       checked={selected.has(a.id)}
                       onChange={() => toggleSelected(a.id)}
                       aria-label={`Select ${a.name}`}
                     />
-                  </td>
-                  <td className="p-3">
+                  </TableCell>
+                  <TableCell truncate={false}>
                     <Link to={`/agents/${a.id}`} className="flex items-center gap-2" style={{ color: "var(--pr-authority-blue)" }}>
                       <AgentIdentity name={a.name} status={a.status} size="sm" />
-                      {a.name}
+                      <span className="truncate">{a.name}</span>
                     </Link>
-                  </td>
-                  <td className="p-3" style={{ color: "var(--pr-text-muted)" }}>{principalById[a.acting_for_principal_id] ?? "-"}</td>
-                  <td className="p-3" style={{ color: "var(--pr-text-muted)" }}>{a.owner ?? "-"}</td>
-                  <td className="p-3" style={{ color: "var(--pr-text-muted)" }}>{a.environment ?? "-"}</td>
-                  <td className="p-3"><AgentStatusBadge status={a.status} /></td>
-                  <td className="p-3" style={{ color: "var(--pr-text-muted)", fontSize: 12, fontFamily: "monospace" }}>
+                  </TableCell>
+                  <TableCell style={{ color: "var(--pr-text-muted)" }} truncate={false}>{principalById[a.acting_for_principal_id] ?? "-"}</TableCell>
+                  <TableCell style={{ color: "var(--pr-text-muted)" }} truncate={false}>{a.owner ?? "-"}</TableCell>
+                  <TableCell style={{ color: "var(--pr-text-muted)" }} truncate={false}>{a.environment ?? "-"}</TableCell>
+                  <TableCell truncate={false}><AgentStatusBadge status={a.status} /></TableCell>
+                  <TableCell style={{ color: "var(--pr-text-muted)", fontSize: 12, fontFamily: "monospace" }} truncate={false}>
                     {a.certificate_status ?? "none"}
-                  </td>
-                  <td className="p-3"><HealthDot health={a.health} /></td>
-                  <td className="p-3">
+                  </TableCell>
+                  <TableCell truncate={false}><HealthDot health={a.health} /></TableCell>
+                  <TableCell truncate={false}>
                     {rowAction && rowAction.action === "suspend" ? (
                       <ConfirmButton
                         size="sm"
@@ -308,8 +308,8 @@ export function AgentDirectoryPage() {
                         {pendingRowId === a.id ? "Working..." : rowAction.label}
                       </button>
                     )}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
             {agents?.length === 0 && (() => {
@@ -323,8 +323,8 @@ export function AgentDirectoryPage() {
               // real signal, not whether this query's own total is 0.
               const filtersActive = !!(q || statusFilter || environmentFilter);
               return (
-                <tr>
-                  <td colSpan={9}>
+                <TableRow>
+                  <TableCell colSpan={9} truncate={false}>
                     <EmptyState
                       icon={Bot}
                       title={filtersActive ? "No agents match these filters" : "No agents yet"}
@@ -341,12 +341,12 @@ export function AgentDirectoryPage() {
                         ) : undefined
                       }
                     />
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })()}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
         </div>
       </Card>
 

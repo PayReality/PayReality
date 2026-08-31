@@ -20,6 +20,9 @@ import { Alert } from "../components/ui/alert";
 import { policyLifecycleApi } from "./lifecycleApi";
 import { useAuth } from "../auth/AuthContext";
 import { useResourceSync } from "../services/resourceSync";
+import { PageHeader } from "../components/ui/page-header";
+import { AuthorityChain } from "../components/ui/authority-chain";
+import { ShieldCheck, FileCheck } from "lucide-react";
 
 const EMPTY: RuntimePolicyRequest = {
   name: "",
@@ -217,24 +220,28 @@ export function PolicyWorkspacePage() {
 
   return (
     <div className="p-8 max-w-3xl" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-2">
         <Link to="/governance" style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>
           &lt; Back to Governance
         </Link>
-        <Button onClick={handleSave} disabled={saving}>
-          {saving ? "Saving..." : "Save draft"}
-        </Button>
       </div>
 
-      <div className="mb-6 flex items-center gap-3">
-        <h1 style={{ color: "var(--pr-text-primary)" }}>{form.name || "New Rule"}</h1>
-        {existing && (
-          <>
-            <span style={{ color: "var(--pr-text-muted)" }}>v{existing.version}</span>
-            <PolicyStatusBadge status={existing.status} />
-          </>
-        )}
-      </div>
+      <PageHeader
+        title={form.name || "New Rule"}
+        status={
+          existing && (
+            <span className="flex items-center gap-2">
+              <span style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>v{existing.version}</span>
+              <PolicyStatusBadge status={existing.status} />
+            </span>
+          )
+        }
+        primaryAction={
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? "Saving..." : "Save draft"}
+          </Button>
+        }
+      />
 
       {message && (
         <p role="alert" style={{ color: "var(--pr-text-secondary)", marginBottom: 16 }}>{message}</p>
@@ -423,27 +430,17 @@ export function PolicyWorkspacePage() {
           </p>
         </div>
         {(form.constraints.authority_id || form.constraints.mandate_id) && (
-          <div
-            className="grid grid-cols-2 gap-4 mt-4 p-3"
-            data-tour="policy-authority-block"
-            style={{ borderLeft: "3px solid var(--pr-authority-blue)", backgroundColor: "var(--pr-overlay-04)", borderRadius: 6 }}
-          >
-            {form.constraints.authority_id && (
-              <div>
-                <p style={{ fontSize: 12, color: "var(--pr-authority-blue)", fontWeight: 600, display: "block", marginBottom: 4 }}>Authority</p>
-                <p style={{ fontSize: 13, color: "var(--pr-text-primary)", fontFamily: "monospace" }}>
-                  {form.constraints.authority_id}
-                </p>
-              </div>
-            )}
-            {form.constraints.mandate_id && (
-              <div>
-                <p style={{ fontSize: 12, color: "var(--pr-authority-blue)", fontWeight: 600, display: "block", marginBottom: 4 }}>Mandate</p>
-                <p style={{ fontSize: 13, color: "var(--pr-text-primary)", fontFamily: "monospace" }}>
-                  {form.constraints.mandate_id}
-                </p>
-              </div>
-            )}
+          <div className="mt-4" data-tour="policy-authority-block">
+            <AuthorityChain
+              links={[
+                ...(form.constraints.authority_id
+                  ? [{ icon: ShieldCheck, label: "Authority", value: form.constraints.authority_id }]
+                  : []),
+                ...(form.constraints.mandate_id
+                  ? [{ icon: FileCheck, label: "Mandate", value: form.constraints.mandate_id }]
+                  : []),
+              ]}
+            />
           </div>
         )}
       </Card>

@@ -10,6 +10,7 @@ import type { LivePrincipal } from "../live/types";
 import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
+import { PageHeader } from "../components/ui/page-header";
 
 // Core Product Experience Redesign, section 3A: Agent Registry --
 // the registration/machine-identity workflow, split out of the Agents
@@ -108,11 +109,10 @@ export function AgentRegisterPage() {
   return (
     <div className="p-8 max-w-xl mx-auto" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
       <Link to="/agents" style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>&lt; Back to Agents</Link>
-      <h1 className="mt-2 mb-2" style={{ color: "var(--pr-text-primary)" }}>Register an agent</h1>
-      <p style={{ color: "var(--pr-text-muted)", fontSize: 13, marginBottom: 16 }}>
-        Gives an AI agent an identity, a signing keypair generated in this browser, and the principal
-        whose delegated authority it will act under. It won't be operational until you activate it.
-      </p>
+      <PageHeader
+        title="Register an agent"
+        description="Gives an AI agent an identity, a signing keypair generated in this browser, and the principal whose delegated authority it will act under. It won't be operational until you activate it."
+      />
 
       <div
         className="flex items-start gap-2 p-3 rounded-lg mb-6"

@@ -18,6 +18,7 @@ import { PageHeader } from "../../components/ui/page-header";
 import { EmptyState } from "../../components/ui/empty-state";
 import { DecisionOutcomeBadge } from "../../components/ui/decision-outcome-badge";
 import { AgentIdentity } from "../../components/ui/agent-identity";
+import { Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell } from "../../components/ui/table";
 import type { DecisionHistoryItem, LiveAgent } from "../types";
 
 const PAGE_SIZE = 25;
@@ -168,67 +169,66 @@ export function DecisionHistoryPage() {
 
       <Card padding={0} style={{ overflow: "hidden" }}>
         <div className="overflow-x-auto">
-        <table className="w-full text-sm" style={{ color: "var(--pr-text-primary)" }}>
-          <thead>
-            <tr style={{ color: "var(--pr-text-muted)", textAlign: "left", fontSize: 12, borderBottom: "1px solid var(--pr-overlay-05)" }}>
-              <th className="p-3">Time</th>
-              <th className="p-3">Agent</th>
-              <th className="p-3">Action</th>
-              <th className="p-3">Resource</th>
-              <th className="p-3">Outcome</th>
-              <th className="p-3">Policy</th>
-              <th className="p-3">Source</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table>
+          <TableHead>
+            <TableRow style={{ color: "var(--pr-text-muted)", textAlign: "left", fontSize: 12, borderTop: "none", borderBottom: "1px solid var(--pr-overlay-05)" }}>
+              <TableHeaderCell>Time</TableHeaderCell>
+              <TableHeaderCell>Agent</TableHeaderCell>
+              <TableHeaderCell>Action</TableHeaderCell>
+              <TableHeaderCell>Resource</TableHeaderCell>
+              <TableHeaderCell>Outcome</TableHeaderCell>
+              <TableHeaderCell>Policy</TableHeaderCell>
+              <TableHeaderCell>Source</TableHeaderCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
             {!decisions && (
-              <tr><td colSpan={7} className="p-3"><SkeletonRows count={6} height={20} /></td></tr>
+              <TableRow><TableCell colSpan={7} truncate={false}><SkeletonRows count={6} height={20} /></TableCell></TableRow>
             )}
             {decisions?.map((d) => (
-              <tr
+              <TableRow
                 key={d.id}
                 tabIndex={0}
                 role="button"
                 aria-label={`View decision: ${formatStatus(d.action)}, ${formatStatus(d.outcome)}`}
                 className="transition-colors cursor-pointer"
-                style={{ borderTop: "1px solid var(--pr-overlay-05)" }}
                 onClick={() => navigate(`/decisions/${d.id}`)}
                 onKeyDown={(e) => { if (e.key === "Enter") navigate(`/decisions/${d.id}`); }}
                 onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--pr-bg-hover)")}
                 onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
               >
-                <td className="p-3" style={{ color: "var(--pr-text-muted)", fontSize: 12, whiteSpace: "nowrap" }}>
+                <TableCell style={{ color: "var(--pr-text-muted)", fontSize: 12, whiteSpace: "nowrap" }} truncate={false}>
                   {new Date(d.created_at).toLocaleString()}
-                </td>
-                <td className="p-3">
+                </TableCell>
+                <TableCell truncate={false}>
                   <span className="flex items-center gap-2">
                     <AgentIdentity name={d.agent_name ?? d.agent_id} size="sm" />
-                    {d.agent_name ?? d.agent_id}
+                    <span className="truncate">{d.agent_name ?? d.agent_id}</span>
                   </span>
-                </td>
-                <td className="p-3">{formatStatus(d.action)}</td>
-                <td className="p-3" style={{ color: "var(--pr-text-muted)" }}>{d.resource ?? "-"}</td>
-                <td className="p-3">
+                </TableCell>
+                <TableCell truncate={false}>{formatStatus(d.action)}</TableCell>
+                <TableCell style={{ color: "var(--pr-text-muted)" }}>{d.resource ?? "-"}</TableCell>
+                <TableCell truncate={false}>
                   <DecisionOutcomeBadge outcome={d.outcome} size="sm" />
                   {d.human_review_state === "pending" && (
                     <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--pr-warning-amber)" }}>
                       Awaiting review
                     </span>
                   )}
-                </td>
-                <td className="p-3" style={{ color: "var(--pr-text-muted)", fontSize: 12 }}>
+                </TableCell>
+                <TableCell style={{ color: "var(--pr-text-muted)", fontSize: 12 }}>
                   {d.matched_policy_name ?? (describeReason(d.reason) ? describeReason(d.reason) : "-")}
-                </td>
-                <td className="p-3" style={{ color: "var(--pr-text-disabled)", fontSize: 12, whiteSpace: "nowrap" }} title={describeSource(d.source)}>
+                </TableCell>
+                <TableCell style={{ color: "var(--pr-text-disabled)", fontSize: 12, whiteSpace: "nowrap" }} title={describeSource(d.source)} truncate={false}>
                   {describeSourceCompact(d.source)}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
             {decisions?.length === 0 && (() => {
               const noFilters = !outcomeFilter && !sourceFilter && !agentFilter && !actionFilter && !resourceFilter;
               return (
-                <tr>
-                  <td colSpan={7}>
+                <TableRow>
+                  <TableCell colSpan={7} truncate={false}>
                     <EmptyState
                       icon={History}
                       title={total === 0 && noFilters ? "No decisions yet" : "No decisions match these filters"}
@@ -245,12 +245,12 @@ export function DecisionHistoryPage() {
                         ) : undefined
                       }
                     />
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })()}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
         </div>
       </Card>
 

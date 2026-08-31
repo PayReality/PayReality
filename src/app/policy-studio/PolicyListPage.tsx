@@ -12,6 +12,7 @@ import { Select } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { PageHeader } from "../components/ui/page-header";
 import { EmptyState } from "../components/ui/empty-state";
+import { Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell } from "../components/ui/table";
 import { ShieldCheck } from "lucide-react";
 
 type SortKey = "name" | "version" | "status" | "created_at" | "owner";
@@ -96,7 +97,7 @@ export function PolicyListPage() {
         description="Where your organization's authority is established: the rules that decide what an agent may do, and on whose delegated authority."
         status={<HelpIcon articleId="runtime_policy" />}
       />
-      <div className="flex items-center gap-3 mb-4">
+      <div className="flex items-center flex-wrap gap-3 mb-4">
         <Link to="/governance/dashboard" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
           Dashboard
         </Link>
@@ -105,21 +106,21 @@ export function PolicyListPage() {
         </Link>
         <Link
           to="/governance/new"
-          className="px-4 py-2 rounded-lg text-sm font-medium border ml-auto"
+          className="px-4 py-2 rounded-lg text-sm font-medium border sm:ml-auto flex-shrink-0"
           style={{ borderColor: "var(--pr-authority-blue)", color: "var(--pr-authority-blue)" }}
         >
           + Write a rule
         </Link>
         <Link
           to="/governance/authority-builder"
-          className="px-4 py-2 rounded-lg text-sm font-medium"
+          className="px-4 py-2 rounded-lg text-sm font-medium flex-shrink-0"
           style={{ backgroundColor: "var(--pr-authority-blue)", color: "#fff" }}
         >
           Discover from documents
         </Link>
       </div>
 
-      <div className="flex gap-3 mb-4">
+      <div className="flex flex-wrap gap-3 mb-4">
         <input
           aria-label="Search policies by name"
           value={search}
@@ -199,61 +200,60 @@ export function PolicyListPage() {
 
       {policies && (
         <div className="overflow-x-auto">
-        <table className="w-full text-sm" style={{ color: "var(--pr-text-primary)" }}>
-          <thead>
-            <tr style={{ color: "var(--pr-text-muted)", textAlign: "left", fontSize: 12 }}>
+        <Table>
+          <TableHead>
+            <TableRow style={{ borderTop: "none" }}>
               {COLUMNS.map((col) => (
-                <th key={col.key} className="pb-2">
+                <TableHeaderCell key={col.key}>
                   <button
                     onClick={() => toggleSort(col.key)}
-                    className="flex items-center gap-1"
-                    style={{ color: "inherit", fontSize: 12, fontWeight: sortKey === col.key ? 600 : 400 }}
+                    className="flex items-center gap-1 uppercase tracking-wide"
+                    style={{ color: "inherit", fontWeight: sortKey === col.key ? 600 : 400 }}
                     aria-label={`Sort by ${col.label}`}
                   >
                     {col.label}
                     {sortKey === col.key && <span aria-hidden="true">{sortDir === "asc" ? "↑" : "↓"}</span>}
                   </button>
-                </th>
+                </TableHeaderCell>
               ))}
-              <th className="pb-2" title="Whether this policy enforces a resolved Authority Builder Authority, or free-text delegation only">Authority source</th>
-            </tr>
-          </thead>
-          <tbody>
+              <TableHeaderCell title="Whether this policy enforces a resolved Authority Builder Authority, or free-text delegation only">Authority source</TableHeaderCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
             {visible.map((p) => (
-              <tr
+              <TableRow
                 key={p.policy_key}
                 className="transition-colors"
-                style={{ borderTop: "1px solid var(--pr-overlay-05)" }}
                 onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--pr-bg-hover)")}
                 onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
               >
-                <td className="py-2">
+                <TableCell truncate={false}>
                   <Link to={`/governance/${p.policy_key}`} style={{ color: "var(--pr-authority-blue)" }}>
                     {p.name}
                   </Link>
-                </td>
-                <td className="py-2">v{p.version}</td>
-                <td className="py-2">
+                </TableCell>
+                <TableCell truncate={false}>v{p.version}</TableCell>
+                <TableCell truncate={false}>
                   <PolicyStatusBadge status={p.status} />
-                </td>
-                <td className="py-2" style={{ color: "var(--pr-text-muted)" }}>
+                </TableCell>
+                <TableCell style={{ color: "var(--pr-text-muted)" }} truncate={false}>
                   {new Date(p.created_at).toLocaleDateString()}
-                </td>
-                <td className="py-2" style={{ color: "var(--pr-text-muted)" }}>
+                </TableCell>
+                <TableCell style={{ color: "var(--pr-text-muted)" }} truncate={false}>
                   {p.metadata.owner ?? "N/A"}
-                </td>
-                <td className="py-2" style={{ fontSize: 12 }} title={p.constraints.authority_id ? "This policy enforces a resolved Authority Builder Authority" : "This policy's delegated_by is free text, not linked to a resolved Authority"}>
+                </TableCell>
+                <TableCell style={{ fontSize: 12 }} title={p.constraints.authority_id ? "This policy enforces a resolved Authority Builder Authority" : "This policy's delegated_by is free text, not linked to a resolved Authority"} truncate={false}>
                   {p.constraints.authority_id ? (
                     <span style={{ color: "var(--pr-authority-blue)" }}>Linked authority</span>
                   ) : (
                     <span style={{ color: "var(--pr-text-muted)" }}>Free-text only</span>
                   )}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
             {visible.length === 0 && (
-              <tr>
-                <td colSpan={6}>
+              <TableRow>
+                <TableCell colSpan={6} truncate={false}>
                   <EmptyState
                     icon={ShieldCheck}
                     title={policies.length === 0 ? "No policies yet" : "No policies match your filters"}
@@ -263,11 +263,11 @@ export function PolicyListPage() {
                         : "Try a different search or status."
                     }
                   />
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
         </div>
       )}
     </div>

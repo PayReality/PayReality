@@ -29,10 +29,23 @@ const ROUTES = [
   { path: "/assurance", name: "assurance" },
   { path: "/organization/integrations", name: "integrations-list" },
   { path: "/agents/register", name: "agent-register" },
+  // Product Experience V3.1: remaining surface migration
+  { path: "/decisions/queue", name: "pending-review-queue" },
+  { path: "/governance/approvals", name: "governance-approvals" },
+  { path: "/governance/vendor-payment-under-50k", name: "policy-workspace" },
+  { path: "/governance/vendor-payment-under-50k/versions", name: "policy-versions" },
+  { path: "/governance/vendor-payment-under-50k/publish", name: "policy-publish" },
+  { path: "/governance/vendor-payment-under-50k/simulate", name: "policy-simulate" },
+  { path: "/governance/upload", name: "ai-policy-builder-upload" },
+  { path: "/governance/authority-builder", name: "ai-authority-builder-upload" },
+  { path: "/organization/users", name: "users" },
+  { path: "/organization/platform", name: "platform-organizations" },
 ];
 
 const VIEWPORTS = [
   { width: 1440, height: 900, name: "desktop" },
+  { width: 1280, height: 900, name: "laptop" },
+  { width: 768, height: 1024, name: "tablet" },
   { width: 390, height: 844, name: "mobile" },
 ];
 

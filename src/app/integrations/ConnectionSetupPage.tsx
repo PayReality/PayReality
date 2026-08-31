@@ -13,6 +13,7 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Select } from "../components/ui/select";
 import { SkeletonRows } from "../components/ui/skeleton";
+import { PageHeader } from "../components/ui/page-header";
 import type { LiveAgent } from "../live/types";
 import type { ActionMapping, IntegrationSystem, TrustedConnection } from "./types";
 
@@ -255,12 +256,10 @@ export function ConnectionSetupPage() {
       <Link to={`/organization/integrations/${system.id}`} className="text-sm inline-flex items-center gap-1.5 mb-4" style={{ color: "var(--pr-text-muted)" }}>
         <ArrowLeft className="w-3.5 h-3.5" /> {system.external_system_label}
       </Link>
-      <h1 className="mb-2" style={{ color: "var(--pr-text-primary)" }}>Set up a runtime connection</h1>
-      <p style={{ color: "var(--pr-text-muted)", fontSize: 13, marginBottom: 24 }}>
-        A runtime connection is what actually makes an approved action mapping usable: a trusted
-        connection, one approved mapping, one environment, and the exact agents allowed to use it.
-        Nothing here affects production until you activate it.
-      </p>
+      <PageHeader
+        title="Set up a runtime connection"
+        description="A runtime connection is what actually makes an approved action mapping usable: a trusted connection, one approved mapping, one environment, and the exact agents allowed to use it. Nothing here affects production until you activate it."
+      />
 
       {!draftId && (
         <>

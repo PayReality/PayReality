@@ -6,6 +6,11 @@ import { describeApiError, formatStatus } from "../live/format";
 import { AiComingSoonBanner } from "../components/AiComingSoonBanner";
 import { NextStepGuidance } from "../help/NextStepGuidance";
 import { track } from "../services/analytics";
+import { PageHeader } from "../components/ui/page-header";
+import { EmptyState } from "../components/ui/empty-state";
+import { StatusBadge } from "../components/ui/status-badge";
+import { Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell } from "../components/ui/table";
+import { Sparkles, FileCode2 } from "lucide-react";
 
 const STATUS_COLOR: Record<string, string> = {
   uploaded: "var(--pr-text-muted)",
@@ -59,12 +64,20 @@ export function AIPolicyBuilderUploadPage() {
 
   return (
     <div className="p-8 max-w-3xl" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-      <h1 className="mb-2" style={{ color: "var(--pr-text-primary)" }}>AI Policy Builder</h1>
-      <p style={{ color: "var(--pr-text-muted)", fontSize: 13, marginBottom: 8, maxWidth: 560 }}>
-        Upload an enterprise authority document (PDF, Word, Excel, CSV, or plain text). It is analyzed
-        into candidate Runtime Policies, each with a confidence score and any fields the model could
-        not determine highlighted. Nothing is created until you review and promote a candidate.
-      </p>
+      <PageHeader
+        title="AI Policy Builder"
+        description="Upload an enterprise authority document (PDF, Word, Excel, CSV, or plain text). It is analyzed into candidate Runtime Policies, each with a confidence score and any fields the model could not determine highlighted."
+      />
+      <div
+        className="flex items-start gap-2 mb-4 px-3 py-2 rounded-lg"
+        style={{ backgroundColor: "var(--pr-overlay-05)" }}
+      >
+        <Sparkles className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "var(--pr-authority-blue)" }} />
+        <p className="text-sm" style={{ color: "var(--pr-text-secondary)" }}>
+          The AI only interprets and proposes; it does not create organizational authority. Nothing
+          becomes a real rule until a human with Governance permission reviews and promotes a candidate.
+        </p>
+      </div>
       <p style={{ color: "var(--pr-text-disabled)", fontSize: 12, marginBottom: 16, maxWidth: 560 }}>
         For most organisations, start with the{" "}
         <Link to="/governance/authority-builder" style={{ color: "var(--pr-authority-blue)" }}>
@@ -107,45 +120,44 @@ export function AIPolicyBuilderUploadPage() {
       )}
 
       <h2 className="text-sm font-medium mb-3 mt-6" style={{ color: "var(--pr-text-primary)" }}>Past uploads</h2>
-      <table className="w-full text-sm" style={{ color: "var(--pr-text-primary)" }}>
-        <thead>
-          <tr style={{ color: "var(--pr-text-muted)", textAlign: "left", fontSize: 12 }}>
-            <th className="pb-2">Filename</th>
-            <th className="pb-2">Format</th>
-            <th className="pb-2">Status</th>
-            <th className="pb-2">Uploaded</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table>
+        <TableHead>
+          <TableRow style={{ borderTop: "none" }}>
+            <TableHeaderCell>Filename</TableHeaderCell>
+            <TableHeaderCell>Format</TableHeaderCell>
+            <TableHeaderCell>Status</TableHeaderCell>
+            <TableHeaderCell>Uploaded</TableHeaderCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
           {uploads?.map((u) => (
-            <tr
+            <TableRow
               key={u.upload_id}
               className="transition-colors"
-              style={{ borderTop: "1px solid var(--pr-overlay-05)" }}
               onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--pr-bg-hover)")}
               onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
             >
-              <td className="py-2">
+              <TableCell truncate={false}>
                 <Link to={`/governance/upload/${u.upload_id}`} style={{ color: "var(--pr-authority-blue)" }}>
                   {u.filename}
                 </Link>
-              </td>
-              <td className="py-2 uppercase" style={{ color: "var(--pr-text-muted)", fontSize: 12 }}>{u.format}</td>
-              <td className="py-2" style={{ color: STATUS_COLOR[u.status] }}>{formatStatus(u.status)}</td>
-              <td className="py-2" style={{ color: "var(--pr-text-muted)" }}>
+              </TableCell>
+              <TableCell className="uppercase" style={{ color: "var(--pr-text-muted)", fontSize: 12 }} truncate={false}>{u.format}</TableCell>
+              <TableCell truncate={false}><StatusBadge color={STATUS_COLOR[u.status]} label={formatStatus(u.status)} /></TableCell>
+              <TableCell style={{ color: "var(--pr-text-muted)" }} truncate={false}>
                 {new Date(u.uploaded_at).toLocaleString()}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
           {uploads?.length === 0 && (
-            <tr>
-              <td colSpan={4} className="py-6 text-center" style={{ color: "var(--pr-text-muted)" }}>
-                No uploads yet.
-              </td>
-            </tr>
+            <TableRow>
+              <TableCell colSpan={4} truncate={false}>
+                <EmptyState icon={FileCode2} title="No uploads yet" description="Upload a document above to see AI-proposed candidate policies here." />
+              </TableCell>
+            </TableRow>
           )}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }

@@ -10,6 +10,7 @@ import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { ConfirmButton } from "../components/ui/confirm-button";
 import { Skeleton, SkeletonRows } from "../components/ui/skeleton";
+import { PageHeader } from "../components/ui/page-header";
 import { useAuth } from "../auth/AuthContext";
 import type { PolicyDiff, RuntimePolicy } from "./types";
 
@@ -89,10 +90,7 @@ export function VersionsPage() {
       <Link to={`/governance/${policyKey}`} style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>
         &lt; Back
       </Link>
-      <h1 className="mt-2 mb-2" style={{ color: "var(--pr-text-primary)" }}>History</h1>
-      <p style={{ color: "var(--pr-text-muted)", fontSize: 12, marginBottom: 16 }}>
-        Select any two versions to compare what changed between them.
-      </p>
+      <PageHeader title="History" description="Select any two versions to compare what changed between them." />
 
       {versionsError && (
         <Alert severity="warning" style={{ marginBottom: 12 }}>

@@ -16,6 +16,7 @@ import { Input, getInputStyle } from "../components/ui/input";
 import { Button } from "../components/ui/button";
 import { ConfirmButton } from "../components/ui/confirm-button";
 import { Alert } from "../components/ui/alert";
+import { PageHeader } from "../components/ui/page-header";
 
 // Replaces the three separate Compile / Dry Run / Deployment pages
 // (PAYREALITY_UX_REVIEW.md, "getting one rule from idea to production
@@ -210,11 +211,11 @@ export function PublishPage() {
       <Link to={`/governance/${policyKey}`} style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>
         &lt; Back
       </Link>
-      <div className="flex items-center gap-3 mt-2 mb-6">
-        <h1 style={{ color: "var(--pr-text-primary)" }}>Publish</h1>
-        <span style={{ color: "var(--pr-text-muted)" }}>{policy.name} (v{policy.version})</span>
-        <PolicyStatusBadge status={policy.status} />
-      </div>
+      <PageHeader
+        title="Publish"
+        description={`${policy.name} (v${policy.version})`}
+        status={<PolicyStatusBadge status={policy.status} />}
+      />
 
       {/* Step 1: check for errors */}
       <Card style={{ marginBottom: 16 }}>

@@ -217,22 +217,12 @@ export const router = createBrowserRouter([
       },
     ],
   },
-  // Visual System V3: five representative prototypes exercising the new
-  // token/component set against real demo data, reachable only by
-  // direct URL, deliberately a sibling of the real app's Layout-
-  // wrapped tree above, not nested inside it, since these render their
-  // own PrototypeShell chrome rather than the real sidebar/nav. Never
-  // linked from Layout.tsx; not a shipped product surface.
-  {
-    path: "/_design-system",
-    errorElement: <RouteErrorBoundary />,
-    children: [
-      { index: true, lazy: () => import("./design-system/DesignSystemGallery").then((m) => ({ Component: m.DesignSystemGallery })) },
-      { path: "overview", lazy: () => import("./design-system/prototypes/OverviewPrototype").then((m) => ({ Component: m.OverviewPrototype })) },
-      { path: "agent-detail", lazy: () => import("./design-system/prototypes/AgentDetailPrototype").then((m) => ({ Component: m.AgentDetailPrototype })) },
-      { path: "decision-detail", lazy: () => import("./design-system/prototypes/DecisionDetailPrototype").then((m) => ({ Component: m.DecisionDetailPrototype })) },
-      { path: "integration-detail", lazy: () => import("./design-system/prototypes/IntegrationDetailPrototype").then((m) => ({ Component: m.IntegrationDetailPrototype })) },
-      { path: "receipt", lazy: () => import("./design-system/prototypes/ReceiptPrototype").then((m) => ({ Component: m.ReceiptPrototype })) },
-    ],
-  },
+  // Visual System V3's five prototype routes (/_design-system/*) were
+  // removed from the production route bundle in Product Experience
+  // V3.1: every page they demonstrated (Overview, Agent Detail, Decision
+  // Detail, Integration Detail, Receipt) now has a shipped real
+  // equivalent using the same components, so the prototypes no longer
+  // serve a purpose reachable from here. The source files themselves
+  // stay in the repo under src/app/design-system/ as design reference,
+  // just no longer routed.
 ]);

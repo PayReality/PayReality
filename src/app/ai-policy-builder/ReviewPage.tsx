@@ -4,6 +4,9 @@ import { aiPolicyBuilderApi } from "./api";
 import type { Candidate } from "./types";
 import { CandidateCard } from "./components/CandidateCard";
 import { AiComingSoonBanner } from "../components/AiComingSoonBanner";
+import { PageHeader } from "../components/ui/page-header";
+import { EmptyState } from "../components/ui/empty-state";
+import { FileCode2 } from "lucide-react";
 
 export function AIPolicyBuilderReviewPage() {
   const { uploadId } = useParams();
@@ -24,17 +27,19 @@ export function AIPolicyBuilderReviewPage() {
       <Link to="/governance/upload" style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>
         &lt; Back to uploads
       </Link>
-      <h1 className="mt-2 mb-6" style={{ color: "var(--pr-text-primary)" }}>
-        Candidate Runtime Policies ({candidates?.length ?? 0})
-      </h1>
+      <PageHeader
+        title={`Candidate Runtime Policies (${candidates?.length ?? 0})`}
+        description="AI-proposed, not yet real authority. Review, edit, and promote each candidate individually."
+      />
 
       {!aiEnabled && <AiComingSoonBanner />}
 
       {candidates?.length === 0 && (
-        <p style={{ color: "var(--pr-text-muted)" }}>
-          No candidates were extracted from this document. This can be a valid outcome (a scanned,
-          non-text PDF, or a document with nothing matching a known action).
-        </p>
+        <EmptyState
+          icon={FileCode2}
+          title="No candidates found"
+          description="This can be a valid outcome: a scanned, non-text PDF, or a document with nothing matching a known action."
+        />
       )}
 
       {candidates?.map((c) => (

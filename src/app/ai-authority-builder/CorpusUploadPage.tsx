@@ -8,6 +8,11 @@ import { NextStepGuidance } from "../help/NextStepGuidance";
 import { track, trackError } from "../services/analytics";
 import { FieldLabel } from "../components/ui/label";
 import { Button } from "../components/ui/button";
+import { PageHeader } from "../components/ui/page-header";
+import { EmptyState } from "../components/ui/empty-state";
+import { StatusBadge } from "../components/ui/status-badge";
+import { Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell } from "../components/ui/table";
+import { Sparkles, FileCode2 } from "lucide-react";
 
 const STATUS_COLOR: Record<string, string> = {
   uploaded: "var(--pr-text-muted)",
@@ -91,14 +96,20 @@ export function AIAuthorityBuilderUploadPage() {
 
   return (
     <div className="p-8 max-w-3xl" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-      <h1 className="mb-2" style={{ color: "var(--pr-text-primary)" }}>AI Authority Builder</h1>
-      <p style={{ color: "var(--pr-text-muted)", fontSize: 13, marginBottom: 16, maxWidth: 620 }}>
-        Upload one or many governance documents together (delegation of authority, approval matrix,
-        procurement policy, HR policy, risk policy, security policy, standard operating procedures, or
-        similar). They are analyzed as a single Authority Corpus, never document by document, so a
-        limit stated in one file and contradicted in another is reported as a conflict, not silently
-        dropped. Nothing is created until you review and promote a finding.
-      </p>
+      <PageHeader
+        title="AI Authority Builder"
+        description="Upload one or many governance documents together (delegation of authority, approval matrix, procurement policy, HR policy, risk policy, security policy, standard operating procedures, or similar). They are analyzed as a single Authority Corpus, never document by document, so a limit stated in one file and contradicted in another is reported as a conflict, not silently dropped."
+      />
+      <div
+        className="flex items-start gap-2 mb-4 px-3 py-2 rounded-lg"
+        style={{ backgroundColor: "var(--pr-overlay-05)" }}
+      >
+        <Sparkles className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "var(--pr-authority-blue)" }} />
+        <p className="text-sm" style={{ color: "var(--pr-text-secondary)" }}>
+          The AI only interprets and proposes; it does not create organizational authority. Nothing
+          becomes a real rule until a human with Governance permission reviews and promotes a finding.
+        </p>
+      </div>
 
       {!aiEnabled && <AiComingSoonBanner />}
 
@@ -184,45 +195,44 @@ export function AIAuthorityBuilderUploadPage() {
       )}
 
       <h2 className="text-sm font-medium mb-3 mt-6" style={{ color: "var(--pr-text-primary)" }}>Past corpora</h2>
-      <table className="w-full text-sm" style={{ color: "var(--pr-text-primary)" }}>
-        <thead>
-          <tr style={{ color: "var(--pr-text-muted)", textAlign: "left", fontSize: 12 }}>
-            <th className="pb-2">Name</th>
-            <th className="pb-2">Documents</th>
-            <th className="pb-2">Status</th>
-            <th className="pb-2">Uploaded</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table>
+        <TableHead>
+          <TableRow style={{ borderTop: "none" }}>
+            <TableHeaderCell>Name</TableHeaderCell>
+            <TableHeaderCell>Documents</TableHeaderCell>
+            <TableHeaderCell>Status</TableHeaderCell>
+            <TableHeaderCell>Uploaded</TableHeaderCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
           {corpora?.map((c) => (
-            <tr
+            <TableRow
               key={c.corpus_id}
               className="transition-colors"
-              style={{ borderTop: "1px solid var(--pr-overlay-05)" }}
               onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--pr-bg-hover)")}
               onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
             >
-              <td className="py-2">
+              <TableCell truncate={false}>
                 <Link to={`/governance/authority-builder/${c.corpus_id}`} style={{ color: "var(--pr-authority-blue)" }}>
                   {c.name}
                 </Link>
-              </td>
-              <td className="py-2" style={{ color: "var(--pr-text-muted)" }}>{c.document_count}</td>
-              <td className="py-2" style={{ color: STATUS_COLOR[c.status] }}>{formatStatus(c.status)}</td>
-              <td className="py-2" style={{ color: "var(--pr-text-muted)" }}>
+              </TableCell>
+              <TableCell style={{ color: "var(--pr-text-muted)" }} truncate={false}>{c.document_count}</TableCell>
+              <TableCell truncate={false}><StatusBadge color={STATUS_COLOR[c.status]} label={formatStatus(c.status)} /></TableCell>
+              <TableCell style={{ color: "var(--pr-text-muted)" }} truncate={false}>
                 {new Date(c.created_at).toLocaleString()}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
           {corpora?.length === 0 && (
-            <tr>
-              <td colSpan={4} className="py-6 text-center" style={{ color: "var(--pr-text-muted)" }}>
-                No corpora yet.
-              </td>
-            </tr>
+            <TableRow>
+              <TableCell colSpan={4} truncate={false}>
+                <EmptyState icon={FileCode2} title="No corpora yet" description="Upload one or more documents above to build your first Authority Corpus." />
+              </TableCell>
+            </TableRow>
           )}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }

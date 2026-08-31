@@ -4,6 +4,11 @@ import { platformOrganizationsApi } from "./api";
 import { describeApiError } from "../live/format";
 import { Card } from "../components/ui/card";
 import { ConfirmButton } from "../components/ui/confirm-button";
+import { PageHeader } from "../components/ui/page-header";
+import { EmptyState } from "../components/ui/empty-state";
+import { StatusBadge } from "../components/ui/status-badge";
+import { Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell } from "../components/ui/table";
+import { Building2 } from "lucide-react";
 import type { OrganizationLifecycle } from "./types";
 
 // Milestone 3 (Enterprise Surface Isolation): the first UI ever built for
@@ -68,17 +73,15 @@ export function PlatformOrganizationsPage() {
 
   return (
     <div className="p-8" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-      <div className="mb-6">
+      <div className="mb-2">
         <Link to="/organization" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
           ← Organisation Settings
         </Link>
-        <h1 className="mt-2 mb-2" style={{ color: "var(--pr-text-primary)" }}>Platform Organizations</h1>
-        <p style={{ color: "var(--pr-text-muted)", fontSize: 13, maxWidth: 640 }}>
-          Create, deactivate, reactivate, or archive any organization on this platform. Requires the
-          Operator Key (sidebar) -- this is a platform-admin capability, not a setting of any one
-          organization.
-        </p>
       </div>
+      <PageHeader
+        title="Platform Organizations"
+        description="Create, deactivate, reactivate, or archive any organization on this platform. Requires the Operator Key (sidebar): this is a platform-admin capability, not a setting of any one organization."
+      />
 
       <Card style={{ marginBottom: 24 }}>
         <h2 className="text-sm font-medium mb-4" style={{ color: "var(--pr-text-primary)" }}>Create an organization</h2>
@@ -141,38 +144,34 @@ export function PlatformOrganizationsPage() {
 
       <Card padding={0} style={{ overflow: "hidden" }}>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ borderBottom: "1px solid var(--pr-overlay-05)" }}>
+          <Table>
+            <TableHead>
+              <TableRow style={{ borderTop: "none", borderBottom: "1px solid var(--pr-overlay-05)" }}>
                 {["Name", "Status", "Created", ""].map((h) => (
-                  <th key={h} className="text-left px-4 py-3 text-xs font-medium" style={{ color: "var(--pr-text-muted)" }}>
-                    {h}
-                  </th>
+                  <TableHeaderCell key={h}>{h}</TableHeaderCell>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
+              </TableRow>
+            </TableHead>
+            <TableBody>
               {(organizations ?? []).map((org) => (
-                <tr key={org.id} style={{ borderBottom: "1px solid var(--pr-overlay-03)" }}>
-                  <td className="px-4 py-3" style={{ color: "var(--pr-text-primary)" }}>{org.name}</td>
-                  <td className="px-4 py-3">
-                    <span
-                      style={{
-                        color:
-                          org.status === "active"
-                            ? "var(--pr-trust-green)"
-                            : org.status === "deactivated"
-                              ? "var(--pr-warning-amber)"
-                              : "var(--pr-text-disabled)",
-                      }}
-                    >
-                      {org.status === "active" ? "Active" : org.status === "deactivated" ? "Deactivated" : "Archived"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-xs" style={{ color: "var(--pr-text-muted)" }}>
+                <TableRow key={org.id}>
+                  <TableCell style={{ color: "var(--pr-text-primary)" }} truncate={false}>{org.name}</TableCell>
+                  <TableCell truncate={false}>
+                    <StatusBadge
+                      color={
+                        org.status === "active"
+                          ? "var(--pr-trust-green)"
+                          : org.status === "deactivated"
+                            ? "var(--pr-warning-amber)"
+                            : "var(--pr-text-disabled)"
+                      }
+                      label={org.status === "active" ? "Active" : org.status === "deactivated" ? "Deactivated" : "Archived"}
+                    />
+                  </TableCell>
+                  <TableCell className="text-xs" style={{ color: "var(--pr-text-muted)" }} truncate={false}>
                     {new Date(org.created_at).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3">
+                  </TableCell>
+                  <TableCell truncate={false}>
                     <span className="flex items-center gap-3 text-xs">
                       {org.status === "active" && (
                         <ConfirmButton
@@ -205,14 +204,14 @@ export function PlatformOrganizationsPage() {
                         </>
                       )}
                     </span>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
         {organizations?.length === 0 && (
-          <p className="text-sm px-4 py-6" style={{ color: "var(--pr-text-muted)" }}>No organizations yet.</p>
+          <EmptyState icon={Building2} title="No organizations yet" description="Create the first organization on this platform above." />
         )}
       </Card>
     </div>

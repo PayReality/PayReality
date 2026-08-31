@@ -5,6 +5,9 @@ import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
+import { PageHeader } from "../components/ui/page-header";
+import { EmptyState } from "../components/ui/empty-state";
+import { ShieldCheck } from "lucide-react";
 import type { RuntimePolicy } from "./types";
 import { describeApiError } from "../live/format";
 import { describePolicy } from "./describePolicy";
@@ -79,11 +82,11 @@ export function ReviewQueuePage() {
 
   return (
     <div className="p-8 max-w-2xl" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-      <h1 className="mb-2" style={{ color: "var(--pr-text-primary)" }}>Approvals</h1>
-      <p style={{ color: "var(--pr-text-muted)", fontSize: 12, marginBottom: 4 }}>
-        {user ? "Recorded as the reviewer for each rule below." : "Enter your name to record who reviewed each rule below."}
-      </p>
-      <p style={{ color: "var(--pr-text-disabled)", fontSize: 12, marginBottom: 16 }}>
+      <PageHeader
+        title="Approvals"
+        description={user ? "Recorded as the reviewer for each rule below." : "Enter your name to record who reviewed each rule below."}
+      />
+      <p style={{ color: "var(--pr-text-disabled)", fontSize: 12, marginBottom: 16, marginTop: -12 }}>
         Requires: {APPROVAL_ROLE_LABEL}.
         {lacksPermission && (
           <span style={{ color: "var(--pr-warning-amber)" }}> Your role ({user ? ROLE_LABELS[user.role] ?? user.role : ""}) doesn't include this permission.</span>
@@ -131,7 +134,11 @@ export function ReviewQueuePage() {
         </div>
       )}
 
-      {pending?.length === 0 && <p style={{ color: "var(--pr-text-muted)" }}>Nothing pending review.</p>}
+      {pending?.length === 0 && (
+        <Card padding={0}>
+          <EmptyState icon={ShieldCheck} title="Nothing pending review" description="Every rule awaiting approval has been reviewed." />
+        </Card>
+      )}
 
       {pending?.map((p) => (
         <Card key={p.policy_key} padding={16} style={{ marginBottom: 12 }}>

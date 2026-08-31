@@ -8,6 +8,10 @@ import { Card } from "../../components/ui/card";
 import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
+import { PageHeader } from "../../components/ui/page-header";
+import { EmptyState } from "../../components/ui/empty-state";
+import { AgentIdentity } from "../../components/ui/agent-identity";
+import { ShieldAlert } from "lucide-react";
 import { notifyResourceChanged, useResourceSync } from "../../services/resourceSync";
 import { track, trackError } from "../../services/analytics";
 import type { LiveAgent, LiveDecision, LiveDecisionListResponse } from "../types";
@@ -106,17 +110,16 @@ export function PendingReviewQueuePage() {
 
   return (
     <div className="p-8 max-w-2xl" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-      <div className="flex items-center justify-between gap-3 mb-2">
-        <h1 style={{ color: "var(--pr-text-primary)" }}>Pending Review</h1>
-        <Link to="/decisions" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
-          &lt; All decisions
-        </Link>
-      </div>
-      <p style={{ color: "var(--pr-text-muted)", fontSize: 12, marginBottom: 4 }}>
-        Every decision in your organization still waiting on a human, across every agent.
-        {decisions && ` ${total} pending.`}
-      </p>
-      <p style={{ color: "var(--pr-text-disabled)", fontSize: 12, marginBottom: 16 }}>
+      <PageHeader
+        title="Pending Review"
+        description={`Every decision in your organization still waiting on a human, across every agent.${decisions ? ` ${total} pending.` : ""}`}
+        secondaryAction={
+          <Link to="/decisions" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
+            &lt; All decisions
+          </Link>
+        }
+      />
+      <p style={{ color: "var(--pr-text-disabled)", fontSize: 12, marginBottom: 16, marginTop: -12 }}>
         Resolving requires: {RESOLVE_ROLE_LABEL}.
         {lacksResolvePermission && (
           <span style={{ color: "var(--pr-warning-amber)" }}>
@@ -165,13 +168,16 @@ export function PendingReviewQueuePage() {
       )}
 
       {decisions?.length === 0 && (
-        <p style={{ color: "var(--pr-text-muted)" }}>Nothing pending review right now.</p>
+        <Card padding={0}>
+          <EmptyState icon={ShieldAlert} title="Nothing pending review" description="Every decision requiring human review has been resolved." />
+        </Card>
       )}
 
       {decisions?.map((d) => (
         <Card key={d.id} padding={16} style={{ marginBottom: 12 }}>
           <div className="flex items-center justify-between gap-3 mb-2">
-            <span style={{ color: "var(--pr-text-primary)", fontSize: 14, fontWeight: 500 }}>
+            <span className="flex items-center gap-2" style={{ color: "var(--pr-text-primary)", fontSize: 14, fontWeight: 500 }}>
+              <AgentIdentity name={agentNames[d.agent_id] ?? d.agent_id} size="sm" />
               {agentNames[d.agent_id] ?? d.agent_id} &middot; {formatStatus(d.action)}
             </span>
             {/* Domain Generalization Milestone: Resource is the

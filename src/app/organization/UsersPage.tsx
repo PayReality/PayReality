@@ -7,6 +7,11 @@ import { describeApiError } from "../live/format";
 import { ASSIGNABLE_ROLES, ROLE_LABELS } from "../auth/types";
 import { Card } from "../components/ui/card";
 import { HelpIcon } from "../help/HelpIcon";
+import { PageHeader } from "../components/ui/page-header";
+import { EmptyState } from "../components/ui/empty-state";
+import { StatusBadge } from "../components/ui/status-badge";
+import { Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell } from "../components/ui/table";
+import { Users } from "lucide-react";
 import type { Invitation, OrgUser } from "./types";
 
 export function UsersPage() {
@@ -123,19 +128,16 @@ export function UsersPage() {
   return (
     <RequirePermission permission="users.manage">
       <div className="p-8" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-        <div className="mb-6">
+        <div className="mb-2">
           <Link to="/organization" style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
             ← Organisation Settings
           </Link>
-          <h1 className="mt-2 mb-2 flex items-center gap-1.5" style={{ color: "var(--pr-text-primary)" }}>
-            Users
-            <HelpIcon articleId="roles_and_permissions" />
-          </h1>
-          <p style={{ color: "var(--pr-text-muted)", fontSize: 13, maxWidth: 640 }}>
-            Who can do what. Every role maps to a fixed set of permissions, see "Roles & Permissions"
-            in the Help Center for what each one covers.
-          </p>
         </div>
+        <PageHeader
+          title="Users"
+          description={'Who can do what. Every role maps to a fixed set of permissions, see "Roles & Permissions" in the Help Center for what each one covers.'}
+          status={<HelpIcon articleId="roles_and_permissions" />}
+        />
 
         <Card style={{ marginBottom: 24 }}>
           <h2 className="text-sm font-medium mb-4" style={{ color: "var(--pr-text-primary)" }}>Add a user</h2>
@@ -291,22 +293,20 @@ export function UsersPage() {
 
         <Card padding={0} style={{ overflow: "hidden" }}>
           <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ borderBottom: "1px solid var(--pr-overlay-05)" }}>
+          <Table>
+            <TableHead>
+              <TableRow style={{ borderTop: "none", borderBottom: "1px solid var(--pr-overlay-05)" }}>
                 {["Name", "Email", "Role", "Status", "Last Login", ""].map((h) => (
-                  <th key={h} className="text-left px-4 py-3 text-xs font-medium" style={{ color: "var(--pr-text-muted)" }}>
-                    {h}
-                  </th>
+                  <TableHeaderCell key={h}>{h}</TableHeaderCell>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
+              </TableRow>
+            </TableHead>
+            <TableBody>
               {(users ?? []).map((u) => (
-                <tr key={u.id} style={{ borderBottom: "1px solid var(--pr-overlay-03)" }}>
-                  <td className="px-4 py-3" style={{ color: "var(--pr-text-primary)" }}>{u.name}</td>
-                  <td className="px-4 py-3" style={{ color: "var(--pr-text-secondary)" }}>{u.email}</td>
-                  <td className="px-4 py-3">
+                <TableRow key={u.id}>
+                  <TableCell style={{ color: "var(--pr-text-primary)" }} truncate={false}>{u.name}</TableCell>
+                  <TableCell style={{ color: "var(--pr-text-secondary)" }} truncate={false}>{u.email}</TableCell>
+                  <TableCell truncate={false}>
                     <select
                       value={u.role}
                       onChange={(e) => setPendingRoleChange({ userId: u.id, newRole: e.target.value })}
@@ -336,16 +336,17 @@ export function UsersPage() {
                         </button>
                       </span>
                     )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span style={{ color: u.status === "active" ? "var(--pr-trust-green)" : "var(--pr-text-disabled)" }}>
-                      {u.status === "active" ? "Active" : "Disabled"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-xs" style={{ color: "var(--pr-text-muted)" }}>
+                  </TableCell>
+                  <TableCell truncate={false}>
+                    <StatusBadge
+                      color={u.status === "active" ? "var(--pr-trust-green)" : "var(--pr-text-disabled)"}
+                      label={u.status === "active" ? "Active" : "Disabled"}
+                    />
+                  </TableCell>
+                  <TableCell className="text-xs" style={{ color: "var(--pr-text-muted)" }} truncate={false}>
                     {u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "Never"}
-                  </td>
-                  <td className="px-4 py-3">
+                  </TableCell>
+                  <TableCell truncate={false}>
                     {u.id !== currentUser?.id && (
                       u.status === "active" ? (
                         confirmingDisableId === u.id ? (
@@ -368,14 +369,14 @@ export function UsersPage() {
                         </button>
                       )
                     )}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
           </div>
           {users?.length === 0 && (
-            <p className="text-sm px-4 py-6" style={{ color: "var(--pr-text-muted)" }}>No users yet.</p>
+            <EmptyState icon={Users} title="No users yet" description="Add a user or send an invitation above to get started." />
           )}
         </Card>
       </div>
