@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, LargeBinary, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -919,7 +919,17 @@ class Decision(Base):
     # untouched and still the source of truth read by every existing
     # caller. See evaluated_mandate_ids below for its replacement.
     evaluated_mandates: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Root cause of a real, if narrow, ordering ambiguity (found via a CI
+    # flake in test_history_returns_newest_first_and_paginates): with only
+    # `server_default=func.now()`, SQLite's CURRENT_TIMESTAMP has 1-second
+    # resolution, so several Decisions created in quick succession land on
+    # the exact same value and "newest first" ordering becomes
+    # database-tie-break-dependent, not chronological. An explicit,
+    # microsecond-precision Python-side default removes the ambiguity on
+    # every backend (SQLite in tests, Postgres in production), rather than
+    # papering over it with a query-level tiebreaker that can't actually
+    # recover the true creation order.
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc), server_default=func.now())
     # Authority-as-a-continuous-object, Stage A: the correctly-named
     # replacement for evaluated_mandates above, holding real `mandates.id`
     # values. Written by intent_service.submit_intent (Stage H, via
