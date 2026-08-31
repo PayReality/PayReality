@@ -8,6 +8,7 @@
 |---|---|
 | 🔓 | No auth — public read |
 | 🔑 | Agent signature (`verify_agent_signature`) |
+| ✍️ | Trusted Connection signature (`verify_integration_identity_signature`) — same shape as 🔑, different identity type, never RBAC |
 | 🛡️`<Permission>` | `require_permission(Permission.<X>)` — operator key bypasses, else Role → Permission |
 | 👤 | Session-only (`get_current_user`) |
 | 🏢 | Resolves acting organisation (`get_current_organization`) |
@@ -154,7 +155,69 @@ See [17_LEGACY_COMPONENTS.md](17_LEGACY_COMPONENTS.md) for the full retirement r
 ## 6.13 API design conventions
 
 - **Every mutating endpoint's auth is a `Permission`, never a `Role` check** — the router layer never asks "is this an Owner"; it asks `require_permission(Permission.X)`, and `has_permission` resolves that against whichever role the caller's token maps to. This is Phase 10's central invariant, enforced structurally rather than by convention (see [14_SECURITY_MODEL.md](14_SECURITY_MODEL.md)).
-- **Reads are open by default** — no endpoint in this API requires auth purely to `GET` something, reflecting the single-tenant-per-deployment scope (§1.2, §2.6). This is a scope boundary to revisit before multi-tenancy, not an oversight.
+- **Reads were open by default when this table was first written** — this reflected the single-tenant-per-deployment scope of that time, not a permanent design choice. **Stale as of Milestones 2, 3, 10, and 11** (multi-tenancy, then RBAC, then a series of confirmed-and-fixed unauthenticated read endpoints — see [16_CURRENT_LIMITATIONS.md](16_CURRENT_LIMITATIONS.md) §16.8): a number of reads in the table above are annotated 🔓 from that earlier era and are almost certainly now permission-gated. Do not treat the 🔓/🔑/🛡️/👤 column above as current-state truth without re-checking the router source for anything not added in Trusted Integration (§6.14 onward), which was verified fresh for this pass.
 - **`POST .../dry-run` and `GET .../diff` are the two genuinely side-effect-free "what if" endpoints** in the whole API — both are deliberately unauthenticated reads-with-simulation, not because the data is unimportant but because they mutate nothing.
 - **Every lifecycle-transition endpoint takes an optional `reason`/`actor`** and returns the full updated resource, never a bare `204` — this is what lets the frontend re-render the Agent Detail page's lifecycle timeline immediately from the response, without a second round-trip.
 - **`compile` and `deploy` are separate steps everywhere they appear** (both the legacy pipeline's now-410'd endpoints and the current `runtime_policies.py`) — compiling produces and hashes a bundle without making it live; deploying is the only action that ever writes to OPA. This separation is what makes `dry_run_policy` possible: it can simulate against a compiled-but-undeployed bundle.
+
+## 6.14 `integration_contracts.py` — prefix `/v1/integrations`, Trusted Integration Phase 1 (Action Mapping)
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `` (create System) | 🛡️`INTEGRATION_CONTRACT_MANAGE` | Register a new Integration (System) |
+| GET | `` (list) | 🛡️`INTEGRATION_CONTRACT_MANAGE` | List Systems |
+| GET | `/{integration_id}` | 🛡️`INTEGRATION_CONTRACT_MANAGE` | Fetch one System |
+| POST | `/{integration_id}/contract-versions` (create mapping) | 🛡️`INTEGRATION_CONTRACT_MANAGE` | Draft a new Action Mapping version |
+| GET | `/{integration_id}/contract-versions` (list) | 🛡️`INTEGRATION_CONTRACT_MANAGE` | List an Action Mapping's versions |
+| GET | `/{integration_id}/contract-versions/{version_id}` | 🛡️`INTEGRATION_CONTRACT_MANAGE` | Fetch one Action Mapping version |
+| PATCH | `/{integration_id}/contract-versions/{version_id}` (edit draft) | 🛡️`INTEGRATION_CONTRACT_MANAGE` | Edit a draft Action Mapping |
+| POST | `/{integration_id}/contract-versions/{version_id}/validate` | 🛡️`INTEGRATION_CONTRACT_MANAGE` | draft → validated |
+| POST | `/{integration_id}/contract-versions/{version_id}/approve` | 🛡️`INTEGRATION_CONTRACT_PUBLISH` | validated → approved (deliberately a separate, stronger permission than drafting) |
+| POST | `/{integration_id}/contract-versions/{version_id}/retire` | 🛡️`INTEGRATION_CONTRACT_PUBLISH` | approved → retired |
+
+## 6.15 `integration_identities.py` — prefix `/v1/integration-identities`, Trusted Integration Phase 2 (Trusted Connection)
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `` (create) | 🛡️`INTEGRATION_IDENTITY_MANAGE` | Register a new Trusted Connection, issues its first certificate (one-time key reveal, never persisted server-side) |
+| GET | `` (list) | 🛡️`INTEGRATION_IDENTITY_MANAGE` | List Trusted Connections |
+| GET | `/{identity_id}` | 🛡️`INTEGRATION_IDENTITY_MANAGE` | Fetch one Trusted Connection |
+| GET | `/{identity_id}/certificates` | 🛡️`INTEGRATION_IDENTITY_MANAGE` | Certificate history for one Trusted Connection |
+| POST | `/{identity_id}/activate` | 🛡️`INTEGRATION_IDENTITY_MANAGE` | registered → active |
+| POST | `/{identity_id}/suspend` | 🛡️`INTEGRATION_IDENTITY_MANAGE` | active → suspended (temporary; certificate untouched) |
+| POST | `/{identity_id}/rotate` | 🛡️`INTEGRATION_IDENTITY_MANAGE` | Issues a new certificate, retires the old one |
+| POST | `/{identity_id}/revoke` | 🛡️`INTEGRATION_IDENTITY_MANAGE` | Terminal |
+| POST | `/{identity_id}/retire` | 🛡️`INTEGRATION_IDENTITY_MANAGE` | Terminal |
+
+## 6.16 `enforcement_bindings.py` — prefix `/v1/enforcement-bindings`, Trusted Integration Phase 2 (Runtime Connection)
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `` (create draft) | 🛡️`INTEGRATION_CONTRACT_MANAGE` | Draft a Runtime Connection (Trusted Connection + Action Mapping + environment) |
+| GET | `` (list) | 🛡️`INTEGRATION_CONTRACT_MANAGE` | List Runtime Connections |
+| GET | `/{binding_id}` | 🛡️`INTEGRATION_CONTRACT_MANAGE` | Fetch one Runtime Connection, including `allowed_agent_ids` |
+| PATCH | `/{binding_id}` (edit draft) | 🛡️`INTEGRATION_CONTRACT_MANAGE` | Edit a draft Runtime Connection |
+| GET | `/{binding_id}/allowed-agents` | 🛡️`INTEGRATION_CONTRACT_MANAGE` | List the explicit Agent allow-list |
+| POST | `/{binding_id}/allowed-agents/{agent_id}` (add) | 🛡️`INTEGRATION_CONTRACT_MANAGE` | Add an Agent to the allow-list (draft only) |
+| DELETE | `/{binding_id}/allowed-agents/{agent_id}` (remove) | 🛡️`INTEGRATION_CONTRACT_MANAGE` | Remove an Agent from the allow-list (draft only) |
+| POST | `/{binding_id}/activate` | 🛡️`INTEGRATION_CONTRACT_PUBLISH` | draft → active — the actual deployment moment, deliberately gated by the stronger permission |
+| POST | `/{binding_id}/retire` | 🛡️`INTEGRATION_CONTRACT_PUBLISH` | active → retired |
+
+Note this reuses `INTEGRATION_CONTRACT_MANAGE`/`PUBLISH` rather than defining separate Runtime-Connection-specific permissions — a deliberate choice, not an oversight, since a Runtime Connection is inseparable from the Action Mapping it deploys.
+
+## 6.17 `integration_runtime.py` — the Adapter-mediated runtime path, Trusted Integration Phase 2–3
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/integration-runtime/intents` | ✍️ Trusted Connection signature (`verify_integration_identity_signature`) | The Adapter-mediated equivalent of `POST /v1/intents` — see [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.4 for the full pre-evaluation check sequence |
+
+Authenticated the same shape as an Agent's own Intent signature (an Ed25519 signature checked against the Trusted Connection's active certificate), never a `Permission`/RBAC check — a Trusted Adapter is not a human session.
+
+## 6.18 Trusted Integration additions to existing routers
+
+| Method | Path | Change |
+|---|---|---|
+| GET | `/v1/decisions/{decision_id}` | Response gained `integration: DecisionIntegrationSummary \| null` |
+| GET | `/v1/decisions/{decision_id}/receipt` | Response gained `integration: ReceiptIntegrationSummary \| null` |
+
+Both are additive and `null` for every agent-direct decision — no existing caller's parsing breaks.

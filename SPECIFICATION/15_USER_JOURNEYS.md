@@ -67,6 +67,25 @@ This journey is the concrete referent for §1.5's "what the customer holds after
 1. `/assurance` — live counts (agents by status, active policy, decisions by outcome), recomputed from the database on every load, never a cached or seeded "governance score."
 2. This is the one journey with the narrowest permission set (`assurance.view` only) — an Executive's role cannot resolve a decision, approve a policy, or touch an agent, only observe.
 
-## 15.7 Cross-cutting: what every journey shares
+## 15.7 Governance Admin — connecting a Trusted Integration (Settings → Integrations)
+
+Full mechanism: [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md). This is the admin journey for wiring up the Adapter-mediated runtime path; nothing here is required for the agent-direct path (§15.2–§15.3), which is unaffected.
+
+1. **Connect a System** — Settings → Integrations → "Connect system," name only (e.g. "SAP S/4HANA"). Requires `integration_contract.manage`.
+2. **Create an Action Mapping** — from the System's detail page, "Create mapping": the external system's own operation name (`source_operation`, e.g. `ChangeSupplierBankDetails`), the canonical action it means (`canonical_action`, e.g. `vendor_payment`), and which fields (resource/amount/currency/fact-subject/context) the mapping declares extractable. Starts `draft`.
+3. **Validate the mapping** — re-checks every semantic field deterministically and freezes a `content_hash`. `draft → validated`, requires `integration_contract.manage`.
+4. **Approve the mapping** — a named human accepts the now-immutable mapping. `validated → approved`, requires the stronger `integration_contract.publish`. Multiple approved versions of the same mapping may coexist (§50.12) — the UI never implies there is one "current" version.
+5. **Register a Trusted Connection** — Settings → Integrations → "Register trusted connection": generates an Ed25519 keypair client-side, shows the private key material **exactly once**, never persisted server-side (the same one-time-reveal discipline as Agent registration, deliberately stricter — see [11_AGENT_ARCHITECTURE.md](11_AGENT_ARCHITECTURE.md) §11.3 for the precedent). Requires `integration_identity.manage`.
+6. **Configure a Runtime Connection** — combine the Trusted Connection, an approved Action Mapping, an environment (`production`/`staging`/…), and an explicit, individually-checked list of allowed Agents. There is no "all agents" option. Starts `draft`, requires `integration_contract.manage`.
+7. **Activate the Runtime Connection** — requires `integration_contract.publish`. Enforces every activation prerequisite in one atomic step (§50.13): Trusted Connection active, mapping approved, allow-list non-empty and every allow-listed Agent itself active. This is the actual deployment moment — nothing before it makes the mapping live.
+8. **Test the connection** — from the same session as Trusted Connection registration only (the private key exists solely in the browser's in-memory state, never persisted — see [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.4), send one real signed request through `POST /v1/integration-runtime/intents` and see the real Decision it produces. Never a fake simulator result.
+9. **Inspect the resulting Decision** — Decision Detail shows a "Reported through a trusted connection" section (System, Trusted Connection, external operation, environment) whenever `integration` is non-null on the response; absent entirely for agent-direct decisions.
+10. **Human Review, if it comes to that** — identical mechanism to §15.4; the integration provenance stays pinned to what it was at submission regardless of when or how the review resolves (§50.15).
+11. **Inspect Evidence / the Authorization Receipt** — the Receipt (`/decisions/{id}/receipt`) shows the same provenance in its packaged, human-readable form (§50.14) — System, Trusted Connection, Action Mapping, environment, external operation ID, alongside the same Evidence/verification detail every Receipt already shows.
+12. **Retire a mapping, or rotate/revoke a Trusted Connection's identity** — all explicit, all terminal or near-terminal actions from the System or Trusted Connection detail pages; a Runtime Connection referencing a mapping cannot outlive its own activation state (§50.13's one-direction dependency).
+
+Read-only reflection: Agent Detail's own "Trusted connections" section shows, for one Agent, every Runtime Connection whose allow-list includes it — an honest empty state ("No runtime connection currently allows this agent") for an Agent no Runtime Connection names, never a false "all agents allowed" implication. It links to Settings → Integrations rather than duplicating any management action.
+
+## 15.8 Cross-cutting: what every journey shares
 
 Every journey above ultimately either **feeds** the pipeline in [02_SYSTEM_ARCHITECTURE.md](02_SYSTEM_ARCHITECTURE.md) §2.3 (registering an agent, authoring a policy) or **reads out of it** (resolving a decision, auditing evidence, viewing assurance). There is no journey in this platform that exists independently of that one core sequence — which is the concrete demonstration of §1.1's claim that PayReality "is the thing the action has to pass through," not a system of parallel, loosely-related features.

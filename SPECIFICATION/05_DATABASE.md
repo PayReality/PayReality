@@ -1,8 +1,8 @@
 # Part 5 — Database
 
-**Supersedes/synthesizes:** `ARCHITECTURE.md` (data-model section, which describes only the original 6-table core and is missing the 27 tables added since). Full inventory below is read directly from `server/app/db/models.py` (33 tables) and `server/alembic/versions/` (14 migrations), not from any prior document.
+**Supersedes/synthesizes:** `ARCHITECTURE.md` (data-model section, which describes only the original 6-table core and is missing the tables added since). Full inventory below is read directly from `server/app/db/models.py` and `server/alembic/versions/`. As of Trusted Integration Phase 1–4 (§5.6 below): **39 tables**, 33 predating Trusted Integration plus 6 added by it.
 
-## 5.1 All 33 tables
+## 5.1 All 33 tables (pre-Trusted-Integration baseline; see §5.6 for the 6 added since)
 
 Grouped by subsystem, matching the rest of this specification's parts:
 
@@ -44,7 +44,7 @@ Grouped by subsystem, matching the rest of this specification's parts:
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `intents` | `agent_id`, `action`, `amount`, `currency`, `counterparty`, `context (JSONB)`, `nonce`, `requested_at` | `UNIQUE(agent_id, nonce)` — replay protection |
+| `intents` | `agent_id`, `action`, `amount`, `currency`, `counterparty`, `context (JSONB)`, `nonce`, `requested_at`, `integration_identity_id`†, `enforcement_binding_id`†, `integration_contract_version_id`†, `environment`†, `external_operation_id`†, `integration_id`†, `canonical_operation_fingerprint`† | `UNIQUE(agent_id, nonce)` — replay protection. †Six columns added by Trusted Integration Phases 2–3 (§5.6), all nullable, all `NULL` for every agent-direct Intent. `UNIQUE(integration_identity_id, nonce)` (partial, non-null) is a second, independent replay index for the Adapter path. `UNIQUE(integration_id, environment, external_operation_id)` (partial, non-null) is the operation-idempotency invariant, not a replay guard. |
 | `decisions` | `intent_id`, `policy_id`, `outcome` (`ALLOW/DENY/HUMAN_REVIEW`), `reason`, `evaluated_mandates (JSONB)` | Immutable after creation |
 | `evidence` | `decision_id`, `payload (JSONB)`, `key_id`, `signature`, `status`, `organization_id` | `organization_id` is the Phase 5 chain-scope key; `idx_evidence_organization_created` supports "find the prior record in this scope" fast |
 | `decision_resolutions` | `decision_id` (unique), `resolution` (`approved/denied`), `resolved_by`, `evidence_id` | Closes a `HUMAN_REVIEW` loop without mutating `decisions` |
@@ -128,6 +128,19 @@ erDiagram
 | 13 | `b58b031aeb21` | Phase 1 Authority Model schema | `business_units`/`departments`/`teams`/`resources`, `principals`/`authority_relationships` extensions |
 | 14 | `411edb414123` | Phase 5 Evidence chaining organisation scope | `evidence.organization_id` + index |
 
+**Stale beyond this point, disclosed rather than silently left implying completeness**: 34 migrations exist today; this table stops at 14 and was never extended through Multi-Tenant Foundation, Enterprise Surface Isolation, Trusted Enterprise Facts, Authority Freshness, Capability Tokens, the Authority Graph, the Runtime Policy Simulator/Lifecycle, or Enterprise Knowledge — a real documentation debt this pass does not fully close (that would mean re-deriving ~20 unrelated migrations' history). What this pass *does* add, because it is this document's actual subject, is the six Trusted Integration migrations, in their real order:
+
+| Revision | Name | What it did |
+|---|---|---|
+| `c0eb613b4169` | Trusted Integration Phase 1: integration contract kernel | `integrations`, `integration_contract_versions` |
+| `cdc87c8bea0d` | Trusted Integration Phase 2: trusted adapter identity and binding | `integration_identities`, `integration_identity_certificates`, `enforcement_bindings`, `enforcement_binding_agents`, four provenance columns on `intents` |
+| `741abf7b0146` | Evidence hash-chain sequence ordinal | `evidence.sequence` (a G01 chain-ordering follow-up, not itself Trusted Integration, but landed in this same span) |
+| `16159a40ddfa` | Authority Graph approval lineage | `authority_graph_approvals.predecessor_approval_id` (unrelated subsystem, noted for completeness of this span) |
+| `39c98daa028f` | Authority Graph → RuntimePolicy compilation gate provenance | `runtime_policy_records.source_graph_approval_id` (unrelated subsystem, noted for completeness of this span) |
+| `a1f3e9c72b6d` | Trusted Integration Phase 3: business operation identity | `intents.external_operation_id`/`integration_id`/`canonical_operation_fingerprint`, the operation-idempotency unique index |
+
+All six are additive: new nullable columns or new standalone tables, no drops, no backfills, no destructive changes — verified by direct reading, not assumed, as part of a separate P0 production-recovery pass on 2026-08-31.
+
 ## 5.4 Cross-cutting schema conventions
 
 - **Every `datetime` is `TIMESTAMPTZ`**, forced via `Base.type_annotation_map = {datetime: DateTime(timezone=True)}`. This traces to a real bug: the local Postgres install's server timezone defaulted to UTC+2, so without this override, a timezone-aware Python datetime silently converted to server-local wall-clock time on write and lost its offset on read — which broke Mandate `valid_from`/`valid_to` comparisons against Intent timestamps inside the compiled Rego (both looked like naive ISO strings representing different instants). Migration 3 retrofitted this onto every pre-existing column.
@@ -149,3 +162,17 @@ erDiagram
 | **Active, audit** | `agent_audit_events` |
 | **Active — repurposed as the Decision Engine's active-bundle pointer, sole writer is `deploy_policy`** | `policies` |
 | **Dead — kept as empty tables** | `documents`, `authorities`, `mandates`, `constraints` (legacy pipeline, see [17_LEGACY_COMPONENTS.md](17_LEGACY_COMPONENTS.md)) |
+| **Active, Trusted Integration (§5.6)** | `integrations`, `integration_contract_versions`, `integration_identities`, `integration_identity_certificates`, `enforcement_bindings`, `enforcement_binding_agents` |
+
+## 5.6 Trusted Integration tables (6, added by Phases 1–2)
+
+See [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) for the full behavioral account; this is the schema only.
+
+| Table | Key columns | Notes |
+|---|---|---|
+| `integrations` | `organization_id`, `external_system_label`, `created_by` | Customer-facing "System" |
+| `integration_contract_versions` | `integration_id`, `source_operation`, `version`, `canonical_action`, `resource_path`/`amount_path`/`currency_path`/`fact_subject_path`, `context_bindings (JSONB)`, `content_hash`, `status` (`draft/validated/approved/retired`) | Customer-facing "Action Mapping." `UNIQUE(integration_id, source_operation, version)`. Multiple `approved` rows for the same `(integration_id, source_operation)` may coexist by design — see §50.12. |
+| `integration_identities` | `organization_id`, `name`, `status` (`registered/active/suspended/revoked/retired`) | Customer-facing "Trusted Connection" identity row |
+| `integration_identity_certificates` | `integration_identity_id`, `public_key`, `status` (`issued/active/rotated/expired/revoked`) | Same shape as `certificates` (Agent), deliberately a separate table, not a shared one — see §50.3. Partial unique index: at most one `active` per identity. |
+| `enforcement_bindings` | `organization_id`, `integration_identity_id`, `integration_contract_version_id`, `integration_id`, `source_operation`, `environment`, `status` (`draft/active/retired`) | Customer-facing "Runtime Connection." Partial unique index `idx_enforcement_bindings_single_active_per_scope` on `(integration_identity_id, integration_id, source_operation, environment)` where `status='active'` — the real, DB-enforced "exactly one current meaning" invariant. |
+| `enforcement_binding_agents` | `enforcement_binding_id`, `agent_id` | The explicit Agent allow-list join table. `UNIQUE(enforcement_binding_id, agent_id)`. No "all agents" row type exists — every allowed Agent is an explicit row. |

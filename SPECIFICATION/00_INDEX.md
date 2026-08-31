@@ -6,7 +6,7 @@ This is not a README and not a pitch deck. It is an internal architecture handbo
 
 ## How this specification is organized
 
-22 numbered parts plus this index and a glossary, one file each, in [SPECIFICATION/](.):
+50 numbered parts plus this index and a glossary, one file each, in [SPECIFICATION/](.):
 
 | # | File | Covers |
 |---|------|--------|
@@ -59,6 +59,7 @@ This is not a README and not a pitch deck. It is an internal architecture handbo
 | 47 | [47_PHASE_5_NEED_ANALYSIS.md](47_PHASE_5_NEED_ANALYSIS.md) | Phase 5: does Integrity Intelligence need to exist? (Verdict: not as new infrastructure) |
 | 48 | [48_PHASE_5_IMPLEMENTATION_REPORT.md](48_PHASE_5_IMPLEMENTATION_REPORT.md) | Phase 5: the three minimal changes made, each tied to a demonstrated problem |
 | 49 | [49_PHASE_5_CONFORMANCE_REPORT.md](49_PHASE_5_CONFORMANCE_REPORT.md) | Phase 5 Architecture Conformance Report — gate passed, final phase |
+| 50 | [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) | Trusted Integration Architecture (its own, unrelated Phase 1–4): Action Mapping, Trusted Connection, Runtime Connection, the Adapter-mediated runtime path, operation idempotency, and why Capability Authorization is currently suppressed on it |
 | — | [GLOSSARY.md](GLOSSARY.md) | Every term of art, defined once |
 
 ## Relationship to existing documents

@@ -2,6 +2,8 @@
 
 Every term of art used across this specification, defined once. Alphabetical. Each entry cross-references the part where it's covered in depth.
 
+**Action Mapping** — Customer-facing term for `IntegrationContractVersion`: a deterministic, versioned, human-approved statement of what one external system operation (e.g. `ChangeSupplierBankDetails`) means in PayReality's canonical vocabulary (e.g. "Update supplier bank details"). Lifecycle `draft → validated → approved → retired`; multiple `approved` versions of the same mapping may legitimately coexist. Approved does not mean active — a Runtime Connection selects which approved version is actually used. [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.12
+
 **Agent** — A certificate-holding identity, acting for a Principal, that submits signed Intents. Has a full lifecycle (registered → active ⇄ suspended → revoked/retired). [11_AGENT_ARCHITECTURE.md](11_AGENT_ARCHITECTURE.md)
 
 **Assurance** — A live read of what's actually running (agent counts, active policy, decision volume by outcome), computed from the database on every request, never a cached or seeded score. [01_PRODUCT_OVERVIEW.md](01_PRODUCT_OVERVIEW.md) §1.3
@@ -13,6 +15,8 @@ Every term of art used across this specification, defined once. Alphabetical. Ea
 **Authority Graph** — The AI Authority Builder's full extraction result for one corpus: policies, principals, resources, operations, relationships, conflicts, gaps, and questions. [09_AI_AUTHORITY_BUILDER.md](09_AI_AUTHORITY_BUILDER.md)
 
 **Authority Model** — Phase 1's real organisational hierarchy (`BusinessUnit → Department → Team`) and delegation graph. [08_RUNTIME_AUTHORITY.md](08_RUNTIME_AUTHORITY.md)
+
+**Authorization Receipt** — A named, shipped, stable artifact (`GET /v1/decisions/{id}/receipt`) that packages one Decision's existing Evidence, Authority, Trusted Enterprise Facts, and (where Adapter-mediated) integration provenance into one human-readable view. It is **not** a second cryptographic artifact or a stronger proof than Evidence itself — it presents the same signed record, never claims the downstream action executed, and is gated by the same `EVIDENCE_VIEW` permission Evidence itself requires. [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.4
 
 **Bundle / Policy Bundle** — The compiled, versioned Rego module produced by Compiler V2 from a set of `RuntimePolicy` objects; identified by a `bundle_hash` computed over its Rego source and manifest (excluding the compile timestamp, so identical input always hashes identically). [07_RUNTIME_POLICY_ENGINE.md](07_RUNTIME_POLICY_ENGINE.md) §7.6
 
@@ -32,11 +36,17 @@ Every term of art used across this specification, defined once. Alphabetical. Ea
 
 **Evidence** — An Ed25519-signed, append-only record of a Decision (or a later resolution of one). Chained per organisation since Phase 5. [13_EVIDENCE_ENGINE.md](13_EVIDENCE_ENGINE.md)
 
+**External Operation ID** — The enterprise system's own stable identifier for one real business operation, supplied by a Trusted Adapter and scoped to `(integration, environment)`. One real operation produces one authority decision: a retry with the same ID and the same authority-relevant meaning returns the existing Decision; the same ID with different authority-relevant meaning is a conflict, never a new evaluation. Distinct from nonce replay protection, which is authentication-level, not business-operation-level. [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.7
+
 **Fact Source**: The registered signing identity (`FactSource`) a Trusted Enterprise Fact is attested under: its own Ed25519 keypair, an active/revoked lifecycle, and no other state. Distinct from an Agent identity by design, so an agent requesting authorization can never supply a consequential external fact about itself as if it were an independent attestation. [POC_READINESS_REPORT.md](../POC_READINESS_REPORT.md) §3.
 
 **Fail-closed** — The design principle that any ambiguity, error, timeout, or absence of a covering policy resolves to `HUMAN_REVIEW`, never `ALLOW`. [12_DECISION_ENGINE.md](12_DECISION_ENGINE.md) §12.5
 
 **HUMAN_REVIEW** — One of the three Decision outcomes; requires a human to resolve via `resolution_service`, which appends a second Evidence record rather than mutating the first. [12_DECISION_ENGINE.md](12_DECISION_ENGINE.md), [13_EVIDENCE_ENGINE.md](13_EVIDENCE_ENGINE.md) §13.6
+
+**Integration (System)** — Customer-facing term for `Integration`: one external enterprise system a customer has connected (e.g. "SAP S/4HANA"). Owns any number of Action Mappings, one per real operation. [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.3
+
+**Integration rejection** — A pre-evaluation trust failure on the Adapter-mediated path (invalid Trusted Connection, inactive Runtime Connection, an Agent not on the allow-list, a mapping mismatch, an operation-ID conflict, and similar). Categorically different from DENY: it means PayReality could not establish a trustworthy request to evaluate at all, so no Decision and no Evidence are ever produced — never confuse the two. [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.8
 
 **Intent** — A signed request an Agent submits describing an action it wants to take (action, amount, currency, counterparty, context). One row per submission, replay-protected via `UNIQUE(agent_id, nonce)`. [12_DECISION_ENGINE.md](12_DECISION_ENGINE.md)
 
@@ -60,6 +70,8 @@ Every term of art used across this specification, defined once. Alphabetical. Ea
 
 **Role** — One of six fixed identities (`owner`, `governance_admin`, `agent_admin`, `reviewer`, `auditor`, `executive`) mapped to a Permission set. Never checked directly at an enforcement point. [14_SECURITY_MODEL.md](14_SECURITY_MODEL.md) §14.2
 
+**Runtime Connection** — Customer-facing term for `EnforcementBinding` (+ its `EnforcementBindingAgent` allow-list): the live combination of one Trusted Connection, one approved Action Mapping, one environment, and an explicit allow-list of Agents. This is the point where an approved mapping becomes eligible for real Adapter use. Lifecycle `draft → active → retired`; exactly one Runtime Connection may be active per `(Trusted Connection, System, operation, environment)` scope, DB-enforced. [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.13
+
 **RuntimeAuthority Context** — Phase 2's ephemeral, request-scoped enrichment of the OPA input (organisation, department, role, risk band, active delegations), merged under `context.authority`, never persisted, never a policy pre-filter. [08_RUNTIME_AUTHORITY.md](08_RUNTIME_AUTHORITY.md) §8.3–8.4
 
 **RuntimePolicy** — The canonical, immutable value object every authoring path (manual, AI Authority Builder, AI Policy Builder) produces: scope, flat AND-only conditions, effect. [07_RUNTIME_POLICY_ENGINE.md](07_RUNTIME_POLICY_ENGINE.md) §7.2
@@ -69,6 +81,10 @@ Every term of art used across this specification, defined once. Alphabetical. Ea
 **Scope (of a RuntimePolicy)** — Who a policy applies to and over what: `principal` and `action` required, `agent` and `resource` optional narrowing. [07_RUNTIME_POLICY_ENGINE.md](07_RUNTIME_POLICY_ENGINE.md) §7.2
 
 **Signing-key registry** — The `SigningKey` table and `signing_key_service.py`, preserving verifiability of records signed under a key that has since been rotated out. [13_EVIDENCE_ENGINE.md](13_EVIDENCE_ENGINE.md) §13.2
+
+**Trusted Adapter** — Customer-facing term for the `IntegrationIdentity` runtime role: a customer-controlled, authenticated, non-Agent component that observes or constructs the canonical Intent for a real external operation. Answers "what company-controlled component is attesting what action is being attempted," never "who is acting" (that's the Agent) and never "is this authorized" (that's PayReality). Runs inside the customer's own environment; PayReality does not host it and has no standing access to the enterprise systems it observes. [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.2, §50.11
+
+**Trusted Connection** — Customer-facing term for `IntegrationIdentity` as a registered, certificate-holding identity: the "who" a Trusted Adapter authenticates as. Has its own Ed25519 certificate lifecycle (`registered → active ⇄ suspended → revoked/retired`), deliberately not a second Agent model even though the shape rhymes. [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.3
 
 **Trusted Enterprise Fact**: A signed external assertion about enterprise reality (a subject, key, and value) attested by a registered Fact Source and bound to one organization, with a mandatory expiry (no fact type ships with an unbounded default). A missing, expired, or contradicting fact all resolve to the same place: unknown, handled by Runtime Authority's existing fail-closed path, never a default-forever trust. Proves only what the attesting source asserted, not that the assertion is objectively true. [POC_READINESS_REPORT.md](../POC_READINESS_REPORT.md) §3.
 

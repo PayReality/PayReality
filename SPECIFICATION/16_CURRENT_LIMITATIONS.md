@@ -71,3 +71,36 @@ Full detail, files changed, test report, and remaining risks in `MILESTONE_3_ENT
 - **Frontend**: `X-PayReality-Organization-Id` now travels alongside the Operator Key from `apiClient.ts`'s single request choke point; a new Platform Organizations page and an Invite Member flow are the first UI ever built for the Organization Lifecycle above. Verified by `npm run build` (clean TypeScript compile) only — not interactively browser-tested, no live backend reachable in this development environment.
 
 None of the items above are secretly broken production paths silently failing right now — every core enforcement path (§2.3's sequence) is live, tested, and verified. These are scope boundaries and unfinished edges, named the same way `PRODUCT.md` names them: honestly, and specifically, so a reader can decide what matters to their own use case rather than discovering a gap the hard way.
+
+## 16.7 Trusted Integration Architecture: current vs. future, named explicitly
+
+Trusted Integration Phases 1–4 (see [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md)) are complete and live. Phase 5 (Capability/enforcement work for the Adapter-mediated path) has **not begun**. This split must never blur into a single "Trusted Integration is done" or "Trusted Integration is future" claim — both are simultaneously true, for different parts of it.
+
+**LIVE TODAY:**
+
+| Capability | Detail |
+|---|---|
+| Action Mapping lifecycle | draft → validated → approved → retired; multiple approved versions may coexist |
+| Trusted Connection | registered, certificate-backed `IntegrationIdentity`, its own lifecycle |
+| Runtime Connection | draft → active → retired `EnforcementBinding`, explicit Agent allow-list, single-active-per-scope enforced |
+| Adapter-mediated runtime submission | `POST /v1/integration-runtime/intents`, full trust-chain verification, trusted context filtering |
+| Operation idempotency | Phase 3, `external_operation_id` + canonical fingerprint, DB-enforced |
+| Integration rejection vs. DENY distinction | pre-evaluation trust failures never produce a Decision or Evidence |
+| Decision/Receipt integration provenance | `GetDecisionResponse.integration`, `AuthorizationReceiptResponse.integration`, Agent Detail's Trusted Connections section |
+| Settings → Integrations UI | full guided journey: connect a System, create/validate/approve/retire Action Mappings, register a Trusted Connection, configure/activate/test a Runtime Connection |
+| SDK support for the Adapter path | `payreality.integration.Adapter.attest()` (Python SDK 0.5.0) — real, shipped, but undocumented in `SDK_ARCHITECTURE.md`/`SDK_REFERENCE.md` until this pass |
+
+**NOT YET LIVE / FUTURE (named, not implied):**
+
+| Item | Status |
+|---|---|
+| Capability Authorization for Adapter-mediated decisions | Explicitly, deliberately suppressed (`CapabilityNotAvailableForIntegrationIntentError`) — not a gap in disguise, a named boundary. See [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.9 |
+| A real Policy Enforcement Point for either runtime path | Does not exist for any customer today — see [ENTERPRISE_MESSAGING_GUIDE.md](../ENTERPRISE_MESSAGING_GUIDE.md) §6 |
+| Vendor-specific Adapter connectors (SAP, Workday, etc.) | None exist; every Adapter is customer-built against the documented request shape |
+| Automatic discovery of external operations/schemas | No discovery mechanism of any kind; every Action Mapping is hand-authored and human-approved |
+| Mapping-drift monitoring | No automated detection if an external system's real operation shape diverges from an approved Action Mapping over time |
+| Full self-host / dedicated-instance productization | Not packaged as a SKU; see [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.11 |
+
+## 16.8 Documentation debt disclosed by this pass, not fixed
+
+`06_APIS.md`'s auth (🔓/🔑/🛡️/👤) annotations for the ~84 endpoints that predate Trusted Integration were **not** re-verified against current code in this pass — several are already known to be stale relative to Milestones 10–12's security hardening (e.g. `GET /v1/decisions/{id}` and the Evidence list are annotated 🔓 here but now require authentication). This pass added accurate annotations only for the new Trusted Integration endpoints (§6.new in [06_APIS.md](06_APIS.md)). A full re-audit of the pre-existing table is real, disclosed, remaining work — do not treat its current auth column as current-state truth without re-checking against the router source.

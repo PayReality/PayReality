@@ -80,3 +80,27 @@ Fine-grained permission examples worth calling out because they encode a real pr
 | MFA (`User.mfa_enabled` column exists) | **Schema-ready, not enforced** — the column exists and Organisation Settings can toggle a requirement, but no actual MFA challenge flow is implemented at login (see [16_CURRENT_LIMITATIONS.md](16_CURRENT_LIMITATIONS.md)) |
 | Account lockout after repeated failed logins | **Not built** |
 | Distributed (multi-instance) rate limiting | **Not built** — in-process only |
+| Trusted Adapter authentication, allow-list enforcement, operation idempotency | **Active**, see §14.8 |
+| Capability Authorization for the Adapter-mediated path | **Deliberately not built** — see §14.8, [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.9 |
+
+## 14.8 Trusted Integration: a sixth authentication mechanism, and what it changes about the threat model
+
+| Mechanism | Function | What it proves |
+|---|---|---|
+| Trusted Connection signature (Ed25519) | `verify_integration_identity_signature` | "This specific Trusted Connection, holding this specific certificate's private key, submitted this exact attested request" |
+
+Structurally identical to Agent signature verification (§14.1) — same primitive, same "checked against an `active` certificate only" rule — but a genuinely separate identity type (`IntegrationIdentity`, never a second Agent model) with its own certificate table, its own lifecycle, and its own replay index (`UNIQUE(integration_identity_id, nonce)`, entirely independent of `UNIQUE(agent_id, nonce)`). Never RBAC/`Permission`-checked — a Trusted Adapter is not a human session, the same reasoning that keeps Agent signature verification outside RBAC too.
+
+**Trust boundaries specific to this path, each a real, code-enforced check (not a convention) — see [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.4 for the full sequence**:
+
+- A Trusted Connection must be `active` (not suspended, revoked, retired) to submit anything.
+- A Runtime Connection binding names exactly one Trusted Connection; one that exists but belongs to a *different* Trusted Connection is indistinguishable from "not found" — never a signal that reveals another tenant's or another connection's binding exists.
+- The origin Agent named in an attested request must independently be `active` **and** appear on that specific Runtime Connection's explicit allow-list — checked server-side regardless of what the Adapter itself claims.
+- Only context keys an approved Action Mapping explicitly bound may reach policy evaluation; anything else is a hard rejection, closing the "smuggle an untrusted value in as if pre-approved" class of attack.
+- `environment` is server-resolved from the active binding; a caller-supplied `environment` key is rejected outright, closing "claim staging while acting on production" (or the reverse).
+
+**Tenant isolation**: every Trusted Integration table (`integrations`, `integration_contract_versions`, `integration_identities`, `integration_identity_certificates`, `enforcement_bindings`, `enforcement_binding_agents`) carries or resolves an `organization_id`, checked the same "cross-org looks like not-found" way as every other org-scoped resource in this codebase (§14.6). Not independently re-verified with a second organization this pass, the same disclosed limitation §14.6 already names for other Milestone 3-era surfaces — treat this as inherited from the established pattern, not freshly live-tested.
+
+**Replay protection, two independent layers, never to be confused**: `(integration_identity_id, nonce)` uniqueness is authentication-level replay defense — "do not accept the same signed request object again." `(integration_id, environment, external_operation_id)` uniqueness is business-operation idempotency — "one real external event produces one authority decision," entirely orthogonal, and enforced by a separate partial-unique index. A request can fail one without the other.
+
+**Capability Authorization is explicitly withheld from this path** (`CapabilityNotAvailableForIntegrationIntentError`, unconditional on `Intent.integration_identity_id is not None`) — named here again because it is as much a security-scoping decision as a product one: issuing a bearer-style downstream execution credential on top of a trust chain (Adapter attestation + Binding authorization) this architecture was never designed to carry that weight would widen the blast radius of a compromised Trusted Connection beyond what today's design accounts for. Extending Capability Authorization to this path safely is named, disclosed future work, not an oversight.
