@@ -55,7 +55,7 @@ export function DemoLanding() {
             {ORG_NAME} &middot; Runtime Authority Platform
           </span>
         </div>
-        <h1 className="mb-4" style={{ color: "var(--pr-text-primary)", fontSize: 32, fontWeight: 600, lineHeight: 1.25 }}>
+        <h1 className="text-3xl font-bold mb-4" style={{ color: "var(--pr-text-primary)", lineHeight: 1.25, textWrap: "balance" }}>
           An AI agent tries to change a supplier's bank details. Does your organization actually authorize that?
         </h1>
         <p style={{ color: "var(--pr-text-muted)", fontSize: 15, maxWidth: 560 }}>

@@ -845,6 +845,15 @@ on("GET", "/v1/decisions/:id/receipt", ({ params }) => {
         }
       : null,
     capability: decision.capability,
+    // Demo V3 fix: this field was previously omitted entirely, so the
+    // Receipt's "Reported through a trusted connection" card and the
+    // demo tour's receipt-integration-provenance step both silently had
+    // nothing to show for an Adapter-mediated decision, even though
+    // GET /v1/decisions/:id (the Decision itself) already carried this
+    // same data correctly. Mirrors the real backend's
+    // AuthorizationReceiptResponse.integration semantics: present only
+    // for a Trusted-Adapter-mediated decision, null for agent-direct.
+    integration: decision.integration ?? null,
     evidence: {
       evidence_id: evidenceRecord.evidence_id,
       key_id: evidenceRecord.key_id,

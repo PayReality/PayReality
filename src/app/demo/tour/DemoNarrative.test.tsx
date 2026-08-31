@@ -126,6 +126,29 @@ describe("DecisionDetailPage: the Adapter-mediated narrative decision", () => {
   });
 });
 
+describe("AuthorizationReceiptPage: integration provenance", () => {
+  it("an Adapter-mediated receipt truthfully carries the Decision's integration provenance", async () => {
+    const { DECISION_HERO_ADAPTER_REVIEW } = await import("../fixtures/decisions");
+    const { AuthorizationReceiptPage } = await import("../../live/pages/AuthorizationReceiptPage");
+    await renderAt(`/decisions/${DECISION_HERO_ADAPTER_REVIEW}/receipt`, AuthorizationReceiptPage, "/decisions/:decisionId/receipt");
+
+    expect(container.textContent).toContain("Reported through a trusted connection");
+    expect(container.textContent).toContain("SAP S/4HANA");
+    expect(container.textContent).toContain("SAP Procurement Adapter");
+    expect(container.textContent).toContain("OP-92819");
+    expect(container.textContent).toMatch(/does not\s+prove.*executed/i);
+    expect(container.textContent).not.toMatch(/proves it happened correctly|the erp executes|proceeds into the enterprise system of record/i);
+  });
+
+  it("an agent-direct receipt does not fabricate integration provenance", async () => {
+    const { DECISION_HERO_ALLOW } = await import("../fixtures/decisions");
+    const { AuthorizationReceiptPage } = await import("../../live/pages/AuthorizationReceiptPage");
+    await renderAt(`/decisions/${DECISION_HERO_ALLOW}/receipt`, AuthorizationReceiptPage, "/decisions/:decisionId/receipt");
+
+    expect(container.textContent).not.toContain("Reported through a trusted connection");
+  });
+});
+
 describe("DecisionDetailPage: the Allow counterexample", () => {
   it("shows an Allow outcome with no integration provenance (agent-direct)", async () => {
     const { DECISION_HERO_ALLOW } = await import("../fixtures/decisions");
