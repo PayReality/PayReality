@@ -39,7 +39,7 @@ function MappingRow({ mapping, systemId, systemLabel, canManage, canPublish, onC
   }
 
   return (
-    <div style={{ borderTop: "1px solid var(--pr-overlay-05)" }}>
+    <div style={{ borderTop: "1px solid var(--pr-overlay-05)" }} data-tour="mapping-row">
       <div className="flex flex-wrap items-center gap-3 p-3">
         <button
           onClick={() => setExpanded((e) => !e)}

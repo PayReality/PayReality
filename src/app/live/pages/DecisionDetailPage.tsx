@@ -5,6 +5,8 @@ import { apiClient } from "../apiClient";
 import { decisionsApi } from "../decisionsApi";
 import { agentsApi } from "../../agents/api";
 import { integrationsApi } from "../../integrations/api";
+import { DEMO_MODE } from "../../demo/config";
+import { findDecisionForExternalOperation } from "../../demo/liveFeed";
 import {
   describeApiError,
   describeExplanationUnavailable,
@@ -81,10 +83,15 @@ export function DecisionDetailPage() {
   const [resolving, setResolving] = useState(false);
   const [resolverName, setResolverName] = useState("");
   const [resolveError, setResolveError] = useState<string | null>(null);
+  // Demo V2 (Trusted Authority Story): the "simulate a retry" affordance's
+  // own result text -- demo-mode only, see the integration-provenance
+  // card below.
+  const [replayMessage, setReplayMessage] = useState<string | null>(null);
 
   function load() {
     if (!decisionId) return;
     setLoadError(null);
+    setReplayMessage(null);
     decisionsApi
       .get(decisionId)
       .then((d) => {
@@ -229,7 +236,7 @@ export function DecisionDetailPage() {
           DecisionDetailPage's own loading branch returns early above,
           so this only ever mounts once, when `decision` first becomes
           real. */}
-      <Card padding={24} className="mb-4 pr-enter" role="status">
+      <Card padding={24} className="mb-4 pr-enter" role="status" data-tour="decision-outcome">
         <div className="flex items-center gap-3 mb-3">
           <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: style.bg }}>
             <style.icon className="w-5 h-5" style={{ color: style.fg }} />
@@ -414,7 +421,7 @@ export function DecisionDetailPage() {
           of this section, never an empty/placeholder version of it. */}
       {decision.integration && (
         <div className="mb-4 pr-enter" style={enterDelay(60)}>
-          <Card padding={20}>
+          <Card padding={20} data-tour="decision-integration-provenance">
             <p className="text-sm font-semibold mb-2" style={{ color: "var(--pr-text-primary)" }}>Reported through a trusted connection</p>
             <ContextRow label="System" value={integrationSystemName ?? "Loading..."} muted={!integrationSystemName} />
             <ContextRow label="Trusted connection" value={trustedConnectionName ?? "Loading..."} muted={!trustedConnectionName} />
@@ -425,6 +432,31 @@ export function DecisionDetailPage() {
               An authenticated trusted connection attested it observed this operation -- this is not proof
               the external system actually executed it.
             </p>
+            {DEMO_MODE && decision.integration.external_operation_id && (
+              <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--pr-overlay-05)" }}>
+                <button
+                  type="button"
+                  data-tour="replay-operation"
+                  className="text-xs font-medium"
+                  style={{ color: "var(--pr-authority-blue)" }}
+                  onClick={() => {
+                    const existing = findDecisionForExternalOperation(decision.integration!.external_operation_id!);
+                    setReplayMessage(
+                      existing
+                        ? `Recognized as the same operation (${decision.integration!.external_operation_id}) -- returned the existing Decision ${existing.id}. No new decision was created.`
+                        : "This operation wasn't found in the demo's own record -- nothing to replay."
+                    );
+                  }}
+                >
+                  Simulate SAP retrying this report &rarr;
+                </button>
+                {replayMessage && (
+                  <p className="text-xs mt-2" style={{ color: "var(--pr-trust-green)" }} data-tour="replay-result" role="status">
+                    {replayMessage}
+                  </p>
+                )}
+              </div>
+            )}
           </Card>
         </div>
       )}
@@ -496,7 +528,7 @@ export function DecisionDetailPage() {
       </div>
 
       {/* EVIDENCE */}
-      <div className="mb-4 pr-enter" style={enterDelay(120)}>
+      <div className="mb-4 pr-enter" style={enterDelay(120)} data-tour="decision-evidence">
         <p className="text-sm font-semibold mb-3" style={{ color: "var(--pr-text-primary)" }}>Evidence</p>
         <Card padding={20}>
           {evidenceLoading && <Skeleton height={14} width="40%" />}

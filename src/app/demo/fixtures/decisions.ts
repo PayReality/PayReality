@@ -1,4 +1,4 @@
-import type { LiveDecision, DecisionOutcome } from "../../live/types";
+import type { LiveDecision, DecisionOutcome, DecisionIntegrationSummary } from "../../live/types";
 import { agoMs, SECOND, MINUTE } from "../liveClock";
 import { AGENT_AP_INVOICE, AGENT_PO_APPROVAL, AGENT_VENDOR_ONBOARDING, AGENT_ACCESS_PROVISIONING } from "./agents";
 import {
@@ -12,6 +12,7 @@ import {
 } from "./policies";
 import { ES_SAP, ES_COUPA, ES_SERVICENOW } from "./enterpriseSystems";
 import { SUPPLIERS } from "./organization";
+import { DEMO_SYSTEM_SAP, DEMO_TRUSTED_CONNECTION_SAP, DEMO_CONNECTION_SAP, DEMO_MAPPING_SAP_APPROVED } from "./integrations";
 
 interface DemoDecisionSeed {
   id: string;
@@ -36,6 +37,10 @@ interface DemoDecisionSeed {
   // null below -- most demo decisions were never submitted with one,
   // matching the real backend's own honesty about absence.
   correlation_id?: string | null;
+  // Demo V2 (Trusted Authority Story): set only for the Adapter-mediated
+  // narrative decision -- every other seed omits this, matching the real
+  // backend's own null-for-agent-direct semantics exactly.
+  integration?: DecisionIntegrationSummary | null;
 }
 
 // The story's protagonist decision: this exact ID is what the guided
@@ -45,6 +50,13 @@ export const DECISION_HERO_ALLOW = "decision-hero-ap-invoice-allow";
 export const DECISION_HERO_DENY = "decision-hero-ap-invoice-deny";
 export const DECISION_HERO_REVIEW = "decision-hero-ap-invoice-review";
 export const DECISION_HERO_DISABLE_USER = "decision-hero-disable-user-review";
+// Demo V2 (Trusted Authority Story): the guided tour's own protagonist
+// decision -- Adapter-mediated, HUMAN_REVIEW, tied to the same
+// DEMO_SYSTEM_SAP / DEMO_MAPPING_SAP_APPROVED / DEMO_CONNECTION_SAP
+// fixtures the Settings > Integrations demo already seeds, so the tour
+// and a visitor's own exploration of Integrations show the same data.
+export const DECISION_HERO_ADAPTER_REVIEW = "decision-hero-adapter-bank-details-review";
+export const DEMO_ADAPTER_EXTERNAL_OPERATION_ID = "OP-92819";
 
 const seeds: DemoDecisionSeed[] = [
   {
@@ -98,6 +110,37 @@ const seeds: DemoDecisionSeed[] = [
     status: "RESOLVED",
     resolution: { resolution: "approved", resolved_by: "Priya Chandrasekaran", reason: "Confirmed against the Q3 capital equipment budget.", created_at: agoMs(18 * MINUTE) },
     correlation_id: "JOB-2026-0483",
+  },
+  {
+    // Demo V2: reported through the SAP Procurement Adapter (see
+    // fixtures/integrations.ts), not self-reported by the Agent --
+    // that's what makes `integration` non-null below, and what the
+    // guided tour's "reported through a trusted connection" beat shows.
+    id: DECISION_HERO_ADAPTER_REVIEW,
+    offsetMs: 3 * MINUTE,
+    outcome: "HUMAN_REVIEW",
+    reason: "Changing a supplier's payment routing details is routed to human review every time, regardless of amount -- this is a deliberate control against a classic vendor-fraud pattern, not an exception being made for this request.",
+    agent_id: AGENT_AP_INVOICE,
+    action: "vendor_payment",
+    resource: `supplier:${SUPPLIERS[0]}`,
+    amount: 84000,
+    currency: "USD",
+    evaluated_mandates: [POLICY_VENDOR_PAYMENT_UNDER_50K, POLICY_INVOICE_REVIEW_OVER_50K],
+    evaluated_mandate_ids: [],
+    enterprise_system_id: ES_SAP,
+    enterprise_system_name: "SAP S/4HANA",
+    status: "PENDING",
+    resolution: null,
+    integration: {
+      integration_identity_id: DEMO_TRUSTED_CONNECTION_SAP,
+      enforcement_binding_id: DEMO_CONNECTION_SAP,
+      integration_contract_version_id: DEMO_MAPPING_SAP_APPROVED,
+      integration_contract_content_hash: "sha256:demo-mapping-hash-v1",
+      integration_id: DEMO_SYSTEM_SAP,
+      environment: "production",
+      source_operation: "ChangeSupplierBankDetails",
+      external_operation_id: DEMO_ADAPTER_EXTERNAL_OPERATION_ID,
+    },
   },
   {
     // Domain Generalization Milestone: the platform's non-financial
@@ -241,6 +284,7 @@ export const demoDecisions: LiveDecision[] = allSeeds.map((s) => ({
   authority_version: null,
   resolution: s.resolution,
   correlation_id: s.correlation_id ?? null,
+  integration: s.integration ?? null,
 }));
 
 export const demoDecisionCreatedAt: Record<string, string> = Object.fromEntries(

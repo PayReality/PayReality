@@ -400,7 +400,7 @@ export function AgentDetailPage() {
       <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "var(--pr-text-disabled)" }}>
         Trusted connections
       </p>
-      <Card style={{ marginBottom: 16 }}>
+      <Card style={{ marginBottom: 16 }} data-tour="agent-trusted-connections">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-medium" style={{ color: "var(--pr-text-primary)" }}>Where this agent is allowed to act via a trusted connection</h2>
           <Link to="/organization/integrations" style={{ color: "var(--pr-authority-blue)", fontSize: 12, flexShrink: 0 }}>Manage integrations &rarr;</Link>

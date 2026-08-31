@@ -10,12 +10,21 @@ import { track } from "../services/analytics";
 const VALUE_BULLETS = [
   { icon: ShieldCheck, label: "Denied unauthorized payments" },
   { icon: Lock, label: "Verified delegated authority" },
-  { icon: Building2, label: "Independent Runtime Authority" },
+  { icon: Building2, label: "Independently reported operations" },
   { icon: FileCheck, label: "Cryptographic Evidence" },
   { icon: Building2, label: "Enterprise Governance" },
 ];
 
+// Demo V2 (Trusted Authority Story): the three-question model is now the
+// primary explanation of what PayReality does -- the "nine AI agents"
+// world (last explainer below) is retained as supporting context, per
+// this milestone's own instruction, not as the lead.
 const EXPLAINERS = [
+  {
+    key: "three-questions",
+    title: "The three questions PayReality answers",
+    body: "Agent: who is acting? Trusted Adapter: what company-controlled component is reporting what action is being attempted? PayReality: has the organization actually authorized that agent to do this, under these conditions? PayReality only ever answers the third question -- it never claims the Adapter proves the action happened, and it never assumes an agent is trustworthy just because a Trusted Adapter exists.",
+  },
   {
     key: "architecture",
     title: "Platform Architecture",
@@ -47,11 +56,13 @@ export function DemoLanding() {
           </span>
         </div>
         <h1 className="mb-4" style={{ color: "var(--pr-text-primary)", fontSize: 32, fontWeight: 600, lineHeight: 1.25 }}>
-          AI agents act inside your enterprise every day. Something has to verify they're allowed to.
+          An AI agent tries to change a supplier's bank details. Does your organization actually authorize that?
         </h1>
         <p style={{ color: "var(--pr-text-muted)", fontSize: 15, maxWidth: 560 }}>
           PayReality is the Runtime Authority layer that checks every AI-initiated action against real delegated
-          authority and enterprise policy, before it executes -- then proves it happened correctly.
+          authority and enterprise policy, before it executes -- then produces a signed, verifiable record of
+          the decision. It doesn't observe or prove what happens afterward inside the enterprise system itself;
+          it decides, and proves that it decided.
         </p>
       </div>
 

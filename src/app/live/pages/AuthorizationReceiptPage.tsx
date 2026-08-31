@@ -193,7 +193,7 @@ export function AuthorizationReceiptPage() {
 
       {receipt.integration && (
         <div className="mb-4 pr-enter">
-          <Card padding={20}>
+          <Card padding={20} data-tour="receipt-integration-provenance">
             <p className="text-sm font-semibold mb-2" style={{ color: "var(--pr-text-primary)" }}>Reported through a trusted connection</p>
             <ContextRow label="Reported through" value={trustedConnectionName ? `${trustedConnectionName} trusted connection` : "Loading..."} muted={!trustedConnectionName} />
             <ContextRow label="System" value={systemName ?? "Loading..."} muted={!systemName} />
