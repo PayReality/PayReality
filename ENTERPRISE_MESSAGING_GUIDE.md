@@ -2,7 +2,9 @@
 
 **Purpose**: the single source of truth for how PayReality should be described, everywhere. Every other deliverable (website copy, sales material, pilot documentation) should trace back to the definitions in this document, not restate them independently.
 
-**Status: rewritten as of Milestone 17.1 (POC Readiness Remediation), 2026-08-25**, superseding the prior version of this guide, which was written around a narrower "policy decision point sitting after identity, before execution" framing. That framing was accurate as far as it went but predates three real, shipped capabilities (Trusted Enterprise Facts, Authority Freshness, Capability Authorization) and undersold the platform's real architecture. This version is checked directly against the current codebase and against `POC_READINESS_REPORT.md` (the most current, verified status document in the repository), not against the aspiration in any planning document.
+**Status: rewritten as of Milestone 17.1 (POC Readiness Remediation), 2026-08-25; extended 2026-08-31 (Product & Trust Documentation Baseline) to cover Trusted Integration Architecture Phases 1–4**, superseding the prior version of this guide, which was written around a narrower "policy decision point sitting after identity, before execution" framing. That framing was accurate as far as it went but predates several real, shipped capabilities (Trusted Enterprise Facts, Authority Freshness, Capability Authorization, and now Trusted Integration) and undersold the platform's real architecture. This version is checked directly against the current codebase, `POC_READINESS_REPORT.md`, and [SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md](SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md), not against the aspiration in any planning document.
+
+**One correction to this guide's own prior instruction**: §16 below previously listed "Authorization Receipt" as a prohibited artifact name, on the basis that it wasn't a real shipped thing distinct from Evidence. That was accurate on 2026-08-25 and is **no longer accurate** — `GET /v1/decisions/{id}/receipt` is a real, shipped, named endpoint (Issue #4), with a dedicated frontend page and its own permission gate. §16 and §18 below have been corrected. It remains true, and more important than ever to keep saying, that the Receipt is a *packaging* of Evidence, never a stronger or separate proof.
 
 Every factual claim below is labeled **VERIFIED** (checked directly against the shipped platform and its passing tests), **REFERENCE ONLY** (a real, working artifact built specifically to prove a mechanism, not a production integration), **INFERRED** (a reasonable conclusion from verified facts, not itself directly tested), or **PROPOSED** (a messaging choice being recommended, not a fact).
 
@@ -97,6 +99,22 @@ For an ALLOW decision, PayReality can issue a signed, short lived, single use au
 
 **The boundary that must never be dropped, in bold in every document that mentions this capability**: **Capability Authorization is not itself enforcement.** It is a cryptographically tight, single resource, single amount, single expiry, single use binding between a decision and a proposed execution, for whatever real enforcement point chooses to check it. Something downstream must actually require the capability before acting, and nothing does in production today. The only enforcement adapter that exists in this codebase is the reference adapter described in Section 6, which is explicitly proof of mechanism, not a production integration.
 
+### 8.4 Trusted Integration
+
+Runtime Authority has two ways to learn what an AI agent is attempting. The original way, unchanged: the agent's own signed description of itself. The newer way, additive: a customer-controlled **Trusted Adapter** — never PayReality's own component, never hosted by PayReality — observes a real operation against an enterprise system and reports it using a deterministic, human-approved **Action Mapping**, through a separately authenticated **Trusted Connection**.
+
+**Three questions, never conflated, in every description of this capability**: *Agent* answers who is acting. *Trusted Adapter* answers what company-controlled component is attesting what action is being attempted. *PayReality* answers whether the organization authorizes that agent to perform that action under these conditions. The Adapter never gives the agent authority; PayReality never trusts the agent merely because an Adapter exists; the Adapter never objectively proves reality — it attests what it observed, structurally checked against an approved mapping, nothing stronger.
+
+**Boundaries that must be stated whenever this is described**:
+- The Adapter is customer-deployed, customer-controlled infrastructure. "PayReality secretly watches enterprise systems" is never an accurate description under any circumstance.
+- An Action Mapping is deterministic, versioned, and requires a named human's approval before use; multiple approved versions of the same mapping may legitimately coexist (there is no single "current version").
+- Only context explicitly bound by an approved mapping may influence a decision — never arbitrary caller-supplied metadata.
+- A pre-evaluation trust failure on this path (an inactive connection, an agent not on the explicit allow-list, a mapping mismatch) is an **integration rejection**, never a `DENY` — no Decision, no Evidence, is produced for it. Keep this distinction as sharp as the ALLOW/DENY/HUMAN_REVIEW distinction itself.
+- One real business operation produces one authority decision: a network retry of the same operation returns the existing Decision, never a new one; the same operation ID with different authority-relevant meaning is a conflict, never silently evaluated.
+- **Capability Authorization is currently, deliberately not issued for any Adapter-mediated decision** — see §8.3's own boundary, doubly true here. This is a named scope boundary, not an oversight; describing when and how it will be safe to extend is future work, not a current capability.
+
+Full technical account: [SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md](SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md). Plain-language explainer for customer-facing material: [TRUSTED_ADAPTER_GUIDE.md](TRUSTED_ADAPTER_GUIDE.md).
+
 ## 9. Runtime Policies and OPA (VERIFIED)
 
 Policies are structured data (scope, conditions, effect), never natural language rules interpreted at decision time. They compile to real Rego and are evaluated by a real, embedded Open Policy Agent instance, the same open source engine used for policy as code in cloud infrastructure and Kubernetes. A policy's lifecycle is explicit and auditable: draft, submitted for review, approved, activated (which triggers real compilation and a real OPA deployment with a recorded bundle hash), and eventually deprecated, archived, or rolled back (rollback creates a new draft rather than reactivating history directly, by deliberate design). Two policies that could jointly, ambiguously match the same real Intent are rejected at compile time, before either can go live. Nothing about evaluation is probabilistic; the same input against the same active policy set produces the same decision every time, which is precisely why the Evidence record is worth signing at all.
@@ -133,6 +151,8 @@ Production runs on Azure Container Apps, Azure Database for PostgreSQL Flexible 
 - Authority Intelligence proposes candidate authority data and candidate policies from an organization's own governance documents, with full provenance; nothing is enforced without an explicit human promotion and approval.
 - The platform is multi tenant, isolated at the data layer, and this isolation has been live tested with a real second organization.
 - Production runs on Azure with Managed Identity throughout and a live custom domain with a real certificate.
+- A customer-controlled Trusted Adapter can report a real enterprise operation to Runtime Authority through a deterministic, human-approved Action Mapping, with an explicit Agent allow-list and a genuine, DB-enforced idempotency guarantee against retries.
+- PayReality's Authorization Receipt packages one decision's Evidence, authority, and (where applicable) trusted-integration provenance into one shareable, human-readable view — it is Evidence, presented, never a second or stronger proof.
 
 ## 15. Future or conditional claims (state the condition every time)
 
@@ -142,6 +162,9 @@ Production runs on Azure Container Apps, Azure Database for PostgreSQL Flexible 
 - "PayReality supports on premises deployment" is not true today; the platform is a multi tenant, Azure hosted service.
 - "PayReality supports multi step or sequential approval chains" is not true today; only flat, single stage policies exist.
 - Any claim of a named customer, pilot, or reference deployment should be added here only once one genuinely, verifiably exists; see Section 17.
+- "Capability Authorization for a trusted-Adapter-reported action" is not true today, unqualified; Capability Authorization is currently issued only for agent-direct decisions, by explicit, deliberate design.
+- "PayReality has vendor connectors for [named enterprise system]" is not true today; every Trusted Adapter is customer-built against a documented request shape, and no vendor-specific (SAP, Workday, or similar) connector ships with the platform.
+- "PayReality automatically discovers what an enterprise system's operations mean" is not true today; every Action Mapping is hand-authored and requires explicit human approval.
 
 ## 16. Prohibited current state claims
 
@@ -151,7 +174,10 @@ Do not make any of the following as an unqualified, present tense platform claim
 - "Blocks unauthorized actions" or "prevents AI from executing," stated as something PayReality itself does today.
 - "Cannot execute without PayReality," or any variant implying PayReality sits on the only path to an action.
 - "Non bypassable."
-- "Authorization Receipt" as a distinct, shipped, portable artifact name. The real thing is Evidence; describe it honestly under that name. Any prior or external material calling this "Authorization Receipt" and presenting it as shipped should be corrected, not repeated.
+- "Authorization Receipt" described as a **second, independent, or stronger** proof than Evidence, or as proof that a downstream external action executed. (Corrected 2026-08-31: the term itself is now a real, shipped, named artifact — `GET /v1/decisions/{id}/receipt` — and is safe to use; what remains prohibited is overstating what it proves beyond the same Evidence it packages.)
+- "The Trusted Adapter proves the external operation occurred," "the Adapter gives the Agent authority," or "PayReality trusts the Agent because an Adapter exists" — none of the three are true; see §8.4.
+- Any claim that Capability Authorization is available, issued, or usable for a trusted-Adapter-reported decision, unqualified.
+- "Adapter-mediated enforcement" or similar, implying a real enforcement mechanism exists for the trusted-Adapter path specifically — the same PDP boundary in §6 applies without exception to this path.
 - Any claim that Authority Intelligence eliminates the need for a human reviewer; the opposite is the correct and more defensible claim.
 - Any specific customer, logo, or case study beyond what genuinely exists (see Section 17).
 - Any uptime or SLA number that has not actually been measured under real production load.
@@ -176,12 +202,17 @@ As of this rewrite, PayReality has no completed enterprise pilot and no referenc
 | Trusted Enterprise Facts | YES | Provenance of an assertion, not objective truth; fails closed when missing, expired, or contradictory. |
 | Authority Freshness | YES | Review due and authority expired are distinct; only high or critical risk expiry currently forces HUMAN_REVIEW. |
 | Authority Intelligence | YES | Proposes candidates with provenance; never auto enforced. |
-| Policy Decision Point | YES | The accurate, precise name for what PayReality is today. |
-| Runtime Enforcement | NO | As an unqualified PayReality capability. |
-| Authorization Receipt | NO | Not a shipped artifact name; the real thing is Evidence. |
+| Policy Decision Point | YES | The accurate, precise name for what PayReality is today, on both the agent-direct and trusted-Adapter paths. |
+| Trusted Adapter | YES | Customer-controlled, customer-deployed; never hosted by PayReality; never itself an enforcement point. |
+| Action Mapping | YES | Deterministic, versioned, human-approved; multiple approved versions may coexist. |
+| Trusted Connection / Runtime Connection | YES | The authenticated identity and its live deployment scope for the Adapter path, respectively. |
+| Authorization Receipt | YES | Real, shipped, named endpoint as of Issue #4. Never describe it as a stronger or second proof beyond the Evidence it packages, and never as proof a downstream action executed. |
+| Runtime Enforcement | NO | As an unqualified PayReality capability, on either runtime path. |
+| Capability Authorization for a trusted-Adapter decision | NO | Deliberately not issued for this path today; see §8.4. |
 | Blocks unauthorized actions | NO | |
 | Cannot execute without PayReality | NO | |
 | Non bypassable | NO | |
+| PayReality watches/monitors enterprise systems | NO | The Trusted Adapter is customer infrastructure; PayReality has no standing access to any enterprise system. |
 | Enforcement point | CONDITIONAL | Only when describing a real downstream PEP that has actually been deployed, or the reference enforcement adapter, clearly and explicitly labeled as proof of mechanism only. |
 | Sequential or multi step approval | NO | Does not exist in the current policy model. |
 | Named required approver at decision time | NO | Not determined by policy today; only recorded after the fact upon resolution. |
