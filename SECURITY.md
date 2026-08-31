@@ -1,5 +1,7 @@
 # Security
 
+> **This document is superseded by [SPECIFICATION/14_SECURITY_MODEL.md](SPECIFICATION/14_SECURITY_MODEL.md).** It is kept in place as a design-time record, not deleted or rewritten, but it predates RBAC's actual shipped shape and the entire Trusted Integration Architecture (Action Mapping, Trusted Connection, Runtime Connection, the Adapter-mediated runtime path — see [SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md](SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md)). Where this document's description of authentication/authorization conflicts with the specification, the specification is current and this document is not.
+
 A full review of this codebase's security posture as it actually stands, written the same way the rest of this pass was done: real findings, real fixes where a fix was proportionate, and named gaps where it wasn't yet.
 
 ## Authentication

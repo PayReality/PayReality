@@ -75,10 +75,13 @@ Set `VITE_API_URL` (see `.env.example`) to point at the backend above.
 
 * [BACKLOG_V1_CLOSURE.md](BACKLOG_V1_CLOSURE.md): the real, live-verified backlog. Start here for what's actually still open right now, not a historical snapshot.
 * [GAVIN_ABSA_PRODUCT_AUDIT.md](GAVIN_ABSA_PRODUCT_AUDIT.md) / [GAVIN_REMEDIATION_PLAN.md](GAVIN_REMEDIATION_PLAN.md): the active initiative, closing the gap between a real enterprise sales briefing and what the product does today. Tracked in issue #3 and its nine child issues.
-* [sdk-python/README.md](sdk-python/README.md), [SDK_REFERENCE.md](SDK_REFERENCE.md), [SDK_SECURITY.md](SDK_SECURITY.md): the Python SDK, including the current `bearer_token`-preferred auth model.
+* [ENTERPRISE_MESSAGING_GUIDE.md](ENTERPRISE_MESSAGING_GUIDE.md): the single source of truth for how PayReality should be described, anywhere — website, sales, pilot material. [WEBSITE_CLAIMS.md](WEBSITE_CLAIMS.md) is its compact extract for the next website milestone; [DEMO_NARRATIVE.md](DEMO_NARRATIVE.md) is the equivalent for the next demo milestone.
+* [TRUSTED_ADAPTER_GUIDE.md](TRUSTED_ADAPTER_GUIDE.md): plain-English explainer for the Trusted Integration Architecture's customer-deployed Adapter component — what it is, where it runs, what it does and doesn't prove.
+* [AUDITOR_ASSURANCE_GUIDE.md](AUDITOR_ASSURANCE_GUIDE.md): a short Q&A for independently verifying what PayReality's Evidence/Receipt records do and don't show.
+* [sdk-python/README.md](sdk-python/README.md), [SDK_ARCHITECTURE.md](SDK_ARCHITECTURE.md), [SDK_REFERENCE.md](SDK_REFERENCE.md), [SDK_SECURITY.md](SDK_SECURITY.md): the Python SDK, covering both the agent-direct and Trusted Adapter runtime paths.
 * [AZURE_MIGRATION/terraform/README.md](AZURE_MIGRATION/terraform/README.md): required reading before touching Terraform here (prod/staging state separation).
 * [docs/API_SPECIFICATION.md](docs/API_SPECIFICATION.md): every real endpoint, its auth requirement, and its schema (`openapi.json` is the machine-readable source).
-* [SECURITY.md](SECURITY.md): security posture, including what's covered, what's a known gap, and why.
+* [SECURITY.md](SECURITY.md): superseded by [SPECIFICATION/14_SECURITY_MODEL.md](SPECIFICATION/14_SECURITY_MODEL.md); kept as a design-time record.
 
 **Architecture and design history** (some of these predate multi-tenancy, RBAC, and the AI Authority Builder shipping; treat as historical design record for how the current system got here, not as a live status report):
 
@@ -92,7 +95,7 @@ Set `VITE_API_URL` (see `.env.example`) to point at the backend above.
 * [POLICY_STUDIO.md](POLICY_STUDIO.md): the manual policy-authoring editor's design, Monaco integration, validation, and versioning
 * [DEPLOYMENT.md](DEPLOYMENT.md), [GO_LIVE.md](GO_LIVE.md), [OPERATIONS_RUNBOOK.md](OPERATIONS_RUNBOOK.md), [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md): the original path to production -- superseded in practice by the real Azure cutover and the CD pipeline in `.github/workflows/`, kept for historical record
 * [VERSION_3_ROADMAP.md](VERSION_3_ROADMAP.md), [DOMAIN_REFACTOR_PLAN.md](DOMAIN_REFACTOR_PLAN.md): earlier forward-looking plans; check BACKLOG_V1_CLOSURE.md first for what's actually current
-* [SPECIFICATION/](SPECIFICATION/): the platform's own 49-part internal architecture handbook, including a dedicated current-limitations part and a candid architectural assessment
+* [SPECIFICATION/](SPECIFICATION/): the platform's own 50-part internal architecture handbook, including a dedicated current-limitations part, a candid architectural assessment, and (Part 50) the Trusted Integration Architecture
 
 ## Status
 
