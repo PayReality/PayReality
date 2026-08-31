@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
 export type HelpTab = "getting_started" | "learn" | "search" | "troubleshooting" | "developer" | "contact";
 
@@ -28,6 +28,15 @@ interface HelpContextValue {
   doneSteps: Set<string>;
   markStepDone: (stepId: string) => void;
   toggleStep: (stepId: string) => void;
+  // Live-QA fix: the element that had focus right before the panel opened
+  // (a HelpButton, a HelpIcon's "Learn more", a search result), so the
+  // panel can hand focus back to it on close. Needed because HelpPanel's
+  // Sheet is opened from outside its own tree via this context rather
+  // than a Radix Trigger inside it, so Radix's own trigger-focus-restore
+  // (@radix-ui/react-dialog's context.triggerRef) never fires and focus
+  // was silently dropping to <body> instead, the same failure mode the
+  // mobile nav drawer in Layout.tsx already had to work around explicitly.
+  lastFocusedRef: RefObject<HTMLElement | null>;
 }
 
 const HelpContext = createContext<HelpContextValue | null>(null);
@@ -37,12 +46,18 @@ export function HelpProvider({ children }: { children: ReactNode }) {
   const [activeTab, setActiveTabState] = useState<HelpTab>("getting_started");
   const [focusedArticleId, setFocusedArticleId] = useState<string | null>(null);
   const [doneSteps, setDoneSteps] = useState<Set<string>>(() => loadDoneSteps());
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(doneSteps)));
   }, [doneSteps]);
 
+  function rememberFocus() {
+    lastFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
+
   function openHelp(tab?: HelpTab) {
+    rememberFocus();
     if (tab) setActiveTabState(tab);
     setIsOpen(true);
   }
@@ -56,6 +71,7 @@ export function HelpProvider({ children }: { children: ReactNode }) {
   }
 
   function openLearnArticle(articleId: string) {
+    rememberFocus();
     setFocusedArticleId(articleId);
     setActiveTabState("learn");
     setIsOpen(true);
@@ -97,6 +113,7 @@ export function HelpProvider({ children }: { children: ReactNode }) {
         doneSteps,
         markStepDone,
         toggleStep,
+        lastFocusedRef,
       }}
     >
       {children}

@@ -12,10 +12,19 @@ import type { ConditionEvaluation, DelegationEdge, LiveEvidence, RuleEvaluation 
 // replace. Kept presentation-only (no data fetching) so both callers
 // stay in charge of their own loading/error states.
 
+// Live-QA fix: fg used to read the plain --pr-trust-green/-amber/-red
+// tokens directly, which is exactly what a real getComputedStyle
+// contrast check against the live demo caught as a WCAG 2.1 4.5:1
+// failure on this theme's light mode (1.99:1 to 3.30:1 measured), the
+// bright brand color read as text sitting on a 10%-opacity tint of that
+// same color, not on the page's plain background. The *-on-tint tokens
+// (theme.css) are a darker shade of the same hue in light theme only;
+// dark theme already passed with the original bright color, so they
+// resolve to it unchanged there.
 export const OUTCOME_STYLE: Record<string, { bg: string; fg: string; icon: typeof CheckCircle2 }> = {
-  ALLOW: { bg: "rgba(34,197,94,0.1)", fg: "var(--pr-trust-green)", icon: CheckCircle2 },
-  DENY: { bg: "rgba(239,68,68,0.1)", fg: "var(--pr-critical-red)", icon: XCircle },
-  HUMAN_REVIEW: { bg: "rgba(245,158,11,0.1)", fg: "var(--pr-warning-amber)", icon: ShieldAlert },
+  ALLOW: { bg: "rgba(34,197,94,0.1)", fg: "var(--pr-trust-green-on-tint)", icon: CheckCircle2 },
+  DENY: { bg: "rgba(239,68,68,0.1)", fg: "var(--pr-critical-red-on-tint)", icon: XCircle },
+  HUMAN_REVIEW: { bg: "rgba(245,158,11,0.1)", fg: "var(--pr-warning-amber-on-tint)", icon: ShieldAlert },
 };
 
 // Product Experience Remediation Milestone 1 (Decision Provenance):

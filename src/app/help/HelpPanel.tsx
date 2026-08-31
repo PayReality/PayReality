@@ -280,7 +280,7 @@ function ContactTab({ onNavigate }: { onNavigate: (path: string) => void }) {
 }
 
 export function HelpPanel() {
-  const { isOpen, closeHelp, activeTab, setActiveTab, openLearnArticle } = useHelp();
+  const { isOpen, closeHelp, activeTab, setActiveTab, openLearnArticle, lastFocusedRef } = useHelp();
   const navigate = useNavigate();
 
   function goTo(path: string) {
@@ -305,6 +305,16 @@ export function HelpPanel() {
         side="right"
         className="w-[420px] max-w-[92vw] flex flex-col p-0 gap-0 border-l"
         style={{ backgroundColor: "var(--pr-bg-secondary)", borderColor: "var(--pr-overlay-05)" }}
+        onCloseAutoFocus={(e) => {
+          // Live-QA fix: this Sheet is opened from outside its own tree
+          // (HelpButton, a HelpIcon, a search result), never through a
+          // Radix Trigger inside it, so Radix's built-in trigger-focus
+          // restore has nothing to focus and silently drops focus to
+          // <body> on close. Restore it to whatever really opened the
+          // panel instead.
+          e.preventDefault();
+          lastFocusedRef.current?.focus();
+        }}
       >
         <SheetTitle className="sr-only">Help Center</SheetTitle>
 

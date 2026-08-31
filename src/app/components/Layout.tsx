@@ -292,11 +292,18 @@ function LayoutInner() {
 
   const content = (
     <div className="flex flex-col h-screen">
-      {DEMO_MODE && <DemoBanner />}
-      <div className="flex flex-1 min-h-0" style={{ backgroundColor: "var(--pr-bg-primary)" }}>
+      {/* Live-QA fix: the skip link must be the first focusable element in
+          the document so a keyboard user can bypass the banner and nav
+          before reaching it, per its own purpose. It previously sat after
+          DemoBanner in DOM order, so on the live demo the very first Tab
+          stop was the banner's "Start Guided Demo" button instead. The
+          link is position:absolute (theme.css .pr-skip-link), so moving
+          it here changes only tab/DOM order, not visual layout. */}
       <a href="#pr-main-content" className="pr-skip-link">
         Skip to main content
       </a>
+      {DEMO_MODE && <DemoBanner />}
+      <div className="flex flex-1 min-h-0" style={{ backgroundColor: "var(--pr-bg-primary)" }}>
       {/* Sidebar (desktop) */}
       {!isMobile && (
         <aside

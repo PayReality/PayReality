@@ -22,6 +22,23 @@
   --pr-verification-purple: #8B5CF6;
   --pr-logo-gradient-end: #7C3AED;
 
+  /* Live-QA fix: text/icon color for the Decision outcome badges
+     (OUTCOME_STYLE in decisionDisplay.tsx), which set this color directly
+     on a 10%-opacity tint of the very same hue, not on the page's plain
+     background. On a dark ground that pairing already measured 4.2:1 to
+     6.8:1 (a real getComputedStyle contrast check against the live demo),
+     but on this app's actual default light theme it measured only
+     1.99:1 to 3.30:1 against WCAG 2.1's 4.5:1 text minimum, on the
+     single most decision-critical label in the product (Allow/Deny/
+     Human Review). Dark theme keeps the existing bright brand color;
+     light theme gets a darker shade of the same hue, scoped to only this
+     text-on-tint use so every other consumer of --pr-trust-green etc.
+     (icons and text on the plain page background, which already pass)
+     is untouched. */
+  --pr-trust-green-on-tint: var(--pr-trust-green);
+  --pr-warning-amber-on-tint: var(--pr-warning-amber);
+  --pr-critical-red-on-tint: var(--pr-critical-red);
+
   --pr-text-primary: #F8FAFC;
   --pr-text-secondary: #CBD5E1;
   --pr-text-muted: #94A3B8;
@@ -135,12 +152,22 @@
    the dark theme (bg-secondary/card lighter than bg-primary; text gets
    progressively lighter from primary to disabled), just remapped to the
    light end of the scale, so a page built for one theme's contrast
-   logic reads correctly in the other without per-component changes. */
+   logic reads correctly in the other without per-component changes.
+   The three -on-tint variants just above are the one deliberate
+   exception: on this theme's near-white ground, the plain bright brand
+   color read directly on its own 10%-opacity tint (the Decision outcome
+   badge's actual background) fails WCAG's 4.5:1 text minimum, so they
+   get a darker shade of the same hue here; the dark theme's near-black
+   ground already passes with the bright color unchanged. */
 :root[data-theme="light"] {
   --pr-bg-primary: #F6F8FB;
   --pr-bg-secondary: #FFFFFF;
   --pr-bg-card: #FFFFFF;
   --pr-bg-hover: #EEF2F8;
+
+  --pr-trust-green-on-tint: #15803D;
+  --pr-warning-amber-on-tint: #B45309;
+  --pr-critical-red-on-tint: #B91C1C;
 
   --pr-text-primary: #0F1A2E;
   --pr-text-secondary: #33415C;
