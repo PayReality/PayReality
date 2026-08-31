@@ -1004,6 +1004,23 @@ function OrganisationHealthTab() {
   );
 }
 
+// Contact & About Freshness Pass: this tab previously showed only the
+// version/build/support facts below. It never actually explained what
+// PayReality is, and the two static facts it did carry (Deployment,
+// Documentation) were stale, naming a hosting provider this platform
+// left behind well before the real Azure cutover (see
+// ENTERPRISE_MESSAGING_GUIDE.md section 13, production has run on Azure
+// with a live custom domain and certificate since Milestone 7), and the
+// GitHub link pointed at the pre-rename org/repo name. The narrative
+// content below is sourced from
+// ENTERPRISE_MESSAGING_GUIDE.md sections 1, 3, 4, and 8.4, not invented
+// here. Version/Build are left exactly as they were: version is a real,
+// if rarely-bumped, value from the API; commit currently reads "unknown"
+// in production because the backend's RENDER_GIT_COMMIT env var was never
+// set on Azure Container Apps (BACKLOG_V1_CLOSURE.md's known deployment-
+// provenance gap), and fixing that needs a backend and deploy-workflow
+// change, out of scope for this pass, so it's disclosed here rather than
+// hidden.
 function AboutTab() {
   const [version, setVersion] = useState<{ version: string; commit: string } | null>(null);
   useEffect(() => {
@@ -1015,33 +1032,89 @@ function AboutTab() {
   }, []);
 
   return (
-    <div style={{ ...cardStyle, padding: 16, maxWidth: 480 }}>
-      <dl className="space-y-3 text-sm">
-        <div className="flex justify-between">
-          <dt style={{ color: "var(--pr-text-muted)" }}>Version</dt>
-          <dd style={{ color: "var(--pr-text-primary)" }}>{version?.version ?? "..."}</dd>
-        </div>
-        <div className="flex justify-between">
-          <dt style={{ color: "var(--pr-text-muted)" }}>Build</dt>
-          <dd style={{ color: "var(--pr-text-primary)" }} className="font-mono text-xs">{version?.commit ?? "..."}</dd>
-        </div>
-        <div className="flex justify-between">
-          <dt style={{ color: "var(--pr-text-muted)" }}>Deployment</dt>
-          <dd style={{ color: "var(--pr-text-primary)" }}>Render + Vercel (Azure staged, not yet live)</dd>
-        </div>
-        <div className="flex justify-between">
-          <dt style={{ color: "var(--pr-text-muted)" }}>Documentation</dt>
-          <dd><a href="https://github.com/AI-Securewatch/Pay-Reality-" style={{ color: "var(--pr-authority-blue)" }}>GitHub</a></dd>
-        </div>
-        <div className="flex justify-between">
-          <dt style={{ color: "var(--pr-text-muted)" }}>Support</dt>
-          <dd style={{ color: "var(--pr-text-primary)" }}>sean@aisecurewatch.com</dd>
-        </div>
-        <div className="flex justify-between">
-          <dt style={{ color: "var(--pr-text-muted)" }}>Status Page</dt>
-          <dd><Link to="/organization?tab=Organisation+Health" style={{ color: "var(--pr-authority-blue)" }}>Organisation Health</Link></dd>
-        </div>
-      </dl>
+    <div className="space-y-6" style={{ maxWidth: 640 }}>
+      <div style={{ ...cardStyle, padding: 20 }}>
+        <p className="text-xs font-mono uppercase tracking-widest mb-2" style={{ color: "var(--pr-authority-blue)" }}>
+          PayReality
+        </p>
+        <h3 className="text-base font-semibold mb-3" style={{ color: "var(--pr-text-primary)" }}>
+          The Enterprise AI Authority Infrastructure
+        </h3>
+        <p className="text-sm leading-relaxed mb-4" style={{ color: "var(--pr-text-secondary)" }}>
+          PayReality decides, before an AI agent acts, whether that agent actually has the authority to
+          take the action, and produces a cryptographically signed record of the decision.
+        </p>
+
+        <dl className="space-y-2 text-sm mb-4">
+          <div>
+            <dt className="font-medium" style={{ color: "var(--pr-text-primary)" }}>Authority Intelligence</dt>
+            <dd style={{ color: "var(--pr-text-muted)" }}>Turns your organisation's own governance documents into structured, human-reviewed candidate authority data.</dd>
+          </div>
+          <div>
+            <dt className="font-medium" style={{ color: "var(--pr-text-primary)" }}>Runtime Authority</dt>
+            <dd style={{ color: "var(--pr-text-muted)" }}>Evaluates every proposed AI action against that authority and returns a deterministic Allowed, Not allowed, or Needs human approval.</dd>
+          </div>
+          <div>
+            <dt className="font-medium" style={{ color: "var(--pr-text-primary)" }}>Verifiable Evidence</dt>
+            <dd style={{ color: "var(--pr-text-muted)" }}>Every decision produces a signed, independently verifiable record, including, where applicable, an Authorization Receipt.</dd>
+          </div>
+        </dl>
+
+        <p className="text-sm leading-relaxed mb-4" style={{ color: "var(--pr-text-secondary)" }}>
+          For higher-assurance integrations, a Trusted Connection lets a company-controlled Trusted
+          Adapter report what enterprise action is actually being attempted, through an approved Action
+          Mapping, before PayReality evaluates the Agent's authority. The simpler Agent-direct path, where
+          the Agent describes its own action, remains fully supported alongside it.
+        </p>
+
+        <dl className="space-y-1.5 text-sm mb-4">
+          <div className="flex gap-2">
+            <dt className="font-medium flex-shrink-0" style={{ color: "var(--pr-text-primary)" }}>Who is acting?</dt>
+            <dd style={{ color: "var(--pr-text-muted)" }}>The Agent.</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="font-medium flex-shrink-0" style={{ color: "var(--pr-text-primary)" }}>What's being attempted?</dt>
+            <dd style={{ color: "var(--pr-text-muted)" }}>Reported by the Agent, or via a Trusted Adapter and Action Mapping.</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="font-medium flex-shrink-0" style={{ color: "var(--pr-text-primary)" }}>Is it authorized?</dt>
+            <dd style={{ color: "var(--pr-text-muted)" }}>PayReality evaluates your organisation's authority.</dd>
+          </div>
+        </dl>
+
+        <p className="text-xs" style={{ color: "var(--pr-text-muted)" }}>
+          PayReality is developed, owned, and operated by AI Securewatch (Pty) Ltd.
+        </p>
+      </div>
+
+      <div style={{ ...cardStyle, padding: 16 }}>
+        <dl className="space-y-3 text-sm">
+          <div className="flex justify-between">
+            <dt style={{ color: "var(--pr-text-muted)" }}>Version</dt>
+            <dd style={{ color: "var(--pr-text-primary)" }}>{version?.version ?? "..."}</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt style={{ color: "var(--pr-text-muted)" }}>Build</dt>
+            <dd style={{ color: "var(--pr-text-primary)" }} className="font-mono text-xs">{version?.commit ?? "..."}</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt style={{ color: "var(--pr-text-muted)" }}>Deployment</dt>
+            <dd style={{ color: "var(--pr-text-primary)" }}>Azure</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt style={{ color: "var(--pr-text-muted)" }}>Documentation</dt>
+            <dd><a href="https://github.com/PayReality/PayReality" style={{ color: "var(--pr-authority-blue)" }}>GitHub</a></dd>
+          </div>
+          <div className="flex justify-between">
+            <dt style={{ color: "var(--pr-text-muted)" }}>Support</dt>
+            <dd style={{ color: "var(--pr-text-primary)" }}>sean@aisecurewatch.com</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt style={{ color: "var(--pr-text-muted)" }}>Status Page</dt>
+            <dd><Link to="/organization?tab=Organisation+Health" style={{ color: "var(--pr-authority-blue)" }}>Organisation Health</Link></dd>
+          </div>
+        </dl>
+      </div>
     </div>
   );
 }

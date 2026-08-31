@@ -28,7 +28,7 @@ const EXPLAINERS = [
   {
     key: "architecture",
     title: "Platform Architecture",
-    body: "Runtime Authority evaluates every AI agent's requested action before it reaches production systems (ERPs, procurement platforms, identity systems) and returns a deterministic Allow, Deny, or Human Review decision. It is not a logging layer bolted on after the fact; it is a decision made in time for an enterprise's own systems to act on it before the consequence exists.",
+    body: "Runtime Authority evaluates every AI agent's requested action before it reaches production systems (ERPs, procurement platforms, identity systems) and returns a deterministic Allow, Deny, or Human Review decision. It is not a logging layer bolted on after the fact; it is a decision made in time for an enterprise's own systems to act on it before the consequence exists. Every decision produces signed Evidence, and, for a specific decision, an Authorization Receipt that packages Evidence, authority, and (where a Trusted Connection was involved) integration provenance into one shareable view.",
   },
   {
     key: "runtime-authority",
@@ -59,10 +59,10 @@ export function DemoLanding() {
           An AI agent tries to change a supplier's bank details. Does your organization actually authorize that?
         </h1>
         <p style={{ color: "var(--pr-text-muted)", fontSize: 15, maxWidth: 560 }}>
-          PayReality is the Runtime Authority layer that checks every AI-initiated action against real delegated
-          authority and enterprise policy, before it executes, then produces a signed, verifiable record of
-          the decision. It doesn't observe or prove what happens afterward inside the enterprise system itself;
-          it decides, and proves that it decided.
+          PayReality, the Enterprise AI Authority Infrastructure, checks every AI-initiated action against real
+          delegated authority and enterprise policy, before it executes, then produces a signed, verifiable
+          record of the decision. It doesn't observe or prove what happens afterward inside the enterprise
+          system itself; it decides, and proves that it decided.
         </p>
       </div>
 
