@@ -86,6 +86,45 @@
   --pr-motion-base: 180ms;
   --pr-motion-slow: 240ms;
   --pr-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Visual System V3: a small, deliberate spacing scale for the new
+     shared components (PageHeader, EmptyState, Table, evidence
+     surfaces), not a replacement for Tailwind's own spacing utilities
+     (p-4, gap-3, etc, which every existing page keeps using unchanged),
+     just named steps for the handful of places a component needs to
+     reference "the page's own rhythm" rather than a bare pixel value.
+     4px base, matching the existing --pr-overlay/shadow tokens' own
+     implicit unit. */
+  --pr-space-1: 4px;
+  --pr-space-2: 8px;
+  --pr-space-3: 12px;
+  --pr-space-4: 16px;
+  --pr-space-6: 24px;
+  --pr-space-8: 32px;
+  --pr-space-12: 48px;
+
+  /* Visual System V3, principle 6 (Evidence should feel permanent):
+     Evidence/Authorization Receipt surfaces get their own, restrained
+     variant of the existing card treatment: a hairline border tinted
+     toward evidence-cyan instead of the neutral --pr-overlay-05, and a
+     faint corner-anchored tint instead of a flat card fill. Deliberately
+     NOT a new color (reuses --pr-evidence-cyan, already established for
+     this exact semantic meaning), not a blockchain/crypto pastiche
+     (no monospace-everything, no neon glow, no ledger-block imagery),
+     just enough visual weight that an Evidence record reads as a
+     retained document, not another list row. */
+  --pr-evidence-border: color-mix(in srgb, var(--pr-evidence-cyan) 28%, var(--pr-overlay-10));
+  --pr-evidence-tint: color-mix(in srgb, var(--pr-evidence-cyan) 5%, transparent);
+  --pr-evidence-corner: color-mix(in srgb, var(--pr-evidence-cyan) 45%, transparent);
+
+  /* Visual System V3, principle 5 (Authority has structure): the
+     connector line/dot used wherever a chain of custody is drawn
+     (Principal -> Agent -> Action -> Authority -> Decision -> Evidence).
+     A neutral overlay tone, not authority-blue itself: the connector
+     is structure, not another accent competing with real status color. */
+  --pr-chain-line: var(--pr-overlay-12);
+  --pr-chain-dot: var(--pr-text-disabled);
+  --pr-chain-dot-active: var(--pr-authority-blue);
 }
 
 /* Light theme, toggled via <html data-theme="light">. Brand/semantic
