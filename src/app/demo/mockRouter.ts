@@ -16,6 +16,7 @@ import {
 } from "./liveFeed";
 import { demoAgents, findDemoAgent } from "./fixtures/agents";
 import { demoPrincipals, demoAuthorityContextByPrincipal, PRINCIPAL_OKONKWO } from "./fixtures/principals";
+import * as integrationsStore from "./integrationsStore";
 import {
   demoPolicies,
   findDemoPolicy,
@@ -1278,6 +1279,105 @@ on("POST", `${POLICY_SIMULATION}/:key/batch`, ({ params }) => {
     policy_bundle_hash: p?.bundle_hash ?? "sha256:demo",
   };
 });
+
+// ---------------------------------------------------------------------
+// Trusted Integration Architecture, Phase 4: Settings -> Integrations.
+// A visitor's own creates/edits/transitions are genuinely mutated
+// (integrationsStore.ts's own session-local overlay, not `blocked()`)
+// so the guided setup journey is actually demonstrable end to end in
+// the public demo -- the same choice already made for Agent
+// registration above, not a new one. Lifecycle invariants (draft-only
+// editing, single-active-binding-per-scope, non-empty allow-list) are
+// enforced the same way the real backend does; a rejected transition
+// returns undefined here, translated to a 404/409-shaped rejection
+// below so callers see the same class of error either way.
+// ---------------------------------------------------------------------
+
+// Reuses the existing top-level notFound(what) helper just above (a
+// plain, descriptive Error -- demo-mode rejections never reach
+// apiClient's real ApiError wrapping at all, since DEMO_MODE returns
+// straight out of request() before that branch, so there is no
+// `.detail` code for describeApiError to key off here regardless of
+// shape; a clear message is all a demo-mode rejection can usefully
+// carry). conflictOrValidation mirrors it for the other two classes of
+// rejection this domain's lifecycle actually has.
+function conflictOrValidation(what: string): never {
+  throw new Error(`[demo mock] rejected: ${what}`);
+}
+
+on("GET", "/v1/integrations", () => integrationsStore.listSystems());
+on("GET", "/v1/integrations/:id", ({ params }) => integrationsStore.getSystem(params.id) ?? notFound("integration"));
+on("POST", "/v1/integrations", ({ body }) => {
+  if (!body?.external_system_label?.trim()) conflictOrValidation("external_system_label_required");
+  return integrationsStore.createSystem(body.external_system_label.trim());
+});
+
+on("GET", "/v1/integrations/:id/contract-versions", ({ params }) => integrationsStore.listMappings(params.id));
+on("GET", "/v1/integrations/:id/contract-versions/:versionId", ({ params }) => integrationsStore.getMapping(params.versionId) ?? notFound("contract_version"));
+on("POST", "/v1/integrations/:id/contract-versions", ({ params, body }) => {
+  if (!integrationsStore.getSystem(params.id)) notFound("integration");
+  if (!body?.source_operation?.trim() || !body?.canonical_action) conflictOrValidation("source_operation_and_canonical_action_required");
+  return integrationsStore.createMapping(params.id, body);
+});
+on("PATCH", "/v1/integrations/:id/contract-versions/:versionId", ({ params, body }) =>
+  integrationsStore.editMapping(params.versionId, body ?? {}) ?? conflictOrValidation("mapping_not_editable"));
+on("POST", "/v1/integrations/:id/contract-versions/:versionId/validate", ({ params }) =>
+  integrationsStore.validateMapping(params.versionId) ?? conflictOrValidation("mapping_not_in_draft"));
+on("POST", "/v1/integrations/:id/contract-versions/:versionId/approve", ({ params, body }) =>
+  integrationsStore.approveMapping(params.versionId, body?.approver ?? "you@example.com") ?? conflictOrValidation("mapping_not_validated"));
+on("POST", "/v1/integrations/:id/contract-versions/:versionId/retire", ({ params }) =>
+  integrationsStore.retireMapping(params.versionId) ?? conflictOrValidation("contract_version_has_active_binding"));
+
+on("GET", "/v1/integration-identities", () => integrationsStore.listTrustedConnections());
+on("GET", "/v1/integration-identities/:id", ({ params }) => integrationsStore.getTrustedConnection(params.id) ?? notFound("integration_identity"));
+on("GET", "/v1/integration-identities/:id/certificates", ({ params }) => integrationsStore.listTrustedConnectionCertificates(params.id));
+on("POST", "/v1/integration-identities", ({ body }) => {
+  if (!body?.name?.trim()) conflictOrValidation("name_required");
+  return integrationsStore.registerTrustedConnection(body.name.trim());
+});
+on("POST", "/v1/integration-identities/:id/activate", ({ params }) => integrationsStore.activateTrustedConnection(params.id) ?? notFound("integration_identity"));
+on("POST", "/v1/integration-identities/:id/suspend", ({ params }) => integrationsStore.suspendTrustedConnection(params.id) ?? notFound("integration_identity"));
+on("POST", "/v1/integration-identities/:id/revoke", ({ params }) => integrationsStore.revokeTrustedConnection(params.id) ?? notFound("integration_identity"));
+on("POST", "/v1/integration-identities/:id/retire", ({ params }) => integrationsStore.retireTrustedConnection(params.id) ?? notFound("integration_identity"));
+on("POST", "/v1/integration-identities/:id/rotate", ({ params }) => integrationsStore.rotateTrustedConnectionCredential(params.id) ?? notFound("integration_identity"));
+
+function fullAgentDirectory() {
+  return [...getRegisteredAgents(), ...demoAgents].map((a) => ({ id: a.id, name: a.name, status: a.status }));
+}
+
+on("GET", "/v1/enforcement-bindings", () => integrationsStore.listConnections());
+on("GET", "/v1/enforcement-bindings/:id", ({ params }) => integrationsStore.getConnection(params.id) ?? notFound("enforcement_binding"));
+on("GET", "/v1/enforcement-bindings/:id/allowed-agents", ({ params }) => integrationsStore.listAllowedAgents(params.id));
+on("POST", "/v1/enforcement-bindings", ({ body }) => {
+  const created = integrationsStore.createDraftConnection({
+    integration_identity_id: body?.integration_identity_id, integration_contract_version_id: body?.integration_contract_version_id,
+    environment: body?.environment, agent_ids: body?.agent_ids ?? [], agentDirectory: fullAgentDirectory(),
+  });
+  return created ?? notFound("contract_version");
+});
+on("POST", "/v1/enforcement-bindings/:id/activate", ({ params }) => integrationsStore.activateConnection(params.id) ?? conflictOrValidation("binding_activation_prerequisites_not_met"));
+on("POST", "/v1/enforcement-bindings/:id/retire", ({ params }) => integrationsStore.retireConnection(params.id) ?? conflictOrValidation("binding_not_active"));
+
+// The "Test this connection" flow (ConnectionSetupPage.tsx). Mirrors
+// POST /v1/intents's own established demo simplification just below --
+// a fixed, honest ALLOW result, not genuine policy re-evaluation of the
+// submitted body. This is a real limitation of the public demo, not a
+// fabricated runtime guarantee: it never claims the submitted resource/
+// amount/context actually influenced the outcome shown.
+on("POST", "/v1/integration-runtime/intents", () => ({
+  intent_id: `intent-${Date.now()}`,
+  decision: {
+    outcome: "ALLOW",
+    decision_id: `decision-integration-test-${Date.now()}`,
+    evaluated_mandates: [],
+    evaluated_mandate_ids: [],
+    enterprise_system_id: null,
+    enterprise_system_name: null,
+    reason: "Within the connection's approved mapping and allowed-agent scope.",
+  },
+  evidence_id: `evidence-integration-test-${Date.now()}`,
+  status: "RESOLVED",
+}));
 
 // ---------------------------------------------------------------------
 // Resolver
