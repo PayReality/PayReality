@@ -34,7 +34,8 @@ from app.services.integration_identity_service import IntegrationIdentityNotFoun
 router = APIRouter(prefix="/v1/enforcement-bindings", tags=["enforcement-bindings"])
 
 
-def _binding_to_response(row) -> BindingResponse:
+def _binding_to_response(db: Session, row) -> BindingResponse:
+    allowed_agents = svc.list_allowed_agents(db, row.id, row.organization_id)
     return BindingResponse(
         id=str(row.id), organization_id=str(row.organization_id),
         integration_identity_id=str(row.integration_identity_id),
@@ -42,6 +43,7 @@ def _binding_to_response(row) -> BindingResponse:
         integration_id=str(row.integration_id), source_operation=row.source_operation,
         environment=row.environment, status=row.status, created_by=row.created_by,
         created_at=row.created_at, activated_at=row.activated_at, retired_at=row.retired_at,
+        allowed_agent_ids=[str(a.id) for a in allowed_agents],
     )
 
 
@@ -64,7 +66,7 @@ def create_draft_binding(
         raise HTTPException(status_code=404, detail="contract_version_not_found")
     except BindingValidationError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    return _binding_to_response(binding)
+    return _binding_to_response(db, binding)
 
 
 @router.get(
@@ -72,7 +74,7 @@ def create_draft_binding(
     dependencies=[Depends(require_permission(Permission.INTEGRATION_CONTRACT_MANAGE))],
 )
 def list_bindings(db: Session = Depends(get_db), organization: Organization = Depends(get_current_organization)):
-    return [_binding_to_response(b) for b in svc.list_bindings(db, organization.id)]
+    return [_binding_to_response(db, b) for b in svc.list_bindings(db, organization.id)]
 
 
 @router.get(
@@ -87,7 +89,7 @@ def get_binding(
         binding = svc.get_binding(db, binding_id, organization.id)
     except EnforcementBindingNotFoundError:
         raise HTTPException(status_code=404, detail="enforcement_binding_not_found")
-    return _binding_to_response(binding)
+    return _binding_to_response(db, binding)
 
 
 @router.patch(
@@ -109,7 +111,7 @@ def edit_draft_binding(
         raise HTTPException(status_code=409, detail=str(e))
     except BindingValidationError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    return _binding_to_response(binding)
+    return _binding_to_response(db, binding)
 
 
 @router.post(
@@ -128,7 +130,7 @@ def add_allowed_agent(
         raise HTTPException(status_code=409, detail=str(e))
     except BindingValidationError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    return _binding_to_response(binding)
+    return _binding_to_response(db, binding)
 
 
 @router.delete(
@@ -145,7 +147,7 @@ def remove_allowed_agent(
         raise HTTPException(status_code=404, detail="enforcement_binding_not_found")
     except BindingInvalidTransitionError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    return _binding_to_response(binding)
+    return _binding_to_response(db, binding)
 
 
 @router.get(
@@ -181,7 +183,7 @@ def activate_binding(
         raise HTTPException(status_code=422, detail=str(e))
     except ConcurrentActivationConflictError as e:
         raise HTTPException(status_code=409, detail=f"concurrent_activation_conflict: {e}")
-    return _binding_to_response(binding)
+    return _binding_to_response(db, binding)
 
 
 @router.post(
@@ -198,4 +200,4 @@ def retire_binding(
         raise HTTPException(status_code=404, detail="enforcement_binding_not_found")
     except BindingInvalidTransitionError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    return _binding_to_response(binding)
+    return _binding_to_response(db, binding)

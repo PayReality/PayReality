@@ -34,6 +34,15 @@ class BindingResponse(BaseModel):
     created_at: datetime
     activated_at: datetime | None
     retired_at: datetime | None
+    # Trusted Integration Architecture, Phase 4: additive -- the allow-
+    # list's own ids, inline on the Binding itself. Avoids an N+1 fan-out
+    # (one GET .../allowed-agents per Binding) for every screen that
+    # needs to answer "which Bindings include Agent X" (Agent Detail's
+    # own Trusted Connections section) or "how many Agents does this
+    # connection allow" (the Integrations list/detail screens) -- the
+    # full Agent name/status list is still its own separate endpoint,
+    # this is only the id set.
+    allowed_agent_ids: list[str] = []
 
 
 class AllowedAgentResponse(BaseModel):

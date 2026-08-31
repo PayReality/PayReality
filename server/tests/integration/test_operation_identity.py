@@ -693,3 +693,58 @@ def test_agent_direct_receipt_has_no_integration_provenance(db, opa_url):
     )
     receipt = authorization_receipt_service.get_authorization_receipt(db, decision.id, org.id)
     assert receipt.integration is None
+
+
+# --- Phase 4: Decision Detail / Receipt surface integration_id, and
+#     BindingResponse surfaces allowed_agent_ids inline -------------------
+
+
+def test_receipt_and_decision_response_expose_integration_id_for_adapter_mediated_decisions(db, opa_url):
+    """Trusted Integration Architecture, Phase 4: routers/intents.py's
+    GetDecisionResponse.integration (new) and the Authorization Receipt's
+    own integration.integration_id (additive field) both resolve
+    directly to the owning Integration, without a caller having to walk
+    integration_contract_version_id -> IntegrationContractVersion first."""
+    from app.routers.intents import _build_decision_response
+
+    org = _org(db)
+    identity, integration, _cv, binding, agent, _ = _setup(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+
+    _intent, decision, _evidence = _attest(db, identity, binding, agent, external_operation_id="OP-1")
+
+    receipt = authorization_receipt_service.get_authorization_receipt(db, decision.id, org.id)
+    assert receipt.integration is not None
+    assert receipt.integration.integration_id == str(integration.id)
+
+    response = _build_decision_response(db, decision)
+    assert response.integration is not None
+    assert response.integration.integration_id == str(integration.id)
+    assert response.integration.external_operation_id == "OP-1"
+
+
+def test_decision_response_integration_is_none_for_agent_direct(db, opa_url):
+    from app.routers.intents import _build_decision_response
+
+    org = _org(db)
+    principal = _principal(db, org.id)
+    agent = _agent(db, principal.id)
+    _deploy_policy(db, org.id, opa_url, resource="account:USR-829", action="disable_user")
+
+    _intent, decision, _evidence = intent_service.submit_intent(
+        db, agent=agent, action="disable_user", amount=None, currency=None, counterparty=None,
+        context={}, requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
+        resource="account:USR-829", source=None,
+    )
+    response = _build_decision_response(db, decision)
+    assert response.integration is None
+
+
+def test_binding_response_exposes_allowed_agent_ids_inline(db, opa_url):
+    from app.routers.enforcement_bindings import _binding_to_response
+
+    org = _org(db)
+    identity, _integ, _cv, binding, agent, second_agent = _setup(db, org.id, extra_agent=False)
+
+    response = _binding_to_response(db, binding)
+    assert response.allowed_agent_ids == [str(agent.id)]

@@ -122,6 +122,48 @@ class CapabilitySummary(BaseModel):
     consumed_at: datetime | None = None
 
 
+class ReceiptIntegrationSummary(BaseModel):
+    """Trusted Integration Architecture, Phase 2: present only when this
+    decision's Intent actually carries integration provenance (an
+    Adapter-mediated request) -- read from the same Evidence payload
+    keys intent_service._build_evidence_payload additively wrote at
+    decision time, never recomputed from a possibly-since-changed live
+    row. Reporting this provenance is not a claim that the external
+    operation the Adapter attested to actually executed, or that no
+    other path to the same effect exists -- see
+    integration_runtime_service's own module docstring for the trust
+    claim this is allowed to make.
+
+    Lives here (not in authorization_receipt.py, despite the name) so
+    both AuthorizationReceiptResponse and GetDecisionResponse (Phase 4)
+    can share one definition without a circular import between the two
+    schema modules -- authorization_receipt.py already imports from
+    this module for CapabilitySummary/PolicyManifestEntry, so this is
+    the existing import direction, not a new one."""
+
+    integration_identity_id: str | None = None
+    enforcement_binding_id: str | None = None
+    integration_contract_version_id: str | None = None
+    integration_contract_content_hash: str | None = None
+    # Trusted Integration Architecture, Phase 4: additive -- lets a
+    # reader resolve the owning Integration (system name, other mapping
+    # versions) directly, without first resolving
+    # integration_contract_version_id -> IntegrationContractVersion.
+    integration_id: str | None = None
+    environment: str | None = None
+    source_operation: str | None = None
+    # Trusted Integration Architecture, Phase 3: the external, business-
+    # meaningful operation identifier this Decision belongs to -- present
+    # only for a trusted-Adapter-mediated Decision that actually carries
+    # one (every Agent-direct Decision, and every Adapter-mediated one
+    # predating Phase 3, leaves this None). Deliberately does NOT expose
+    # the internal canonical-operation fingerprint here (section 25: no
+    # strong debugging/audit reason to -- Evidence's own signed payload
+    # already carries it for cryptographic historical proof, see
+    # ReceiptEvidenceSummary/intent_service._build_evidence_payload).
+    external_operation_id: str | None = None
+
+
 class GetDecisionResponse(BaseModel):
     """New (not in spec 19's literal API): the polling endpoint the
     HUMAN_REVIEW-resolution addition needs (see plan).
@@ -186,6 +228,13 @@ class GetDecisionResponse(BaseModel):
     facts_evaluated: list[dict] | None = None
     matched_policy_freshness: PolicyFreshnessSummary | None = None
     capability: CapabilitySummary | None = None
+    # Trusted Integration Architecture, Phase 4: reuses
+    # ReceiptIntegrationSummary (below) unchanged -- the exact same
+    # "present only when this decision's Intent actually carries
+    # integration provenance" read, off the same earliest-Evidence-record
+    # lookup this response already performs for policy_version/
+    # policy_bundle_hash/authority_version above, never a new query.
+    integration: ReceiptIntegrationSummary | None = None
 
 
 class DecisionListResponse(BaseModel):

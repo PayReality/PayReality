@@ -28,7 +28,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from app.schemas.intent import CapabilitySummary, PolicyManifestEntry
+from app.schemas.intent import CapabilitySummary, PolicyManifestEntry, ReceiptIntegrationSummary
 
 
 class ReceiptDecisionSummary(BaseModel):
@@ -105,36 +105,6 @@ class ReceiptFactEntry(BaseModel):
     source_id: str | None = None
     observed_at: str | None = None
     expires_at: str | None = None
-
-
-class ReceiptIntegrationSummary(BaseModel):
-    """Trusted Integration Architecture, Phase 2: present only when this
-    decision's Intent actually carries integration provenance (an
-    Adapter-mediated request) -- read from the same Evidence payload
-    keys intent_service._build_evidence_payload additively wrote at
-    decision time, never recomputed from a possibly-since-changed live
-    row. Reporting this provenance is not a claim that the external
-    operation the Adapter attested to actually executed, or that no
-    other path to the same effect exists -- see
-    integration_runtime_service's own module docstring for the trust
-    claim this is allowed to make."""
-
-    integration_identity_id: str | None = None
-    enforcement_binding_id: str | None = None
-    integration_contract_version_id: str | None = None
-    integration_contract_content_hash: str | None = None
-    environment: str | None = None
-    source_operation: str | None = None
-    # Trusted Integration Architecture, Phase 3: the external, business-
-    # meaningful operation identifier this Decision belongs to -- present
-    # only for a trusted-Adapter-mediated Decision that actually carries
-    # one (every Agent-direct Decision, and every Adapter-mediated one
-    # predating Phase 3, leaves this None). Deliberately does NOT expose
-    # the internal canonical-operation fingerprint here (section 25: no
-    # strong debugging/audit reason to -- Evidence's own signed payload
-    # already carries it for cryptographic historical proof, see
-    # ReceiptEvidenceSummary/intent_service._build_evidence_payload).
-    external_operation_id: str | None = None
 
 
 class ReceiptHumanReviewSummary(BaseModel):

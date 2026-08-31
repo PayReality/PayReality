@@ -38,6 +38,26 @@ class ReceiptNotAvailableError(Exception):
     instead of a response with a hollow evidence/verification section."""
 
 
+def build_receipt_integration_summary(payload: dict) -> ReceiptIntegrationSummary | None:
+    """Shared by this module's own get_authorization_receipt and
+    routers/intents.py's GetDecisionResponse (Trusted Integration
+    Architecture, Phase 4) -- the exact same "present only when this
+    Evidence payload actually carries integration provenance" read,
+    never duplicated a third time."""
+    if payload.get("integration_identity_id") is None:
+        return None
+    return ReceiptIntegrationSummary(
+        integration_identity_id=payload.get("integration_identity_id"),
+        enforcement_binding_id=payload.get("enforcement_binding_id"),
+        integration_contract_version_id=payload.get("integration_contract_version_id"),
+        integration_contract_content_hash=payload.get("integration_contract_content_hash"),
+        integration_id=payload.get("integration_id"),
+        environment=payload.get("environment"),
+        source_operation=payload.get("source_operation"),
+        external_operation_id=payload.get("external_operation_id"),
+    )
+
+
 def get_authorization_receipt(
     db: Session, decision_id: uuid.UUID, organization_id: uuid.UUID | None
 ) -> AuthorizationReceiptResponse:
@@ -120,17 +140,7 @@ def get_authorization_receipt(
     # provenance -- an Agent-direct decision's payload has none of
     # these keys, so `integration` stays None rather than a summary of
     # empty fields.
-    integration = None
-    if payload.get("integration_identity_id") is not None:
-        integration = ReceiptIntegrationSummary(
-            integration_identity_id=payload.get("integration_identity_id"),
-            enforcement_binding_id=payload.get("enforcement_binding_id"),
-            integration_contract_version_id=payload.get("integration_contract_version_id"),
-            integration_contract_content_hash=payload.get("integration_contract_content_hash"),
-            environment=payload.get("environment"),
-            source_operation=payload.get("source_operation"),
-            external_operation_id=payload.get("external_operation_id"),
-        )
+    integration = build_receipt_integration_summary(payload)
 
     valid, key_id = evidence_service.verify_evidence(db, earliest_evidence.id, organization_id)
 

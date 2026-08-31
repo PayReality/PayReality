@@ -317,6 +317,7 @@ def submit_attested_intent(
             "enforcement_binding_id": str(binding.id),
             "integration_contract_version_id": str(contract_version.id),
             "integration_contract_content_hash": contract_version.content_hash,
+            "integration_id": str(contract_version.integration_id),
             "environment": binding.environment,
             "source_operation": source_operation,
             "external_operation_id": external_operation_id,

@@ -151,6 +151,7 @@ def _build_evidence_payload(
     enforcement_binding_id: str | None = None,
     integration_contract_version_id: str | None = None,
     integration_contract_content_hash: str | None = None,
+    integration_id: str | None = None,
     environment: str | None = None,
     source_operation: str | None = None,
     external_operation_id: str | None = None,
@@ -293,6 +294,13 @@ def _build_evidence_payload(
         payload["integration_contract_version_id"] = integration_contract_version_id
     if integration_contract_content_hash is not None:
         payload["integration_contract_content_hash"] = integration_contract_content_hash
+    # Trusted Integration Architecture, Phase 4: additive -- lets a
+    # reader resolve the owning Integration (system name, other mapping
+    # versions) directly from Evidence without a second lookup through
+    # integration_contract_version_id -> IntegrationContractVersion ->
+    # integration_id first.
+    if integration_id is not None:
+        payload["integration_id"] = integration_id
     if environment is not None:
         payload["environment"] = environment
     if source_operation is not None:
@@ -457,6 +465,7 @@ def append_evidence(
     enforcement_binding_id: uuid.UUID | None = None,
     integration_contract_version_id: uuid.UUID | None = None,
     integration_contract_content_hash: str | None = None,
+    integration_id: uuid.UUID | None = None,
     environment: str | None = None,
     source_operation: str | None = None,
     external_operation_id: str | None = None,
@@ -528,6 +537,7 @@ def append_evidence(
             str(integration_contract_version_id) if integration_contract_version_id else None
         ),
         integration_contract_content_hash=integration_contract_content_hash,
+        integration_id=str(integration_id) if integration_id else None,
         environment=environment,
         source_operation=source_operation,
         external_operation_id=external_operation_id,
@@ -670,6 +680,7 @@ def _evaluate_and_record(
         enforcement_binding_id=prov.get("enforcement_binding_id"),
         integration_contract_version_id=prov.get("integration_contract_version_id"),
         integration_contract_content_hash=prov.get("integration_contract_content_hash"),
+        integration_id=prov.get("integration_id"),
         environment=prov.get("environment"),
         source_operation=prov.get("source_operation"),
         external_operation_id=prov.get("external_operation_id"),

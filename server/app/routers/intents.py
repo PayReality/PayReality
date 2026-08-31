@@ -363,6 +363,7 @@ def _build_decision_response(db: Session, decision) -> GetDecisionResponse:
         facts_evaluated=evidence_payload.get("facts_evaluated"),
         matched_policy_freshness=matched_policy_freshness,
         capability=capability,
+        integration=authorization_receipt_service.build_receipt_integration_summary(evidence_payload),
         correlation_id=intent.correlation_id,
     )
 
