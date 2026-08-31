@@ -2,7 +2,9 @@
 
 ## What this phase is, and isn't
 
-This is the first official PayReality SDK: a Python package (`sdk-python/payreality/`) that wraps the existing HTTP API (`docs/API_SPECIFICATION.md`) so a developer never has to hand-implement ED25519 signing, certificate management, request headers, or retry logic. It consumes `POST /v1/principals`, `POST /v1/agents`, `POST /v1/agents/{id}/activate`, `POST /v1/agents/{id}/rotate`, `POST /v1/agents/{id}/retire`, `POST /v1/agents/{id}/heartbeat`, `POST /v1/intents`, `GET /v1/decisions/{id}`, `GET /health`, and `GET /version` exactly as they exist today. Nothing in the Runtime Engine, Compiler V2, OPA, Evidence, Policy Studio, or either AI Policy Builder changed to make this possible; this SDK is a client, not a platform change.
+This is the first official PayReality SDK: a Python package (`sdk-python/payreality/`, version 0.5.0) that wraps the existing HTTP API (`docs/API_SPECIFICATION.md`) so a developer never has to hand-implement ED25519 signing, certificate management, request headers, or retry logic. It consumes `POST /v1/principals`, `POST /v1/agents`, `POST /v1/agents/{id}/activate`, `POST /v1/agents/{id}/rotate`, `POST /v1/agents/{id}/retire`, `POST /v1/agents/{id}/heartbeat`, `POST /v1/intents`, `GET /v1/decisions/{id}`, `GET /health`, and `GET /version` exactly as they exist today. Nothing in the Runtime Engine, Compiler V2, OPA, Evidence, Policy Studio, or either AI Policy Builder changed to make this possible; this SDK is a client, not a platform change.
+
+**As of 0.5.0, the SDK also covers the Trusted Adapter path** (`payreality.integration.Adapter`, see the dedicated section below) — this file previously described only the agent-direct surface, which was an omission this pass corrected, not a change to the SDK itself.
 
 ## Package layout
 
@@ -11,6 +13,7 @@ sdk-python/
   payreality/
     __init__.py       public exports: Agent, Decision, RegisteredAgent, exceptions
     agent.py           Agent: register(), rotate_keys(), heartbeat(), retire(), authorize(), get_decision(), wait_for_resolution(), health(), version()
+    integration.py     Adapter: attest() -- the Trusted Adapter path, POST /v1/integration-runtime/intents. ContractShape: the request shape an Action Mapping expects.
     auth.py            nonce/timestamp generation, header assembly
     client.py           the one place that makes an HTTP request; owns retries and exception mapping
     crypto.py           ED25519 keygen and signing (PyNaCl)
@@ -35,6 +38,14 @@ The public interface is expressed in PayReality's universal vocabulary (`UNIVERS
 3. **`principal` is a local safety check, not a request field.** `SubmitIntentRequest` has no `principal` field: the server already knows which principal a given agent's certificate acts for, resolved from `agent.acting_for_principal_id` at registration time (`server/app/services/intent_service.py::submit_intent` never takes a principal argument). Sending a redundant principal on every call would just be ignored by the server, so instead `authorize()` checks the passed `principal` against the principal this specific `Agent` was registered for, and raises `ConfigurationError` on a mismatch. This turns a parameter that would otherwise be pure decoration into a real guard against a wrong-agent mistake.
 
 4. **`resource_data` is decomposed into the wire's actual fields.** `amount`/`currency` are optional, not required -- a non-financial action (`disable_user`, `employee_terminate`) supplies neither; `currency` defaults to `"USD"` only when `amount` is given and `currency` isn't. `vendor`/`counterparty` (either key works) maps to the wire's `counterparty`. Everything else in `resource_data`, plus `metadata`, lands in `context` as Runtime Authority context -- never silently dropped, and never required just to make a non-financial call.
+
+## The Trusted Adapter path (`payreality.integration.Adapter`)
+
+A second, separate identity type from `Agent` — see [SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md](SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md) for the full mechanism this wraps. `Adapter` authenticates as an `IntegrationIdentity` (an already-registered Trusted Connection), not as an Agent, using `integration_identity_id` and `certificate_id`. `Adapter.attest()` takes `enforcement_binding_id` (the Runtime Connection), `origin_agent_id` (which allow-listed Agent this report is on behalf of), `source_operation`, `action`, and a caller-supplied `external_operation_id` (validated client-side — max 256 chars, mirroring the server's own `operation_identity_service` rules, so a malformed id fails fast instead of round-tripping to the server first) — then signs and POSTs to `/v1/integration-runtime/intents`.
+
+**Registration and certificate rotation for the Trusted Connection itself are deliberately not part of this class** — those are administrative actions (`POST /v1/integration-identities`, `.../activate`, `.../rotate`, etc.), performed via the raw HTTP API or the Admin UI (Settings → Integrations), not through the SDK's `Adapter` object. `Adapter` is the runtime-attestation client; it assumes the Trusted Connection, Runtime Connection, and Action Mapping already exist and are approved/active.
+
+`Adapter.attest()` returns the same `Decision`/outcome shape `Agent.authorize()` does — `ALLOW`/`DENY`/`HUMAN_REVIEW`, and the same `wait_for_resolution()`-style polling applies for a `HUMAN_REVIEW` result. It raises a distinct exception for an **integration rejection** (a pre-evaluation trust failure — invalid connection, agent not allow-listed, mapping mismatch) versus a normal `DENY`, matching the server-side distinction exactly (§50.8 of the specification above) — do not catch these two the same way in application code, they mean categorically different things.
 
 ## Identity and the local credential store
 

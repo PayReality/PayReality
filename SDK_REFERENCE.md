@@ -65,6 +65,29 @@ Thin wrapper over `GET /version`. Returns the raw response body (`{"version": ..
 
 `True` once this `Agent` has a server-recognized identity, from a `register()` call this session or loaded from a previously-registered private key.
 
+## `payreality.integration.Adapter`
+
+The Trusted Adapter runtime path (0.5.0+) — a separate identity type from `Agent`. See [SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md](SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md) for the mechanism this wraps, and [SDK_ARCHITECTURE.md](SDK_ARCHITECTURE.md) for how it fits alongside `Agent`.
+
+### `Adapter(integration_identity_id, certificate_id, private_key, base_url="https://api.aisecurewatch.com", timeout=10.0, retry_count=3, contract_shape=None)`
+
+`integration_identity_id`/`certificate_id` identify this Adapter's already-registered Trusted Connection and its currently active certificate — registering a Trusted Connection or rotating its certificate is an administrative action performed via the raw HTTP API or the Admin UI, not part of this class. `private_key` never leaves this process. `contract_shape` (a `ContractShape` instance) is an optional, purely local pre-flight check — it can reject an obviously-wrong call (a field the pinned Action Mapping doesn't declare) before a network round trip; the server's own check remains authoritative regardless of whether this is supplied.
+
+### `adapter.attest(*, enforcement_binding_id, origin_agent_id, source_operation, action, external_operation_id, resource=None, amount=None, currency=None, counterparty=None, context=None, correlation_id=None) -> Decision`
+
+Constructs, signs, and submits one attested Intent through the trusted-Adapter runtime path (`POST /v1/integration-runtime/intents`).
+
+- `enforcement_binding_id` — the Runtime Connection to submit through.
+- `origin_agent_id` — the Agent this call attests observed operation is on behalf of. This does **not** authenticate as that Agent; PayReality independently verifies, server-side, that the named Agent is actually on this Runtime Connection's allow-list.
+- `source_operation`/`action` — must exactly match the Runtime Connection's pinned Action Mapping version, or the request is rejected before evaluation (an integration rejection, never routed to `HUMAN_REVIEW`).
+- `external_operation_id` — **required**. The stable identifier of the real external business operation. Calling `attest()` again with the same id and the same authority-relevant values (origin Agent, action, resource, amount, currency, counterparty, and mapping-bound context) returns the *original* Decision, not a new evaluation; the same id with different authority-relevant values raises a conflict exception instead. Client-side pre-validated (max 256 characters, non-empty) before any network call; the server's own validation remains authoritative.
+- Returns the same `Decision` shape `agent.authorize()` does — `ALLOW`/`DENY`/`HUMAN_REVIEW`, and `wait_for_resolution()`-style polling applies identically for a `HUMAN_REVIEW` result.
+- Raises a distinct exception for an **integration rejection** (invalid connection, agent not allow-listed, mapping mismatch, operation-id conflict) — never the same exception a `DENY` produces. Application code must not treat the two the same way: a `DENY` means PayReality evaluated a legitimate request and said no; an integration rejection means there was no legitimate request to evaluate.
+
+### `ContractShape(*, has_resource=False, has_amount=False, has_currency=False, has_fact_subject=False, context_keys=frozenset())`
+
+Optional, purely local declaration of which fields this Adapter's pinned Action Mapping actually extracts — mirrors the same presence/absence rule the server enforces authoritatively. Never required; omitting it just means `attest()`'s local pre-flight check is skipped and every field passes straight through to the server's own (authoritative) validation.
+
 ## `payreality.Decision`
 
 | Attribute | Type | Notes |
@@ -79,6 +102,8 @@ Thin wrapper over `GET /version`. Returns the raw response body (`{"version": ..
 | `resolution` | `Resolution \| None` | Set only once a `HUMAN_REVIEW` decision has been resolved and re-fetched via `get_decision()`. |
 | `correlation_id` | `str \| None` | Echoed back exactly as you passed it to `authorize()`, or `None` if you didn't pass one. Trace/correlation metadata only -- see "correlation_id: what it is, and what it deliberately isn't" below. |
 | `created_at` | `str \| None` | ISO-8601 timestamp the underlying Intent was submitted at. `None` only if the server response omitted it (should not happen in practice). |
+
+**Retrieving Evidence and the Authorization Receipt**: there is no dedicated `get_evidence()`/`get_receipt()` SDK method today — `Decision.evidence_id` gives you the id, and a caller must fetch `GET /v1/evidence/{evidence_id}` or `GET /v1/decisions/{decision_id}/receipt` directly (session-token or Operator-Key authenticated, same as any other admin-facing endpoint). This is a real, disclosed gap in the SDK's current surface, not a design choice being defended.
 
 Properties: `.allowed`, `.denied`, `.requires_human_review` (all `bool`), `.pending` (`bool`, `status == "PENDING"`).
 
