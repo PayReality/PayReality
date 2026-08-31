@@ -19,43 +19,75 @@ export const demoUsers: OrgUser[] = [
   { id: USER_WHITFIELD, email: "james.whitfield@meridianindustrial.com", name: "James Whitfield", role: "executive", status: "active", mfa_enabled: true, last_login_at: agoMs(3 * DAY), created_at: agoMs(180 * DAY) },
 ];
 
-// The identity a demo visitor is transparently "signed in" as -- David
-// Okonkwo, already the AP-Invoice-Agent's delegating principal and the
-// star policy's owner, so every "Recorded as the reviewer" / "Approved
-// by" surface in the demo reinforces the same person rather than
-// introducing an unrelated placeholder name.
+// The identity a demo visitor is transparently "signed in" as.
+//
+// Trusted Integration Architecture, Phase 4 follow-up: switched from
+// David Okonkwo (governance_admin) to Priya Chandrasekaran (owner).
+// governance_admin has neither settings.view nor
+// integration_contract.manage/.publish in the real RBAC model
+// (server/app/domain/rbac/permissions.py's own ROLE_PERMISSIONS), so
+// Organisation Settings -- and everything under it, including the new
+// Settings > Integrations feature -- correctly never appeared for that
+// identity. That was a real, if previously invisible, gap: a visitor
+// could never see the guided Integrations journey at all. Owner has
+// every permission in the system by design (ROLE_PERMISSIONS[OWNER] =
+// the full Permission enum, no hand-picked subset), so this is the
+// smallest fixture change that makes every existing gated surface
+// visible without diverging the demo's permission list from any real
+// role's own definition -- the exact drift this file's previous
+// comment already warned against for governance_admin. Priya already
+// appears elsewhere in the fixtures as an approver identity (Authority
+// Graph corpus approvals), so this is consistent with, not new
+// against, that existing narrative thread.
 export const demoCurrentUser: CurrentUser = {
-  id: USER_OKONKWO,
+  id: USER_CHANDRASEKARAN,
   organization_id: ORG_ID,
-  email: "david.okonkwo@meridianindustrial.com",
-  name: "David Okonkwo",
-  role: "governance_admin",
+  email: "priya.chandrasekaran@meridianindustrial.com",
+  name: "Priya Chandrasekaran",
+  role: "owner",
   status: "active",
   mfa_enabled: true,
   must_reset_password: false,
-  last_login_at: agoMs(2 * MINUTE),
-  // Must equal server/app/domain/rbac/permissions.py's ROLE_PERMISSIONS
-  // entry for GOVERNANCE_ADMIN exactly, not a hand-picked subset --
-  // Layout.tsx's nav gate and every RequirePermission/hasPermission call
-  // in the app now checks this list the same way it checks a real
-  // session's permissions, so drifting from the real role definition
-  // silently hides real pages (Agents/Governance/Decisions/Evidence/
-  // Assurance disappeared from the demo nav this way once Milestone 15
-  // added permission-gated nav items and this list was never updated to
-  // match). settings.view/users.manage are intentionally absent: a real
-  // governance_admin has neither, so Organisation Settings correctly
-  // does not appear for this identity either.
+  last_login_at: agoMs(35 * MINUTE),
+  // Must equal server/app/domain/rbac/permissions.py's full Permission
+  // enum exactly (ROLE_PERMISSIONS[OWNER] = _ALL_PERMISSIONS, not a
+  // hand-picked subset) -- Layout.tsx's nav gate and every
+  // RequirePermission/hasPermission call in the app checks this list
+  // the same way it checks a real session's permissions, so drifting
+  // from the real role definition silently hides real pages (this
+  // exact failure mode already happened once for governance_admin,
+  // see git history).
   permissions: [
+    "organisation.manage",
+    "organisation.delete",
+    "users.manage",
+    "integrations.manage",
+    "api_keys.manage",
+    "operator_keys.view",
+    "audit.export",
+    "settings.view",
     "runtime_policy.create",
     "runtime_policy.edit",
     "runtime_policy.publish",
     "runtime_policy.view",
     "authority.review",
+    "agent.register",
+    "agent.activate",
+    "agent.suspend",
+    "agent.retire",
+    "agent.revoke",
+    "agent.rotate",
+    "agent.manage",
+    "agent.view",
+    "principal.manage",
     "evidence.view",
     "decisions.view",
     "decisions.resolve",
     "assurance.view",
-    "principal.manage",
-    "agent.view",
+    "facts.manage",
+    "capability.issue",
+    "integration_contract.manage",
+    "integration_contract.publish",
+    "integration_identity.manage",
   ],
 };

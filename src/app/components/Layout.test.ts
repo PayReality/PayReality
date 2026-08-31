@@ -36,24 +36,24 @@ describe("selectVisibleNavItems", () => {
     expect(visible.map((i) => i.path)).not.toContain("/evidence");
   });
 
-  it("matches the known-correct governance_admin nav set (real fixture, real permission strings)", () => {
+  it("matches the known-correct owner nav set (real fixture, real permission strings)", () => {
     const hasPermission = (permission: string) => demoCurrentUser.permissions.includes(permission);
     const visible = selectVisibleNavItems(navItems, demoCurrentUser, hasPermission);
     const paths = visible.map((item) => item.path).sort();
 
-    // A real governance_admin has no settings.view -- Organisation
-    // Settings must stay hidden. Everything else in the workflow is
-    // granted and must stay visible. If this ever fails, either the
-    // demoCurrentUser fixture has drifted from
-    // server/app/domain/rbac/permissions.py's real GOVERNANCE_ADMIN
-    // entry again, or navItems' permission requirements changed --
-    // both are worth catching before they ship.
+    // A real Owner has every permission in the system (ROLE_PERMISSIONS[OWNER]
+    // = the full Permission enum), so every gated nav item -- including
+    // Organisation Settings -- must be visible. If this ever fails, either
+    // the demoCurrentUser fixture has drifted from
+    // server/app/domain/rbac/permissions.py's real OWNER entry again, or
+    // navItems' permission requirements changed -- both are worth catching
+    // before they ship.
     // Overview's own path is DEMO_MODE ? "/overview" : "/" -- read the
     // real value from navItems rather than hard-coding either, so this
     // test passes the same way under both the demo and production builds.
     const overviewPath = navItems.find((item) => item.label === "Overview")!.path;
     expect(paths).toEqual(
-      ["/agents", "/assurance", "/decisions", "/evidence", "/governance", overviewPath].sort()
+      ["/agents", "/assurance", "/decisions", "/evidence", "/governance", "/organization", overviewPath].sort()
     );
   });
 });
