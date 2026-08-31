@@ -79,14 +79,26 @@ jobs:
             --resource-group rg-payreality-prod-cus \
             --image "acrprprodtq1k.azurecr.io/payreality-api:prod-${{ github.sha }}"
 
+      # P0 Production Recovery incident: this used to check /health, which
+      # only proves *some* container answers liveness -- true even while
+      # serving the previous revision, e.g. if the new one's
+      # `alembic upgrade head` failed and Container Apps silently kept
+      # routing traffic to the old, still-healthy revision. /health/ready
+      # actually depends on the database and OPA being reachable from the
+      # code that's running, which is a strictly stronger (though still
+      # not a complete guarantee -- it can't distinguish "the new revision
+      # is ready" from "the old revision was already ready and traffic
+      # never moved" -- that would need comparing the Container App's
+      # active revision image against the one just pushed) signal that
+      # the deploy really took effect.
       - name: Verify health after deploy
         run: |
           for i in $(seq 1 10); do
-            if curl -fsS https://api.aisecurewatch.com/health; then
-              echo "Healthy"
+            if curl -fsS https://api.aisecurewatch.com/health/ready; then
+              echo "Ready"
               exit 0
             fi
             sleep 6
           done
-          echo "Deployed revision did not become healthy in time"
+          echo "Deployed revision did not become ready in time"
           exit 1
