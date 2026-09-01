@@ -11,6 +11,7 @@ import { NextStepGuidance } from "../help/NextStepGuidance";
 import { useAuth } from "../auth/AuthContext";
 import type { ActivationImpactPreview, CompileResult, DryRunResult, PolicyLifecycleSummary, RuntimePolicy } from "./types";
 import { Card } from "../components/ui/card";
+import { Skeleton } from "../components/ui/skeleton";
 import { FieldLabel } from "../components/ui/label";
 import { Input, getInputStyle } from "../components/ui/input";
 import { Button } from "../components/ui/button";
@@ -204,7 +205,15 @@ export function PublishPage() {
       </div>
     );
   }
-  if (!policy) return <div className="p-8" style={{ color: "var(--pr-text-muted)" }}>Loading...</div>;
+  if (!policy) {
+    return (
+      <div className="p-8" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
+        <Skeleton height={28} width="50%" style={{ marginBottom: 16 }} />
+        <Skeleton height={110} style={{ marginBottom: 16 }} />
+        <Skeleton height={110} />
+      </div>
+    );
+  }
 
   return (
     <div className="p-8 max-w-2xl" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>

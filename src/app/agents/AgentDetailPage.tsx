@@ -26,6 +26,7 @@ import { AgentIdentity } from "../components/ui/agent-identity";
 import { AuthorityChain } from "../components/ui/authority-chain";
 import { DecisionOutcomeBadge } from "../components/ui/decision-outcome-badge";
 import { EmptyState } from "../components/ui/empty-state";
+import { Skeleton } from "../components/ui/skeleton";
 import { DEMO_MODE } from "../demo/config";
 import { useNow, formatRelativeTime } from "../demo/liveClock";
 
@@ -179,7 +180,21 @@ export function AgentDetailPage() {
       </div>
     );
   }
-  if (!detail) return <div className="p-8" style={{ color: "var(--pr-text-muted)" }}>Loading...</div>;
+  // Product Experience V3.2, Part D: Agent Detail is one of the surfaces
+  // named for skeleton loading -- a shape that echoes the identity
+  // header plus card rows this page renders once loaded, rather than a
+  // bare "Loading..." flash.
+  if (!detail) {
+    return (
+      <div className="p-8" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
+        <Skeleton height={16} width={140} style={{ marginBottom: 24 }} />
+        <Skeleton height={28} width="50%" style={{ marginBottom: 16 }} />
+        <Skeleton height={90} style={{ marginBottom: 16 }} />
+        <Skeleton height={140} style={{ marginBottom: 16 }} />
+        <Skeleton height={140} />
+      </div>
+    );
+  }
 
   const { agent } = detail;
   const activeCert = detail.certificates.find((c) => c.status === "active");

@@ -1,4 +1,5 @@
 import { KNOWN_OPERATORS, type Condition } from "../types";
+import { OPERATOR_LABEL } from "../describePolicy";
 
 const inputStyle: React.CSSProperties = {
   backgroundColor: "var(--pr-bg-hover)",
@@ -34,34 +35,65 @@ interface Props {
   onChange?: (next: Condition) => void;
   onRemove?: () => void;
   readOnly?: boolean;
+  // Product Experience V3.2, section 24: the fields PayReality can
+  // actually evaluate (GET /v1/runtime-policies/vocabulary's
+  // condition_fields), offered as suggestions via <datalist> rather than
+  // a closed dropdown -- a field starting with trustedContextPrefix
+  // (a Trusted Enterprise Fact) is organisation-defined and can never be
+  // fully enumerated, so free entry stays possible, but is visually
+  // flagged as trusted-source below when it matches.
+  knownFields?: string[];
+  trustedContextPrefix?: string;
 }
+
+const FIELD_DATALIST_ID = "pr-condition-field-options";
 
 // One condition: field, operator, value. Editable in the Workspace,
 // read-only (with a diff indicator prefix supplied by the caller) in
 // the Diff view.
-export function ConditionRow({ condition, onChange, onRemove, readOnly }: Props) {
+export function ConditionRow({ condition, onChange, onRemove, readOnly, knownFields, trustedContextPrefix }: Props) {
+  const isTrustedContextField = !!trustedContextPrefix && condition.field.startsWith(trustedContextPrefix);
+  const isKnownField = isTrustedContextField || !knownFields || knownFields.includes(condition.field) || !condition.field;
+
   return (
-    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-      <input
-        aria-label="Condition field"
-        style={{ ...inputStyle, width: 180 }}
-        value={condition.field}
-        placeholder="Field, e.g. amount"
-        readOnly={readOnly}
-        onChange={(e) => onChange?.({ ...condition, field: e.target.value })}
-      />
+    <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 6 }}>
+      <div>
+        <input
+          aria-label="Condition field"
+          list={knownFields ? FIELD_DATALIST_ID : undefined}
+          style={{ ...inputStyle, width: 180 }}
+          value={condition.field}
+          placeholder="Field, e.g. amount"
+          readOnly={readOnly}
+          onChange={(e) => onChange?.({ ...condition, field: e.target.value })}
+        />
+        {knownFields && (
+          <datalist id={FIELD_DATALIST_ID}>
+            {knownFields.map((f) => (
+              <option key={f} value={f} />
+            ))}
+          </datalist>
+        )}
+        {isTrustedContextField ? (
+          <p style={{ fontSize: 10, color: "var(--pr-trust-green)", marginTop: 2 }}>Trusted enterprise fact</p>
+        ) : !isKnownField ? (
+          <p style={{ fontSize: 10, color: "var(--pr-warning-amber)", marginTop: 2 }}>
+            Not a field PayReality can currently evaluate
+          </p>
+        ) : null}
+      </div>
       {readOnly ? (
-        <span style={{ ...inputStyle, width: 90, textAlign: "center" }}>{condition.operator}</span>
+        <span style={{ ...inputStyle, width: 110, textAlign: "center" }}>{OPERATOR_LABEL[condition.operator] ?? condition.operator}</span>
       ) : (
         <select
           aria-label="Condition operator"
-          style={{ ...inputStyle, width: 90 }}
+          style={{ ...inputStyle, width: 110 }}
           value={condition.operator}
           onChange={(e) => onChange?.({ ...condition, operator: e.target.value })}
         >
           {KNOWN_OPERATORS.map((op) => (
             <option key={op} value={op}>
-              {op}
+              {OPERATOR_LABEL[op] ?? op}
             </option>
           ))}
         </select>

@@ -8,10 +8,33 @@ import type { Condition, Effect, RuntimePolicyRequest } from "./types";
 // approving a rule itself on the Approvals screen. Using the same word
 // for a rule's own enforcement outcome collided with that different
 // concept (Platform Audit, Governance/Policy Studio section).
+//
+// Product Experience V3.2, section 28: the "What should happen" selector
+// (PolicyWorkspacePage) configures a rule's outcome, an authoring-time
+// choice, so it reads as an instruction ("Allow," "Do not allow,"
+// "Require human approval"). It never says "Block": PayReality is the
+// authority decision point, not something that itself universally
+// enforces downstream execution, and "Block" implied the opposite.
+// "Do not allow" (never "Deny," which reads as PayReality's own refusal
+// of the request rather than the organisation's own rule) and "Require
+// human approval" (never "Send to a human," which undersold that this
+// is a mandatory step, not a suggestion) replace the older wording.
 export const EFFECT_LABEL: Record<Effect, string> = {
-  allow: "Allow automatically",
-  deny: "Block",
-  require_human_review: "Send to a human",
+  allow: "Allow",
+  deny: "Do not allow",
+  require_human_review: "Require human approval",
+};
+
+// The canonical, customer-facing Decision vocabulary (DecisionOutcomeBadge's
+// own HUMAN_LABEL, reused in spirit here) -- what a rule's outcome
+// actually becomes once Runtime Authority returns a real Decision, as
+// distinct from EFFECT_LABEL's authoring-time instruction above. Used
+// only inside describePolicy's generated sentence, which describes what
+// PayReality WILL RETURN, not what the author is telling it to do.
+const EFFECT_OUTCOME_LABEL: Record<Effect, string> = {
+  allow: "Allowed",
+  deny: "Not allowed",
+  require_human_review: "Needs human approval",
 };
 
 export const OPERATOR_LABEL: Record<string, string> = {
@@ -46,7 +69,7 @@ export function describePolicy(policy: RuntimePolicyRequest): string {
   const what = scope.action || "(no action set)";
   const resource = scope.resource ? ` involving ${scope.resource}` : "";
   const agent = scope.agent ? ` (only agent ${scope.agent})` : "";
-  const effectLabel = EFFECT_LABEL[effect] ?? effect;
+  const effectLabel = EFFECT_OUTCOME_LABEL[effect] ?? effect;
 
   let sentence = `When ${who} tries to ${what}${resource}${agent}`;
   if (conditions.length > 0) {

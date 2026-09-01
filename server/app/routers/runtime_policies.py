@@ -136,8 +136,24 @@ def _record_to_response(row) -> RuntimePolicyResponse:
 def get_vocabulary():
     """The active adapter's known actions, so the frontend never
     hardcodes its own copy (the exact drift bug DOMAIN_REFACTOR_PLAN.md's
-    item 5 already named for the existing Runtime Decisions page)."""
-    return {"actions": sorted(FINANCIAL_VOCABULARY.known_actions)}
+    item 5 already named for the existing Runtime Decisions page).
+
+    Product Experience V3.2, section 24: `condition_fields` is the same
+    `known_intent_fields` Compiler V2's own `is_valid_field` already
+    validates against, additively exposed here so the manual builder's
+    condition field selector can offer only fields PayReality can
+    actually evaluate, rather than free text a user could invent.
+    `trusted_context_prefix` documents the one other always-valid
+    category `is_valid_field` accepts: a Trusted Enterprise Fact
+    (`context.<key>`), which is organisation-defined and cannot be
+    enumerated here, but a builder can still label a field starting
+    with this prefix as coming from a trusted enterprise source rather
+    than the Intent itself."""
+    return {
+        "actions": sorted(FINANCIAL_VOCABULARY.known_actions),
+        "condition_fields": sorted(FINANCIAL_VOCABULARY.known_intent_fields),
+        "trusted_context_prefix": "context.",
+    }
 
 
 @router.get(

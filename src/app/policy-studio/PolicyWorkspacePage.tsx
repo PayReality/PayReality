@@ -22,7 +22,9 @@ import { useAuth } from "../auth/AuthContext";
 import { useResourceSync } from "../services/resourceSync";
 import { PageHeader } from "../components/ui/page-header";
 import { AuthorityChain } from "../components/ui/authority-chain";
-import { ShieldCheck, FileCheck } from "lucide-react";
+import { Skeleton } from "../components/ui/skeleton";
+import { ShieldCheck, FileCheck, Sparkles } from "lucide-react";
+import { DraftWithAIPanel } from "./components/DraftWithAIPanel";
 
 const EMPTY: RuntimePolicyRequest = {
   name: "",
@@ -52,6 +54,8 @@ export function PolicyWorkspacePage() {
   const [actor, setActor] = useState("");
   const [lifecycleMessage, setLifecycleMessage] = useState<string | null>(null);
   const canPublish = !user || hasPermission("runtime_policy.publish");
+  const hasContent = !!(form.scope.principal.trim() || form.scope.action.trim() || form.conditions.length);
+  const [aiOpen, setAiOpen] = useState(false);
 
   useEffect(() => {
     if (user) setActor(user.name);
@@ -73,6 +77,26 @@ export function PolicyWorkspacePage() {
   // tab) -- "organization" had zero consumers anywhere in the app before
   // this.
   useResourceSync(["organization"], loadEnterpriseSystems);
+
+  // Product Experience V3.2, section 24: the fields a condition can
+  // actually be evaluated against, so ConditionRow can suggest them
+  // instead of letting a user invent an arbitrary field PayReality can
+  // never evaluate. Fetched here (not inside ConditionRow itself, which
+  // can render many times per page) once per page load.
+  const [conditionFields, setConditionFields] = useState<string[]>([]);
+  const [trustedContextPrefix, setTrustedContextPrefix] = useState<string | undefined>();
+  useEffect(() => {
+    policyStudioApi
+      .getVocabulary()
+      .then((v) => {
+        setConditionFields(v.condition_fields);
+        setTrustedContextPrefix(v.trusted_context_prefix);
+      })
+      .catch(() => {
+        setConditionFields([]);
+        setTrustedContextPrefix(undefined);
+      });
+  }, []);
 
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -194,6 +218,37 @@ export function PolicyWorkspacePage() {
     updateMetadata({ ...form.metadata, tags: form.metadata.tags.filter((t) => t !== tag) });
   }
 
+  // Product Experience V3.2, section 39/40: applying an AI proposal is a
+  // merge onto the human's own form state, not a replacement of it.
+  // policy_drafting_service's candidate_to_content() always sets
+  // description/constraints.expires to null and has no concept of
+  // authority_id/mandate_id/enterprise_system_id/metadata.owner/tags at
+  // all -- those are exactly the fields no instruction legitimately
+  // determines, so they're kept from the current form rather than taken
+  // from the proposal. Scope/conditions/effect/delegated_by/evidence_required/
+  // risk_level are the fields the assistant actually reasons about, so
+  // those come from the proposal. This never calls handleSave: applying
+  // only changes in-memory form state, exactly like typing into any
+  // other field would.
+  function applyAiProposal(proposal: RuntimePolicyRequest) {
+    setForm((f) => ({
+      ...f,
+      name: f.name.trim() ? f.name : proposal.name,
+      scope: proposal.scope,
+      conditions: proposal.conditions,
+      effect: proposal.effect,
+      constraints: {
+        ...f.constraints,
+        delegated_by: proposal.constraints.delegated_by,
+        evidence_required: proposal.constraints.evidence_required,
+        risk_level: proposal.constraints.risk_level,
+      },
+      metadata: { ...f.metadata, created_by: proposal.metadata.created_by },
+    }));
+    setMessage("AI-proposed changes applied. Review the rule below, then save when you're ready.");
+    setAiOpen(false);
+  }
+
   if (!isNew && !existing && loadError) {
     return (
       <div className="p-8 max-w-3xl">
@@ -214,8 +269,20 @@ export function PolicyWorkspacePage() {
   // rendered the blank EMPTY-form fields (the same shape as authoring a
   // genuinely new rule) until loadExisting() resolved and overwrote
   // whatever the reviewer had already started typing, with no warning.
+  // Product Experience V3.2, Part D: Governance's own rule editor is one
+  // of the surfaces named for skeleton loading -- echoes this page's own
+  // sticky plain-English card plus the stacked field cards beneath it,
+  // rather than a bare "Loading..." flash.
   if (!isNew && !existing) {
-    return <div className="p-8" style={{ color: "var(--pr-text-muted)" }}>Loading...</div>;
+    return (
+      <div className="p-8 max-w-3xl" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
+        <Skeleton height={14} width={120} style={{ marginBottom: 16 }} />
+        <Skeleton height={28} width="50%" style={{ marginBottom: 16 }} />
+        <Skeleton height={64} style={{ marginBottom: 16 }} />
+        <Skeleton height={110} style={{ marginBottom: 16 }} />
+        <Skeleton height={110} />
+      </div>
+    );
   }
 
   return (
@@ -237,10 +304,30 @@ export function PolicyWorkspacePage() {
           )
         }
         primaryAction={
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? "Saving..." : "Save draft"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => setAiOpen(true)}
+              disabled={saving}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium"
+            >
+              <Sparkles size={14} />
+              Draft with AI
+            </Button>
+            <Button onClick={handleSave} disabled={saving}>
+              {saving ? "Saving..." : "Save draft"}
+            </Button>
+          </div>
         }
+      />
+
+      <DraftWithAIPanel
+        open={aiOpen}
+        onOpenChange={setAiOpen}
+        currentDraft={form}
+        deterministicSummary={describePolicy(form)}
+        hasContent={hasContent}
+        onApply={applyAiProposal}
       />
 
       {message && (
@@ -328,7 +415,16 @@ export function PolicyWorkspacePage() {
         <p role="alert" style={{ color: "var(--pr-text-secondary)", fontSize: 13, marginBottom: 16 }}>{lifecycleMessage}</p>
       )}
 
-      <Card borderColor="rgba(77,124,254,0.25)" style={{ marginBottom: 16 }}>
+      {/* Product Experience V3.2, section 17: sticky from the lg breakpoint
+          up only -- on a narrower viewport it stays in normal flow, since
+          a rule long enough to need scrolling on a narrow screen also
+          leaves little room for a pinned summary without crowding the
+          form beneath it. */}
+      <Card
+        borderColor="rgba(77,124,254,0.25)"
+        className="lg:sticky lg:top-4 lg:z-10"
+        style={{ marginBottom: 16 }}
+      >
         <h2 className="text-sm font-medium mb-2" style={{ color: "var(--pr-text-muted)" }}>In plain English</h2>
         <p style={{ color: "var(--pr-text-primary)", fontSize: 15 }}>{describePolicy(form)}</p>
       </Card>
@@ -365,28 +461,65 @@ export function PolicyWorkspacePage() {
           </button>
         </div>
         {form.conditions.map((c, i) => (
-          <ConditionRow key={i} condition={c} onChange={(next) => updateCondition(i, next)} onRemove={() => removeCondition(i)} />
+          <ConditionRow
+            key={i}
+            condition={c}
+            onChange={(next) => updateCondition(i, next)}
+            onRemove={() => removeCondition(i)}
+            knownFields={conditionFields}
+            trustedContextPrefix={trustedContextPrefix}
+          />
         ))}
         {form.conditions.length === 0 && (
           <p style={{ color: "var(--pr-text-muted)", fontSize: 13 }}>No conditions yet: this policy matches on scope alone.</p>
         )}
       </Card>
 
+      {/* Product Experience V3.2, section 25: the old single "Constraints"
+          card mixed authority provenance, decision-time requirements, and
+          downstream-system context into one undifferentiated list. Split
+          into three cards along the actual meaning of each field, with no
+          change to what's persisted (still Constraints under the hood --
+          only the presentation is reorganised). data-tour="policy-authority-block"
+          is kept on the exact same conceptual content (the Authority/Mandate
+          chain) so the guided tour's own target is unaffected. */}
       <Card style={{ marginBottom: 16 }}>
-        <h2 className="text-sm font-medium mb-3" style={{ color: "var(--pr-text-primary)" }}>Constraints</h2>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <FieldLabel htmlFor={`${formId}-delegated-by`}>Delegated by</FieldLabel>
-            <Input
-              id={`${formId}-delegated-by`}
-              placeholder="Role or person"
-              value={form.constraints.delegated_by ?? ""}
-              onChange={(e) => updateConstraints({ ...form.constraints, delegated_by: e.target.value || null })}
+        <h2 className="text-sm font-medium mb-1" style={{ color: "var(--pr-text-primary)" }}>Authority basis</h2>
+        <p className="mb-3" style={{ fontSize: 11, color: "var(--pr-text-muted)" }}>
+          Where this rule's organisational authority comes from.
+        </p>
+        <FieldLabel htmlFor={`${formId}-delegated-by`}>Delegated by</FieldLabel>
+        <Input
+          id={`${formId}-delegated-by`}
+          placeholder="Role or person"
+          value={form.constraints.delegated_by ?? ""}
+          onChange={(e) => updateConstraints({ ...form.constraints, delegated_by: e.target.value || null })}
+        />
+        <p style={{ fontSize: 11, color: "var(--pr-text-muted)", marginTop: 3 }}>
+          The organisational authority this rule enforces, not who wrote it.
+        </p>
+        {(form.constraints.authority_id || form.constraints.mandate_id) && (
+          <div className="mt-4" data-tour="policy-authority-block">
+            <AuthorityChain
+              links={[
+                ...(form.constraints.authority_id
+                  ? [{ icon: ShieldCheck, label: "Authority", value: form.constraints.authority_id }]
+                  : []),
+                ...(form.constraints.mandate_id
+                  ? [{ icon: FileCheck, label: "Mandate", value: form.constraints.mandate_id }]
+                  : []),
+              ]}
             />
-            <p style={{ fontSize: 11, color: "var(--pr-text-muted)", marginTop: 3 }}>
-              The organisational authority this rule enforces, not who wrote it.
-            </p>
           </div>
+        )}
+      </Card>
+
+      <Card style={{ marginBottom: 16 }}>
+        <h2 className="text-sm font-medium mb-1" style={{ color: "var(--pr-text-primary)" }}>Decision requirements</h2>
+        <p className="mb-3" style={{ fontSize: 11, color: "var(--pr-text-muted)" }}>
+          What a Decision produced by this rule must satisfy.
+        </p>
+        <div className="grid grid-cols-2 gap-4">
           <div>
             <FieldLabel htmlFor={`${formId}-risk-level`}>Risk level</FieldLabel>
             <select
@@ -402,47 +535,40 @@ export function PolicyWorkspacePage() {
               <option value="critical">critical</option>
             </select>
           </div>
-        </div>
-        <label className="flex items-center gap-2 mt-3" style={{ fontSize: 13, color: "var(--pr-text-secondary)" }}>
-          <input
-            type="checkbox"
-            checked={form.constraints.evidence_required}
-            onChange={(e) => updateConstraints({ ...form.constraints, evidence_required: e.target.checked })}
-          />
-          Evidence required
-        </label>
-        <div className="mt-3">
-          <FieldLabel htmlFor={`${formId}-enterprise-system`}>Enterprise System (optional)</FieldLabel>
-          <select
-            id={`${formId}-enterprise-system`}
-            style={getInputStyle()}
-            value={form.constraints.enterprise_system_id ?? ""}
-            onChange={(e) => updateConstraints({ ...form.constraints, enterprise_system_id: e.target.value || null })}
-          >
-            <option value="">(none)</option>
-            {enterpriseSystems.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </select>
-          <p style={{ fontSize: 11, color: "var(--pr-text-muted)", marginTop: 3 }}>
-            Which downstream system this rule's allowed action ultimately reaches, if any. Recorded
-            on every Decision this rule produces.
-          </p>
-        </div>
-        {(form.constraints.authority_id || form.constraints.mandate_id) && (
-          <div className="mt-4" data-tour="policy-authority-block">
-            <AuthorityChain
-              links={[
-                ...(form.constraints.authority_id
-                  ? [{ icon: ShieldCheck, label: "Authority", value: form.constraints.authority_id }]
-                  : []),
-                ...(form.constraints.mandate_id
-                  ? [{ icon: FileCheck, label: "Mandate", value: form.constraints.mandate_id }]
-                  : []),
-              ]}
-            />
+          <div className="flex items-end pb-2">
+            <label className="flex items-center gap-2" style={{ fontSize: 13, color: "var(--pr-text-secondary)" }}>
+              <input
+                type="checkbox"
+                checked={form.constraints.evidence_required}
+                onChange={(e) => updateConstraints({ ...form.constraints, evidence_required: e.target.checked })}
+              />
+              Evidence required
+            </label>
           </div>
-        )}
+        </div>
+      </Card>
+
+      <Card style={{ marginBottom: 16 }}>
+        <h2 className="text-sm font-medium mb-1" style={{ color: "var(--pr-text-primary)" }}>Enterprise context</h2>
+        <p className="mb-3" style={{ fontSize: 11, color: "var(--pr-text-muted)" }}>
+          Where this rule's allowed action ultimately reaches, if known.
+        </p>
+        <FieldLabel htmlFor={`${formId}-enterprise-system`}>Enterprise System (optional)</FieldLabel>
+        <select
+          id={`${formId}-enterprise-system`}
+          style={getInputStyle()}
+          value={form.constraints.enterprise_system_id ?? ""}
+          onChange={(e) => updateConstraints({ ...form.constraints, enterprise_system_id: e.target.value || null })}
+        >
+          <option value="">(none)</option>
+          {enterpriseSystems.map((s) => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+        <p style={{ fontSize: 11, color: "var(--pr-text-muted)", marginTop: 3 }}>
+          Which downstream system this rule's allowed action ultimately reaches, if any. Recorded
+          on every Decision this rule produces.
+        </p>
       </Card>
 
       <Card style={{ marginBottom: 16 }}>

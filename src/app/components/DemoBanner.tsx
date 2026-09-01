@@ -18,7 +18,14 @@ export function DemoBanner() {
         type="button"
         onClick={start}
         className="px-2.5 py-1 rounded-md text-xs font-medium flex-shrink-0"
-        style={{ backgroundColor: "rgba(255,255,255,0.18)", color: "#fff" }}
+        // Product Experience V3.2, Part E: a translucent WHITE overlay on
+        // top of the already-light authority-blue banner measured
+        // 2.88:1 with white text, below WCAG AA -- lightening this
+        // further only made the underlying 3.73:1 problem worse. A
+        // translucent BLACK overlay darkens the composited background
+        // instead, reaching ~5.2:1, while keeping the same "distinct
+        // pill on the banner" visual affordance.
+        style={{ backgroundColor: "rgba(0,0,0,0.18)", color: "#fff" }}
       >
         Start Guided Demo
       </button>

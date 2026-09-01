@@ -35,7 +35,7 @@ function policy(scope: Partial<Scope>, overrides: Partial<RuntimePolicyRequest> 
 describe("describePolicy", () => {
   it("describes a bare scope with no conditions", () => {
     const sentence = describePolicy(policy({ principal: "AP-Invoice-Agent", action: "submit_payment" }));
-    expect(sentence).toBe("When AP-Invoice-Agent tries to submit_payment → Allow automatically.");
+    expect(sentence).toBe("When AP-Invoice-Agent tries to submit_payment → Allowed.");
   });
 
   it("marks an unset principal/action rather than rendering an empty string", () => {
@@ -54,7 +54,7 @@ describe("describePolicy", () => {
       })
     );
     expect(sentence).toBe(
-      "When AP-Invoice-Agent tries to submit_payment involving vendor_invoice (only agent agent-123) → Allow automatically."
+      "When AP-Invoice-Agent tries to submit_payment involving vendor_invoice (only agent agent-123) → Allowed."
     );
   });
 
@@ -71,7 +71,7 @@ describe("describePolicy", () => {
       )
     );
     expect(sentence).toBe(
-      "When AP-Invoice-Agent tries to submit_payment, and amount is at most 5000, and currency is USD, → Allow automatically."
+      "When AP-Invoice-Agent tries to submit_payment, and amount is at most 5000, and currency is USD, → Allowed."
     );
   });
 
@@ -95,18 +95,18 @@ describe("describePolicy", () => {
     expect(sentence).toContain("country is one of US, CA");
   });
 
-  it("uses 'Block', not 'Approve', for a deny effect (Approve is reserved for approving the rule itself)", () => {
+  it("uses 'Not allowed', not 'Approve', for a deny effect (Approve is reserved for approving the rule itself)", () => {
     const sentence = describePolicy(
       policy({ principal: "AP-Invoice-Agent", action: "submit_payment" }, { effect: "deny" })
     );
-    expect(sentence).toContain("→ Block.");
+    expect(sentence).toContain("→ Not allowed.");
     expect(sentence).not.toContain("Approve");
   });
 
-  it("labels require_human_review as 'Send to a human'", () => {
+  it("labels require_human_review with the canonical Decision language 'Needs human approval'", () => {
     const sentence = describePolicy(
       policy({ principal: "AP-Invoice-Agent", action: "submit_payment" }, { effect: "require_human_review" })
     );
-    expect(sentence).toContain("→ Send to a human.");
+    expect(sentence).toContain("→ Needs human approval.");
   });
 });

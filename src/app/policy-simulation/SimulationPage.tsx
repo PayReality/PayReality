@@ -5,6 +5,7 @@ import { policyStudioApi } from "../policy-studio/api";
 import type { RuntimePolicy } from "../policy-studio/types";
 import type { BatchSimulationResult, Scenario, SimulationInput, SimulationResult } from "./types";
 import { Card } from "../components/ui/card";
+import { Skeleton } from "../components/ui/skeleton";
 import { FieldLabel } from "../components/ui/label";
 import { Input, getInputStyle } from "../components/ui/input";
 import { Button } from "../components/ui/button";
@@ -171,7 +172,15 @@ export function PolicySimulationPage() {
     }
   }
 
-  if (!policy) return <div className="p-8" style={{ color: "var(--pr-text-muted)" }}>Loading...</div>;
+  if (!policy) {
+    return (
+      <div className="p-8" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
+        <Skeleton height={16} width={100} style={{ marginBottom: 24 }} />
+        <Skeleton height={28} width="50%" style={{ marginBottom: 16 }} />
+        <Skeleton height={140} />
+      </div>
+    );
+  }
 
   return (
     <div className="p-8" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>

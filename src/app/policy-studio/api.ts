@@ -18,7 +18,13 @@ const BASE = "/v1/runtime-policies";
 // pick up the new state without needing a manual reload. `dryRun` is
 // deliberately excluded -- it's a simulation, it changes nothing.
 export const policyStudioApi = {
-  getVocabulary: () => apiClient.get<{ actions: string[] }>(`${BASE}/vocabulary`),
+  // Product Experience V3.2, section 24: condition_fields/trusted_context_prefix
+  // are additive (see the router's own docstring) -- a builder that only
+  // ever read `actions` before this milestone keeps working unchanged.
+  getVocabulary: () =>
+    apiClient.get<{ actions: string[]; condition_fields: string[]; trusted_context_prefix: string }>(
+      `${BASE}/vocabulary`
+    ),
   // A rule's Scope.principal used to be a free-text field the author had
   // to type an exact ID into by hand (PAYREALITY_UX_REVIEW.md, usability
   // problem #6). Reuses the same /v1/principals list the Agent Directory

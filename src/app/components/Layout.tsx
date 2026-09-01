@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Outlet, Link, useLocation } from "react-router";
 import {
   Bot,
@@ -13,8 +13,11 @@ import {
   LogOut,
   Moon,
   Sun,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useIsMobile } from "./ui/use-mobile";
 import { OperatorKeyField } from "../live/components/OperatorKeyField";
 import { useAuth } from "../auth/AuthContext";
@@ -26,6 +29,7 @@ import { DEMO_MODE } from "../demo/config";
 import { DemoBanner } from "./DemoBanner";
 import { TourProvider } from "../demo/tour/TourProvider";
 import { getTheme, setTheme, type Theme } from "../lib/theme";
+import { getSidebarCollapsed, setSidebarCollapsed } from "../lib/sidebarPreference";
 
 // One workflow, in order: Agents -> Governance -> Decisions -> Evidence
 // -> Assurance. No department-shaped groups, no duplicate "real" vs
@@ -41,18 +45,33 @@ import { getTheme, setTheme, type Theme } from "../lib/theme";
 // routinely saw a nav entry that always dead-ended on "you don't have
 // permission." `undefined` means genuinely no permission is required
 // (Overview is a general landing page).
-export const navItems: { path: string; label: string; icon: typeof Bot; permission?: string }[] = [
+//
+// Product Experience V3.2, section 1/8: the locked top-level IA
+// (Overview/Agents/Governance/Decisions/Evidence/Assurance/Settings) is
+// completely unchanged -- `group` below is a purely visual label used
+// only to add a small heading above "Workspace" items in expanded mode
+// (section 8's own suggested grouping), never a route, never a new
+// concept, never rendered anywhere permission logic reads. Settings is
+// deliberately ungrouped: it renders anchored at the bottom of the nav
+// list instead (see SidebarBody below), matching section 8's "Settings
+// anchored lower in the shell."
+export const navItems: { path: string; label: string; icon: typeof Bot; permission?: string; group?: "workspace" | "trust" }[] = [
   // In the public demo, "/" is the dedicated landing page (DemoLanding),
   // not the real dashboard -- Overview points at the always-present
   // /overview alias instead so the sidebar still reaches it.
-  { path: DEMO_MODE ? "/overview" : "/", label: "Overview", icon: Compass },
-  { path: "/agents", label: "Agents", icon: Bot, permission: "agent.view" },
-  { path: "/governance", label: "Governance", icon: ScrollText, permission: "runtime_policy.view" },
-  { path: "/decisions", label: "Decisions", icon: FlaskConical, permission: "decisions.view" },
-  { path: "/evidence", label: "Evidence", icon: Database, permission: "evidence.view" },
-  { path: "/assurance", label: "Assurance", icon: Building2, permission: "assurance.view" },
+  { path: DEMO_MODE ? "/overview" : "/", label: "Overview", icon: Compass, group: "workspace" },
+  { path: "/agents", label: "Agents", icon: Bot, permission: "agent.view", group: "workspace" },
+  { path: "/governance", label: "Governance", icon: ScrollText, permission: "runtime_policy.view", group: "workspace" },
+  { path: "/decisions", label: "Decisions", icon: FlaskConical, permission: "decisions.view", group: "workspace" },
+  { path: "/evidence", label: "Evidence", icon: Database, permission: "evidence.view", group: "trust" },
+  { path: "/assurance", label: "Assurance", icon: Building2, permission: "assurance.view", group: "trust" },
   { path: "/organization", label: "Organisation Settings", icon: Settings, permission: "settings.view" },
 ];
+
+const GROUP_LABEL: Record<string, string> = {
+  workspace: "Workspace",
+  trust: "Trust",
+};
 
 // Extracted so the exact production filter -- not a re-typed copy of it --
 // is what nav-visibility tests exercise (Layout.test.ts). Same
@@ -69,115 +88,230 @@ export function selectVisibleNavItems<T extends { permission?: string }>(
   return items.filter((item) => !item.permission || !user || hasPermission(item.permission));
 }
 
-function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
+function NavLink({ item, active, collapsed }: { item: (typeof navItems)[number]; active: boolean; collapsed: boolean }) {
+  const Icon = item.icon;
+  const link = (
+    <Link
+      to={item.path}
+      aria-current={active ? "page" : undefined}
+      aria-label={collapsed ? item.label : undefined}
+      className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-all group relative"
+      style={{
+        backgroundColor: active ? "color-mix(in srgb, var(--pr-authority-blue) 14%, transparent)" : "transparent",
+        color: active ? "var(--pr-text-primary)" : "var(--pr-text-muted)",
+        justifyContent: collapsed ? "center" : "flex-start",
+        transitionDuration: "var(--pr-motion-fast)",
+        transitionTimingFunction: "var(--pr-motion-ease)",
+      }}
+      onMouseEnter={(e) => {
+        if (!active) e.currentTarget.style.backgroundColor = "var(--pr-overlay-04)";
+      }}
+      onMouseLeave={(e) => {
+        if (!active) e.currentTarget.style.backgroundColor = "transparent";
+      }}
+    >
+      {/* Product Experience V3.2, section 7: the active indicator is now
+          background tint + a left edge bar + icon emphasis together,
+          never text color alone (already true before this milestone) --
+          strengthened so it survives collapsed mode too, where the edge
+          bar and icon color are the ONLY signal left once the label and
+          its own color disappear. */}
+      {active && (
+        <div
+          className="absolute left-0 top-1/2 -translate-y-1/2 rounded-full"
+          style={{ width: 3, height: 18, backgroundColor: "var(--pr-authority-blue)" }}
+        />
+      )}
+      <Icon
+        className="w-4 h-4 flex-shrink-0 transition-all"
+        style={{
+          color: active ? "var(--pr-authority-blue)" : "var(--pr-text-disabled)",
+          transitionDuration: "var(--pr-motion-fast)",
+        }}
+      />
+      {!collapsed && (
+        <span
+          className="text-[13px] font-medium truncate flex-1"
+          style={{ color: active ? "var(--pr-text-primary)" : "var(--pr-text-muted)" }}
+        >
+          {item.label}
+        </span>
+      )}
+    </Link>
+  );
+
+  // Section 4: "Every icon must have an accessible tooltip on hover and
+  // keyboard focus" -- only meaningful (and only mounted) once the label
+  // itself is gone; in expanded mode the visible text already names the
+  // destination, so wrapping every link in a Tooltip there would be
+  // redundant noise, not an accessibility improvement.
+  if (!collapsed) return link;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{link}</TooltipTrigger>
+      <TooltipContent side="right">{item.label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function SidebarBody({
+  onNavigate,
+  collapsed,
+  onToggleCollapsed,
+}: {
+  onNavigate?: () => void;
+  collapsed: boolean;
+  onToggleCollapsed?: () => void;
+}) {
   const location = useLocation();
   const { user, hasPermission } = useAuth();
   const visibleNavItems = selectVisibleNavItems(navItems, user, hasPermission);
+  const workspaceItems = visibleNavItems.filter((i) => i.group === "workspace");
+  const trustItems = visibleNavItems.filter((i) => i.group === "trust");
+  const ungroupedItems = visibleNavItems.filter((i) => !i.group);
 
   const isActive = (path: string) => {
     if (path === "/") return location.pathname === "/";
     return location.pathname === path || location.pathname.startsWith(`${path}/`);
   };
 
-  return (
-    <>
-      {/* Logo */}
-      <div className="px-5 py-5 border-b" style={{ borderColor: "var(--pr-overlay-05)" }}>
-        <div className="flex items-center gap-2.5">
-          <img src="/payreality-logo.png" alt="" className="w-7 h-7 rounded-lg flex-shrink-0" />
-          <div>
-            <h1
-              className="text-sm font-semibold leading-none mb-0.5"
-              style={{ color: "var(--pr-text-primary)" }}
-            >
-              Pay<span style={{ color: "var(--pr-warning-amber)" }}>Reality</span>
-            </h1>
-            <p className="text-[10px] leading-none" style={{ color: "var(--pr-text-muted)" }}>
-              Runtime Authority
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-3 py-3" style={{ scrollbarWidth: "none" }}>
-        <div className="mb-4">
+  function renderGroup(label: string | null, items: typeof visibleNavItems) {
+    if (items.length === 0) return null;
+    return (
+      <div className="mb-4" key={label ?? "ungrouped"}>
+        {label && !collapsed && (
           <p
             className="px-2 mb-1 text-[10px] font-semibold uppercase tracking-widest"
             style={{ color: "var(--pr-text-muted)" }}
           >
-            The Workflow
+            {label}
           </p>
-          <div className="space-y-0.5">
-            {visibleNavItems.map((item) => {
-              const Icon = item.icon;
-              const active = isActive(item.path);
-              return (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  onClick={onNavigate}
-                  aria-current={active ? "page" : undefined}
-                  className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-all duration-100 group relative"
-                  style={{
-                    backgroundColor: active ? "color-mix(in srgb, var(--pr-authority-blue) 12%, transparent)" : "transparent",
-                    color: active ? "var(--pr-text-primary)" : "var(--pr-text-muted)",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!active) e.currentTarget.style.backgroundColor = "var(--pr-overlay-04)";
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!active) e.currentTarget.style.backgroundColor = "transparent";
-                  }}
-                >
-                  {active && (
-                    <div
-                      className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 rounded-full"
-                      style={{ backgroundColor: "var(--pr-authority-blue)" }}
-                    />
-                  )}
-                  <Icon
-                    className="w-4 h-4 flex-shrink-0 transition-all"
-                    style={{
-                      color: active ? "var(--pr-authority-blue)" : "var(--pr-text-disabled)",
-                    }}
-                  />
-                  <span
-                    className="text-[13px] font-medium truncate flex-1"
-                    style={{
-                      color: active ? "var(--pr-text-primary)" : "var(--pr-text-muted)",
-                    }}
-                  >
-                    {item.label}
-                  </span>
-                </Link>
-              );
-            })}
-          </div>
+        )}
+        <div className="space-y-0.5">
+          {items.map((item) => (
+            <div key={item.path} onClick={onNavigate}>
+              <NavLink item={item} active={isActive(item.path)} collapsed={collapsed} />
+            </div>
+          ))}
         </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {/* Logo + collapse control */}
+      <div
+        className="px-5 py-5 border-b flex items-center gap-2"
+        style={{ borderColor: "var(--pr-overlay-05)", justifyContent: collapsed ? "center" : "space-between" }}
+      >
+        <div className="flex items-center gap-2.5 min-w-0">
+          <img src="/payreality-logo.png" alt="" className="w-7 h-7 rounded-lg flex-shrink-0" />
+          {!collapsed && (
+            <div className="min-w-0">
+              <h1
+                className="text-sm font-semibold leading-none mb-0.5 truncate"
+                style={{ color: "var(--pr-text-primary)" }}
+              >
+                Pay<span style={{ color: "var(--pr-warning-amber)" }}>Reality</span>
+              </h1>
+              <p className="text-[10px] leading-none" style={{ color: "var(--pr-text-muted)" }}>
+                Runtime Authority
+              </p>
+            </div>
+          )}
+        </div>
+        {/* Section 6: a real, discoverable, keyboard-accessible control in
+            BOTH states -- never a tiny invisible chevron. Placed in the
+            header (not floating on the sidebar's edge) so it is exactly
+            as easy to find collapsed as expanded. */}
+        {onToggleCollapsed && !collapsed && (
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            aria-label="Collapse navigation"
+            className="flex-shrink-0 p-1.5 rounded-lg"
+            style={{ color: "var(--pr-text-muted)" }}
+          >
+            <PanelLeftClose className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+      {onToggleCollapsed && collapsed && (
+        <div className="px-3 pt-3 flex justify-center">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onToggleCollapsed}
+                aria-label="Expand navigation"
+                className="p-2 rounded-lg"
+                style={{ color: "var(--pr-text-muted)" }}
+              >
+                <PanelLeftOpen className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Expand navigation</TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+
+      {/* Navigation */}
+      <nav className="flex-1 overflow-y-auto px-3 py-3" style={{ scrollbarWidth: "none" }}>
+        {renderGroup(GROUP_LABEL.workspace, workspaceItems)}
+        {renderGroup(GROUP_LABEL.trust, trustItems)}
       </nav>
 
-      {/* Bottom section */}
+      {/* Bottom section: Settings anchored lower (section 8), then the
+          secondary utility widgets, which only render as full labeled
+          panels in expanded mode -- section 4's own collapsed-mode
+          content list ("compact mark, navigation icons, active state,
+          badges, collapse control") does not include the Runtime
+          Authority status card or the Operator Key field, so both are
+          hidden rather than compressed into something illegible.
+          Theme toggle and sign-out remain reachable, as small tooltipped
+          icon buttons, rather than trapping a collapsed user into
+          expanding just to sign out. */}
       <div className="px-3 pb-4 border-t pt-3" style={{ borderColor: "var(--pr-overlay-05)" }}>
-        <div
-          className="px-3 py-2.5 rounded-xl"
-          style={{ backgroundColor: "var(--pr-overlay-03)", border: "1px solid var(--pr-overlay-04)" }}
-        >
-          <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-1.5">
-              <Activity className="w-3 h-3" style={{ color: "var(--pr-trust-green)" }} />
-              <span className="text-[11px] font-medium" style={{ color: "var(--pr-text-secondary)" }}>
-                Runtime Authority Engine
-              </span>
-            </div>
+        {ungroupedItems.length > 0 && (
+          <div className="space-y-0.5 mb-3">
+            {ungroupedItems.map((item) => (
+              <div key={item.path} onClick={onNavigate}>
+                <NavLink item={item} active={isActive(item.path)} collapsed={collapsed} />
+              </div>
+            ))}
           </div>
-          <p className="text-[10px]" style={{ color: "var(--pr-text-muted)" }}>
-            Deterministic. Fail-closed. Every decision signed.
-          </p>
-        </div>
-        <OperatorKeyField />
-        <ThemeToggle />
-        <CurrentUserWidget />
+        )}
+        {!collapsed && (
+          <>
+            <div
+              className="px-3 py-2.5 rounded-xl"
+              style={{ backgroundColor: "var(--pr-overlay-03)", border: "1px solid var(--pr-overlay-04)" }}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-1.5">
+                  <Activity className="w-3 h-3" style={{ color: "var(--pr-trust-green)" }} />
+                  <span className="text-[11px] font-medium" style={{ color: "var(--pr-text-secondary)" }}>
+                    Runtime Authority Engine
+                  </span>
+                </div>
+              </div>
+              <p className="text-[10px]" style={{ color: "var(--pr-text-muted)" }}>
+                Deterministic. Fail-closed. Every decision signed.
+              </p>
+            </div>
+            <OperatorKeyField />
+            <ThemeToggle collapsed={false} />
+            <CurrentUserWidget collapsed={false} />
+          </>
+        )}
+        {collapsed && (
+          <div className="flex flex-col items-center gap-1">
+            <ThemeToggle collapsed />
+            <CurrentUserWidget collapsed />
+          </div>
+        )}
       </div>
     </>
   );
@@ -188,7 +322,7 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
 // visible control to change it -- only Organisation Settings -> General
 // exposed one, one navigation away from every other page. Same
 // mechanism, just reachable from the shell itself now.
-function ThemeToggle() {
+function ThemeToggle({ collapsed }: { collapsed: boolean }) {
   const [theme, setThemeState] = useState<Theme>(() => getTheme());
 
   function toggle() {
@@ -197,11 +331,32 @@ function ThemeToggle() {
     setThemeState(next);
   }
 
+  const label = `Switch to ${theme === "dark" ? "light" : "dark"} mode`;
+
+  if (collapsed) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={toggle}
+            aria-label={label}
+            className="p-2 rounded-lg"
+            style={{ color: "var(--pr-text-muted)" }}
+          >
+            {theme === "dark" ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right">{label}</TooltipContent>
+      </Tooltip>
+    );
+  }
+
   return (
     <button
       type="button"
       onClick={toggle}
-      aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+      aria-label={label}
       className="w-full mt-2 flex items-center justify-between gap-2 px-3 py-2 rounded-xl"
       style={{ backgroundColor: "var(--pr-overlay-03)", border: "1px solid var(--pr-overlay-04)" }}
     >
@@ -227,10 +382,27 @@ function ThemeToggle() {
   );
 }
 
-function CurrentUserWidget() {
+function CurrentUserWidget({ collapsed }: { collapsed: boolean }) {
   const { user, logout } = useAuth();
 
   if (!user) {
+    if (collapsed) {
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Link
+              to="/login"
+              aria-label="Sign in"
+              className="p-2 rounded-lg flex items-center justify-center"
+              style={{ color: "var(--pr-text-muted)" }}
+            >
+              <LogOut className="w-4 h-4" style={{ transform: "scaleX(-1)" }} />
+            </Link>
+          </TooltipTrigger>
+          <TooltipContent side="right">Sign in</TooltipContent>
+        </Tooltip>
+      );
+    }
     return (
       <Link
         to="/login"
@@ -239,6 +411,25 @@ function CurrentUserWidget() {
       >
         Sign in
       </Link>
+    );
+  }
+
+  if (collapsed) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => logout()}
+            aria-label={`Sign out (${user.name})`}
+            className="p-2 rounded-lg"
+            style={{ color: "var(--pr-text-disabled)" }}
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right">Sign out ({user.name})</TooltipContent>
+      </Tooltip>
     );
   }
 
@@ -268,10 +459,52 @@ function CurrentUserWidget() {
   );
 }
 
+// Product Experience V3.2, Part D: replays .pr-enter's fade-and-rise on
+// every route change without unmounting Outlet's subtree. Toggling the
+// class off then back on (rather than leaving it on permanently) is
+// necessary: a CSS animation only plays once per class application, so
+// simply keeping "pr-enter" in className would animate the very first
+// page load and then never again. Forcing a reflow (`offsetHeight`)
+// between the removal and the re-add is the standard way to make the
+// browser actually notice the class left and came back, rather than
+// coalescing both changes into one no-op paint.
+function PageTransition({ pathname, children }: { pathname: string; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.classList.remove("pr-enter");
+    void el.offsetHeight;
+    el.classList.add("pr-enter");
+  }, [pathname]);
+
+  return (
+    <div ref={ref} className="pr-enter">
+      {children}
+    </div>
+  );
+}
+
 function LayoutInner() {
   const location = useLocation();
   const isMobile = useIsMobile();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Product Experience V3.2, section 5: initialized synchronously from
+  // localStorage (not in an effect) so the sidebar never visibly flashes
+  // expanded-then-collapses on a reload for a user who collapsed it last
+  // session -- the same "read before first paint" discipline lib/theme.ts
+  // already established for the theme preference.
+  const [collapsed, setCollapsed] = useState<boolean>(() => getSidebarCollapsed());
+
+  function toggleCollapsed() {
+    setCollapsed((prev) => {
+      const next = !prev;
+      setSidebarCollapsed(next);
+      return next;
+    });
+  }
+
   // Final Product Polish (found via real keyboard/focus QA): Radix's
   // default open-autofocus landed on the Operator Key input -- the
   // first form control after the nav links in the sidebar's own DOM
@@ -304,20 +537,32 @@ function LayoutInner() {
       </a>
       {DEMO_MODE && <DemoBanner />}
       <div className="flex flex-1 min-h-0" style={{ backgroundColor: "var(--pr-bg-primary)" }}>
-      {/* Sidebar (desktop) */}
+      {/* Sidebar (desktop). Section 12: collapse is a desktop-only
+          concept -- isMobile already routes to a completely separate
+          Sheet drawer below, so a collapsed preference set on desktop
+          can never reach, or break, the mobile pattern. Section 56:
+          width is the one thing that animates; flex layout already
+          reflows the content area to match without its own separate
+          transition. */}
       {!isMobile && (
         <aside
-          className="w-[220px] flex-shrink-0 flex flex-col border-r"
+          className="flex-shrink-0 flex flex-col border-r overflow-hidden"
           style={{
+            width: collapsed ? "var(--pr-sidebar-width-collapsed)" : "var(--pr-sidebar-width-expanded)",
+            transitionProperty: "width",
+            transitionDuration: "var(--pr-motion-base)",
+            transitionTimingFunction: "var(--pr-motion-ease)",
             backgroundColor: "var(--pr-bg-secondary)",
             borderColor: "var(--pr-overlay-05)",
           }}
         >
-          <SidebarBody />
+          <SidebarBody collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
         </aside>
       )}
 
-      {/* Sidebar (mobile drawer) */}
+      {/* Sidebar (mobile drawer): always fully expanded, its own
+          separate pattern, entirely unaffected by desktop collapse
+          state (section 12). */}
       {isMobile && (
         <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
           <SheetContent
@@ -341,7 +586,7 @@ function LayoutInner() {
             <SheetDescription className="sr-only">
               Jump to another section of PayReality.
             </SheetDescription>
-            <SidebarBody onNavigate={() => setDrawerOpen(false)} />
+            <SidebarBody collapsed={false} onNavigate={() => setDrawerOpen(false)} />
           </SheetContent>
         </Sheet>
       )}
@@ -388,7 +633,20 @@ function LayoutInner() {
           </header>
         )}
         <main id="pr-main-content" className="flex-1 overflow-auto" tabIndex={-1}>
-          <Outlet />
+          {/* Product Experience V3.2, Part D: a route change gets a
+              small, deliberate entrance rather than an abrupt cut --
+              main content only, the sidebar next to it never moves.
+              Deliberately NOT a React `key` remount: that would tear
+              down and rebuild whatever Outlet renders on every
+              navigation, resetting a route component's own state even
+              between two params of the same route (e.g. one Runtime
+              Policy to another) -- a behavioural change this milestone
+              has no reason to make. Instead the animation class itself
+              is replayed in place via PageTransition below, which never
+              unmounts Outlet's subtree. */}
+          <PageTransition pathname={location.pathname}>
+            <Outlet />
+          </PageTransition>
         </main>
       </div>
       <HelpPanel />

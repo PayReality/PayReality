@@ -58,7 +58,14 @@ export function DemoLanding() {
         <h1 className="text-3xl font-bold mb-4" style={{ color: "var(--pr-text-primary)", lineHeight: 1.25, textWrap: "balance" }}>
           An AI agent tries to change a supplier's bank details. Does your organization actually authorize that?
         </h1>
-        <p style={{ color: "var(--pr-text-muted)", fontSize: 15, maxWidth: 560 }}>
+        {/* Product Experience V3.2, Part E: this hero paragraph is the
+            page's own primary explanatory content, not a caption on
+            something more prominent -- --pr-text-muted here measured
+            4.47:1 against --pr-bg-primary in light theme, just under
+            WCAG AA's 4.5:1 for normal-size text. --pr-text-secondary is
+            reused (not a new token) since it already exists for exactly
+            this "readable body prose" role elsewhere on this page. */}
+        <p style={{ color: "var(--pr-text-secondary)", fontSize: 15, maxWidth: 560 }}>
           PayReality, the Enterprise AI Authority Infrastructure, checks every AI-initiated action against real
           delegated authority and enterprise policy, before it executes, then produces a signed, verifiable
           record of the decision. It doesn't observe or prove what happens afterward inside the enterprise

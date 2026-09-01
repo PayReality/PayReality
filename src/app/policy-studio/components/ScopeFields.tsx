@@ -3,6 +3,7 @@ import { policyStudioApi } from "../api";
 import type { LiveAgent, LivePrincipal } from "../../live/types";
 import type { Scope } from "../types";
 import { FieldLabel } from "../../components/ui/label";
+import { formatStatus } from "../../live/format";
 
 const inputStyle: React.CSSProperties = {
   backgroundColor: "var(--pr-bg-hover)",
@@ -42,7 +43,7 @@ export function ScopeFields({ scope, onChange }: { scope: Scope; onChange: (next
   return (
     <div className="grid grid-cols-2 gap-4">
       <div>
-        <FieldLabel htmlFor={`${formId}-principal`}>Who this applies to</FieldLabel>
+        <FieldLabel htmlFor={`${formId}-principal`}>Who has this authority</FieldLabel>
         <select
           id={`${formId}-principal`}
           style={inputStyle}
@@ -51,12 +52,15 @@ export function ScopeFields({ scope, onChange }: { scope: Scope; onChange: (next
         >
           <option value="">Select a principal...</option>
           {principals.map((p) => (
-            <option key={p.id} value={p.name}>{p.name}</option>
+            <option key={p.id} value={p.name}>{p.role ? `${p.name} (${p.role})` : p.name}</option>
           ))}
           {scope.principal && !principals.some((p) => p.name === scope.principal) && (
             <option value={scope.principal}>{scope.principal} (not in the current list)</option>
           )}
         </select>
+        <p style={{ fontSize: 11, color: "var(--pr-text-muted)", marginTop: 3 }}>
+          The organisational role or identity this rule's authority belongs to.
+        </p>
       </div>
       <div>
         <FieldLabel htmlFor={`${formId}-action`}>Action</FieldLabel>
@@ -68,11 +72,16 @@ export function ScopeFields({ scope, onChange }: { scope: Scope; onChange: (next
         >
           <option value="">Select an action</option>
           {actions.map((a) => (
-            <option key={a} value={a}>
-              {a}
+            <option key={a} value={a} title={a}>
+              {formatStatus(a)}
             </option>
           ))}
         </select>
+        {scope.action && (
+          <p style={{ fontSize: 11, color: "var(--pr-text-muted)", marginTop: 3, fontFamily: "monospace" }}>
+            {scope.action}
+          </p>
+        )}
       </div>
       <div>
         <FieldLabel htmlFor={`${formId}-agent`}>Agent (optional)</FieldLabel>
@@ -90,6 +99,10 @@ export function ScopeFields({ scope, onChange }: { scope: Scope; onChange: (next
             <option value={scope.agent}>{scope.agent} (not in the current list)</option>
           )}
         </select>
+        <p style={{ fontSize: 11, color: "var(--pr-text-muted)", marginTop: 3 }}>
+          Optional: narrows this rule to one specific autonomous Agent acting for the principal above.
+          Leave as "Any agent" unless this rule should apply to only one Agent.
+        </p>
       </div>
       <div>
         <FieldLabel htmlFor={`${formId}-resource`}>Resource (optional)</FieldLabel>

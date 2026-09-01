@@ -12,7 +12,7 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const VARIANT_STYLE: Record<ButtonVariant, CSSProperties> = {
-  primary: { backgroundColor: "var(--pr-authority-blue)", color: "#fff" },
+  primary: { backgroundColor: "var(--pr-authority-blue-cta)", color: "#fff" },
   danger: { backgroundColor: "var(--pr-critical-red)", color: "#fff" },
   ghost: { backgroundColor: "transparent", color: "var(--pr-text-muted)" },
   "tint-success": { backgroundColor: "rgba(34,197,94,0.1)", color: "var(--pr-trust-green)" },

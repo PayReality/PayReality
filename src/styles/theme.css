@@ -15,6 +15,15 @@
   --pr-bg-hover: #16233F;
 
   --pr-authority-blue: #4D7CFE;
+  /* Product Experience V3.2, Part E: a distinct, darker shade for the
+     specific case of white text filled directly onto authority blue (the
+     primary Button and DemoBanner's own CTA) -- --pr-authority-blue
+     itself is only ~3.73:1 with white, below WCAG AA's 4.5:1 for
+     normal-size text. Every other use of --pr-authority-blue (borders,
+     focus rings, links, the small authority-chain dot) isn't a
+     text-on-fill contrast case and is intentionally left unchanged,
+     rather than darkening the brand blue itself everywhere. */
+  --pr-authority-blue-cta: #3D5FD1;
   --pr-evidence-cyan: #00D4FF;
   --pr-trust-green: #22C55E;
   --pr-warning-amber: #F59E0B;
@@ -103,6 +112,13 @@
   --pr-motion-base: 180ms;
   --pr-motion-slow: 240ms;
   --pr-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Product Experience V3.2, section 3/4: the two sidebar widths, named
+     rather than hard-coded at each call site (Layout.tsx), so a future
+     change to either stays a one-line edit. Within the brief's own
+     240-260px / 64-72px ranges. */
+  --pr-sidebar-width-expanded: 252px;
+  --pr-sidebar-width-collapsed: 68px;
 
   /* Visual System V3: a small, deliberate spacing scale for the new
      shared components (PageHeader, EmptyState, Table, evidence

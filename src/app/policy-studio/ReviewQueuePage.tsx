@@ -220,6 +220,12 @@ export function ReviewQueuePage() {
             {p.constraints.risk_level && (
               <span style={{ color: "var(--pr-warning-amber)" }}> &middot; {p.constraints.risk_level} risk</span>
             )}
+            {p.constraints.delegated_by && (
+              <span style={{ color: "var(--pr-text-muted)" }}> &middot; Delegated by {p.constraints.delegated_by}</span>
+            )}
+            {p.constraints.evidence_required && (
+              <span style={{ color: "var(--pr-text-muted)" }}> &middot; Evidence required</span>
+            )}
           </p>
           <label htmlFor={`reject-reason-${p.policy_key}`} className="sr-only">Rejection reason</label>
           <input
