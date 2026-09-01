@@ -120,6 +120,12 @@ class CapabilitySummary(BaseModel):
     action: str | None = None
     expires_at: datetime | None = None
     consumed_at: datetime | None = None
+    # Trusted Integration Architecture, Phase 5: the Runtime Connection
+    # (enforcement_binding_id) and environment this Capability was bound
+    # to -- None for every Agent-direct Capability, and for any
+    # Capability issued before this field existed.
+    environment: str | None = None
+    enforcement_binding_id: str | None = None
 
 
 class ReceiptIntegrationSummary(BaseModel):

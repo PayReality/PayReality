@@ -1,6 +1,6 @@
 # Part 5 — Database
 
-**Supersedes/synthesizes:** `ARCHITECTURE.md` (data-model section, which describes only the original 6-table core and is missing the tables added since). Full inventory below is read directly from `server/app/db/models.py` and `server/alembic/versions/`. As of Trusted Integration Phase 1–4 (§5.6 below): **39 tables**, 33 predating Trusted Integration plus 6 added by it.
+**Supersedes/synthesizes:** `ARCHITECTURE.md` (data-model section, which describes only the original 6-table core and is missing the tables added since). Full inventory below is read directly from `server/app/db/models.py` and `server/alembic/versions/`. As of Trusted Integration Phase 1–4 (§5.6 below): **39 tables**, 33 predating Trusted Integration plus 6 added by it. Phase 5 (§5.3, §5.6) adds no new table, only additive columns on `capability_tokens` and `enforcement_bindings`.
 
 ## 5.1 All 33 tables (pre-Trusted-Integration baseline; see §5.6 for the 6 added since)
 
@@ -128,7 +128,7 @@ erDiagram
 | 13 | `b58b031aeb21` | Phase 1 Authority Model schema | `business_units`/`departments`/`teams`/`resources`, `principals`/`authority_relationships` extensions |
 | 14 | `411edb414123` | Phase 5 Evidence chaining organisation scope | `evidence.organization_id` + index |
 
-**Stale beyond this point, disclosed rather than silently left implying completeness**: 34 migrations exist today; this table stops at 14 and was never extended through Multi-Tenant Foundation, Enterprise Surface Isolation, Trusted Enterprise Facts, Authority Freshness, Capability Tokens, the Authority Graph, the Runtime Policy Simulator/Lifecycle, or Enterprise Knowledge — a real documentation debt this pass does not fully close (that would mean re-deriving ~20 unrelated migrations' history). What this pass *does* add, because it is this document's actual subject, is the six Trusted Integration migrations, in their real order:
+**Stale beyond this point, disclosed rather than silently left implying completeness**: 35 migrations exist today; this table stops at 14 and was never extended through Multi-Tenant Foundation, Enterprise Surface Isolation, Trusted Enterprise Facts, Authority Freshness, Capability Tokens, the Authority Graph, the Runtime Policy Simulator/Lifecycle, or Enterprise Knowledge. This is a real documentation debt this pass does not fully close (that would mean re-deriving ~20 unrelated migrations' history). What this pass *does* add, because it is this document's actual subject, is the seven Trusted Integration migrations, in their real order:
 
 | Revision | Name | What it did |
 |---|---|---|
@@ -138,8 +138,9 @@ erDiagram
 | `16159a40ddfa` | Authority Graph approval lineage | `authority_graph_approvals.predecessor_approval_id` (unrelated subsystem, noted for completeness of this span) |
 | `39c98daa028f` | Authority Graph → RuntimePolicy compilation gate provenance | `runtime_policy_records.source_graph_approval_id` (unrelated subsystem, noted for completeness of this span) |
 | `a1f3e9c72b6d` | Trusted Integration Phase 3: business operation identity | `intents.external_operation_id`/`integration_id`/`canonical_operation_fingerprint`, the operation-idempotency unique index |
+| `b7d3a4f0e5c2` | Trusted Integration Phase 5: adapter-backed capability authorization | Five nullable columns on `capability_tokens` (`integration_identity_id`, `enforcement_binding_id`, `integration_contract_version_id`, `environment`, `external_operation_id`), all `NULL` for every agent-direct Capability; `enforcement_bindings.enforcement_assurance` (`NOT NULL`, default `'ADVISORY'`, `CHECK` constrained to `'ADVISORY'`/`'CAPABILITY_REQUIRED'` only) |
 
-All six are additive: new nullable columns or new standalone tables, no drops, no backfills, no destructive changes — verified by direct reading, not assumed, as part of a separate P0 production-recovery pass on 2026-08-31.
+All seven are additive: new nullable columns (or, for `enforcement_assurance`, a `NOT NULL` column with a server-side default backfilling every existing row) or new standalone tables, no drops, no destructive changes. Verified by direct reading, not assumed, as part of a separate P0 production-recovery pass on 2026-08-31.
 
 ## 5.4 Cross-cutting schema conventions
 
@@ -166,7 +167,7 @@ All six are additive: new nullable columns or new standalone tables, no drops, n
 
 ## 5.6 Trusted Integration tables (6, added by Phases 1–2)
 
-See [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) for the full behavioral account; this is the schema only.
+See [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) for the full behavioral account; this is the schema only. Phase 5 (§50.9, §50.16) added no new table here, only the `enforcement_assurance` column on `enforcement_bindings` below, plus five columns on the pre-existing `capability_tokens` table (outside this six-table baseline, not otherwise covered in this part; see the migration table above).
 
 | Table | Key columns | Notes |
 |---|---|---|
@@ -174,5 +175,5 @@ See [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE
 | `integration_contract_versions` | `integration_id`, `source_operation`, `version`, `canonical_action`, `resource_path`/`amount_path`/`currency_path`/`fact_subject_path`, `context_bindings (JSONB)`, `content_hash`, `status` (`draft/validated/approved/retired`) | Customer-facing "Action Mapping." `UNIQUE(integration_id, source_operation, version)`. Multiple `approved` rows for the same `(integration_id, source_operation)` may coexist by design — see §50.12. |
 | `integration_identities` | `organization_id`, `name`, `status` (`registered/active/suspended/revoked/retired`) | Customer-facing "Trusted Connection" identity row |
 | `integration_identity_certificates` | `integration_identity_id`, `public_key`, `status` (`issued/active/rotated/expired/revoked`) | Same shape as `certificates` (Agent), deliberately a separate table, not a shared one — see §50.3. Partial unique index: at most one `active` per identity. |
-| `enforcement_bindings` | `organization_id`, `integration_identity_id`, `integration_contract_version_id`, `integration_id`, `source_operation`, `environment`, `status` (`draft/active/retired`) | Customer-facing "Runtime Connection." Partial unique index `idx_enforcement_bindings_single_active_per_scope` on `(integration_identity_id, integration_id, source_operation, environment)` where `status='active'` — the real, DB-enforced "exactly one current meaning" invariant. |
+| `enforcement_bindings` | `organization_id`, `integration_identity_id`, `integration_contract_version_id`, `integration_id`, `source_operation`, `environment`, `status` (`draft/active/retired`), `enforcement_assurance` (`ADVISORY/CAPABILITY_REQUIRED`)† | Customer-facing "Runtime Connection." Partial unique index `idx_enforcement_bindings_single_active_per_scope` on `(integration_identity_id, integration_id, source_operation, environment)` where `status='active'`, the real, DB-enforced "exactly one current meaning" invariant. †`enforcement_assurance` added by Trusted Integration Phase 5, `NOT NULL` default `'ADVISORY'`, `CHECK`-constrained to only those two values. A customer-declared label, never read by Runtime Authority's own evaluation. |
 | `enforcement_binding_agents` | `enforcement_binding_id`, `agent_id` | The explicit Agent allow-list join table. `UNIQUE(enforcement_binding_id, agent_id)`. No "all agents" row type exists — every allowed Agent is an explicit row. |

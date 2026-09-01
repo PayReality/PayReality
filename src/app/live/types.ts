@@ -488,6 +488,10 @@ export interface CapabilitySummary {
   action: string | null;
   expires_at: string | null;
   consumed_at: string | null;
+  // Trusted Integration Architecture, Phase 5: null for every
+  // Agent-direct capability.
+  environment: string | null;
+  enforcement_binding_id: string | null;
 }
 
 // Core Product Experience Redesign: GET /v1/decisions/history's row shape

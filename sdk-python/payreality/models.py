@@ -84,6 +84,38 @@ class Resolution:
 
 
 @dataclass(frozen=True)
+class Capability:
+    """What `agent.request_capability()` returns. `token` is the full,
+    opaque, signed artifact to hand to whatever customer-controlled
+    enforcement checkpoint enforces `audience` -- this SDK never
+    inspects or decodes it. Requesting a Capability, and a checkpoint
+    later verifying one, are both administrative operations distinct
+    from submitting an Intent: PayReality issuing this is not proof the
+    downstream enterprise action executed, and neither is a checkpoint
+    later verifying it."""
+
+    token: str
+    capability_id: str
+    expires_at: str
+
+
+@dataclass(frozen=True)
+class ConsumedCapability:
+    """What `agent.verify_capability()` returns on success: the exact
+    decision, resource, and constraints the Capability was bound to,
+    for the caller's own record. A `ConsumedCapability` proves a valid,
+    unexpired, correctly-scoped Capability was presented and consumed
+    exactly once at this moment. It does not prove the downstream
+    enterprise action that follows actually executed, failed, or rolled
+    back."""
+
+    capability_id: str
+    decision_id: str
+    resource: str
+    constraints: dict
+
+
+@dataclass(frozen=True)
 class RegisteredAgent:
     """What `agent.register()` returns: the identifiers the server
     assigned. These are also what gets persisted locally so a later

@@ -557,16 +557,24 @@ def test_resolved_human_review_retry_returns_same_decision_and_resolution(db, op
     assert resolution_row is not None
 
 
-def test_allow_retry_creates_no_capability(db, opa_url):
+def test_allow_retry_still_resolves_to_the_one_decision_a_capability_can_be_issued_for(db, opa_url):
+    """Trusted Integration Architecture, Phase 5: retrying the same
+    business operation (section 12) must not mint a second, independent
+    authority decision for capability issuance to attach to -- it
+    resolves to the exact same Decision row both times, and a Capability
+    issued from it is bound to that one Decision, not a fresh one the
+    retry might otherwise have manufactured."""
     org = _org(db)
     identity, _integ, _cv, binding, agent, _ = _setup(db, org.id)
     _deploy_policy(db, org.id, opa_url)
 
-    _attest(db, identity, binding, agent, external_operation_id="OP-1")
+    _intent1, decision1, _e1 = _attest(db, identity, binding, agent, external_operation_id="OP-1")
     _intent2, decision2, _e2 = _attest(db, identity, binding, agent, external_operation_id="OP-1")
     assert decision2.outcome == "ALLOW"
-    with pytest.raises(capability_service.CapabilityNotAvailableForIntegrationIntentError):
-        capability_service.issue_capability_for_decision(db, org.id, decision2.id, audience="reference-adapter")
+    assert decision2.id == decision1.id  # the retry, not a second authority decision
+
+    issued = capability_service.issue_capability_for_decision(db, org.id, decision2.id, audience="reference-adapter")
+    assert issued.token
 
 
 def test_deny_retry_returns_original_deny(db, opa_url):

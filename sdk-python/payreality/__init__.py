@@ -32,7 +32,7 @@ from .exceptions import (
     ResolutionTimeoutError,
 )
 from .integration import Adapter, ContractShape
-from .models import Decision, RegisteredAgent, Resolution
+from .models import Capability, ConsumedCapability, Decision, RegisteredAgent, Resolution
 
 __version__ = "0.5.0"
 
@@ -40,6 +40,8 @@ __all__ = [
     "Agent",
     "Adapter",
     "ContractShape",
+    "Capability",
+    "ConsumedCapability",
     "Decision",
     "RegisteredAgent",
     "Resolution",

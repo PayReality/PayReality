@@ -6,19 +6,21 @@ This is the first official PayReality SDK: a Python package (`sdk-python/payreal
 
 **As of 0.5.0, the SDK also covers the Trusted Adapter path** (`payreality.integration.Adapter`, see the dedicated section below) — this file previously described only the agent-direct surface, which was an omission this pass corrected, not a change to the SDK itself.
 
+**Also part of the current 0.5.0 surface, undocumented in this file until this pass**: `Agent.request_capability()`/`Agent.verify_capability()`, covering Capability Authorization for a Decision from either runtime path (Trusted Integration Architecture Phase 5). See the dedicated section below.
+
 ## Package layout
 
 ```
 sdk-python/
   payreality/
-    __init__.py       public exports: Agent, Decision, RegisteredAgent, exceptions
-    agent.py           Agent: register(), rotate_keys(), heartbeat(), retire(), authorize(), get_decision(), wait_for_resolution(), health(), version()
+    __init__.py       public exports: Agent, Decision, RegisteredAgent, exceptions (NOT Capability/ConsumedCapability, see the Capability Authorization section below)
+    agent.py           Agent: register(), rotate_keys(), heartbeat(), retire(), authorize(), get_decision(), wait_for_resolution(), health(), version(), request_capability(), verify_capability()
     integration.py     Adapter: attest(), the Trusted Adapter path, POST /v1/integration-runtime/intents. ContractShape: the request shape an Action Mapping expects.
     auth.py            nonce/timestamp generation, header assembly
     client.py           the one place that makes an HTTP request; owns retries and exception mapping
     crypto.py           ED25519 keygen and signing (PyNaCl)
     exceptions.py       the exception hierarchy
-    models.py           Decision, Resolution, RegisteredAgent (plain dataclasses)
+    models.py           Decision, Resolution, RegisteredAgent, Capability, ConsumedCapability (plain dataclasses)
     retry.py             retry policy: what's retryable, backoff schedule
     configuration.py     Configuration + the local credential store
   tests/               80 tests, all mocked (no network), see SDK_REFERENCE.md's testing note
@@ -46,6 +48,16 @@ A second, separate identity type from `Agent` — see [SPECIFICATION/50_TRUSTED_
 **Registration and certificate rotation for the Trusted Connection itself are deliberately not part of this class** — those are administrative actions (`POST /v1/integration-identities`, `.../activate`, `.../rotate`, etc.), performed via the raw HTTP API or the Admin UI (Settings → Integrations), not through the SDK's `Adapter` object. `Adapter` is the runtime-attestation client; it assumes the Trusted Connection, Runtime Connection, and Action Mapping already exist and are approved/active.
 
 `Adapter.attest()` returns the same `Decision`/outcome shape `Agent.authorize()` does — `ALLOW`/`DENY`/`HUMAN_REVIEW`, and the same `wait_for_resolution()`-style polling applies for a `HUMAN_REVIEW` result. It raises a distinct exception for an **integration rejection** (a pre-evaluation trust failure — invalid connection, agent not allow-listed, mapping mismatch) versus a normal `DENY`, matching the server-side distinction exactly (§50.8 of the specification above) — do not catch these two the same way in application code, they mean categorically different things.
+
+## Capability Authorization (`agent.request_capability()` / `agent.verify_capability()`)
+
+Both methods live on `Agent`, never on `Adapter`, even though `request_capability()` also covers a Decision produced by `Adapter.attest()`: requesting or verifying a Capability is an administrative operation authenticated by the caller's own operator credential, not by an Agent's or a Trusted Connection's signing key, so it belongs with the other administrative methods on `Agent` regardless of which runtime path produced the underlying Decision.
+
+`request_capability()` wraps `POST /v1/decisions/{id}/capability-token`, gated by the same `admin_auth` (`api_key`+`organization_id`, or `bearer_token`) every other administrative method on this class already requires. For a Decision from the Trusted-Adapter path, the server re-checks live, at the moment of issuance, that the underlying Trusted Connection and Runtime Connection are still active; this SDK does not duplicate that check client-side, it only surfaces the resulting `ApiError` (HTTP 409) if either has since been suspended, revoked, or retired.
+
+`verify_capability()` wraps `POST /v1/capability-tokens/verify` and is the one method on `Agent` with a different authentication requirement from the rest of the class: it accepts only `api_key` (the platform Operator Key), never `bearer_token`, because the caller here is modeled as a reference enforcement checkpoint (a trusted internal/platform-level caller with no human RBAC session), the same primitive `process_due_schedules` uses server-side, not a scoped per-organization identity. Calling it on an `Agent` configured with only `bearer_token` raises `ConfigurationError` before any network call.
+
+**Both models it returns, `Capability` and `ConsumedCapability`, are absent from `payreality/__init__.py`'s `__all__`.** They exist and work exactly as documented in `SDK_REFERENCE.md`, importable as `payreality.models.Capability`/`payreality.models.ConsumedCapability`, but `from payreality import Capability` fails with an `ImportError` today. This is a real gap in this pass's own polish, not a deliberate design choice, and is disclosed here rather than glossed over.
 
 ## Identity and the local credential store
 

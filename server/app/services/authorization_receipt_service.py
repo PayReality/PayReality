@@ -133,6 +133,10 @@ def get_authorization_receipt(
             action=intent.action,
             expires_at=capability_row.expires_at,
             consumed_at=capability_row.consumed_at,
+            environment=capability_row.environment,
+            enforcement_binding_id=(
+                str(capability_row.enforcement_binding_id) if capability_row.enforcement_binding_id else None
+            ),
         )
 
     # Trusted Integration Architecture, Phase 2: only present when the

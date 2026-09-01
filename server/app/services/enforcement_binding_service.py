@@ -149,6 +149,39 @@ def edit_draft_binding(
     return binding
 
 
+_VALID_ENFORCEMENT_ASSURANCE_LEVELS = ("ADVISORY", "CAPABILITY_REQUIRED")
+
+
+class InvalidEnforcementAssuranceError(Exception):
+    pass
+
+
+def set_enforcement_assurance(
+    db: Session, binding_id: uuid.UUID, organization_id: uuid.UUID, enforcement_assurance: str,
+) -> EnforcementBinding:
+    """Trusted Integration Architecture, Phase 5 (sections 30/31): a
+    customer-declared, never independently verified, label of what this
+    Binding's own downstream checkpoint claims to require. Deliberately
+    NOT restricted to `draft` status like edit_draft_binding's own
+    authority-relevant fields above -- this label carries no authority
+    meaning at all (Runtime Authority's own evaluation never reads it),
+    so changing it on an already-ACTIVE binding changes nothing about
+    what that binding actually does, only what it declares about its
+    own downstream checkpoint. Only ADVISORY and CAPABILITY_REQUIRED are
+    accepted: DECLARED_DECISION_CHECK, VERIFIED, and
+    REGISTERED_EXTERNAL_PEP have no real implementation behind them in
+    this phase and must never be settable (section 32)."""
+    if enforcement_assurance not in _VALID_ENFORCEMENT_ASSURANCE_LEVELS:
+        raise InvalidEnforcementAssuranceError(
+            f"enforcement_assurance must be one of {_VALID_ENFORCEMENT_ASSURANCE_LEVELS}, got {enforcement_assurance!r}"
+        )
+    binding = get_binding(db, binding_id, organization_id)
+    binding.enforcement_assurance = enforcement_assurance
+    db.commit()
+    db.refresh(binding)
+    return binding
+
+
 def _add_allowed_agent_row(db: Session, binding: EnforcementBinding, agent_id: uuid.UUID, organization_id: uuid.UUID) -> None:
     from app.db.models import Principal  # local import: avoids a module-level cycle with agent-facing services
 

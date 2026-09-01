@@ -65,6 +65,30 @@ Thin wrapper over `GET /version`. Returns the raw response body (`{"version": ..
 
 `True` once this `Agent` has a server-recognized identity, from a `register()` call this session or loaded from a previously-registered private key.
 
+### `agent.request_capability(decision_id, audience, ttl_seconds=None) -> payreality.models.Capability`
+
+Requests a Capability Authorization for a Decision whose `outcome` is `ALLOW` (`POST /v1/decisions/{id}/capability-token`). An administrative call, authenticated the same way as `register()`/`rotate_keys()`/`retire()`/`get_decision()` (`api_key` + `organization_id`, or `bearer_token`), not the Agent's own signing key.
+
+Works identically whether `decision_id` names an Agent-direct decision (from `authorize()`) or a Trusted Adapter-mediated one (from `payreality.integration.Adapter.attest()`); call it from your own orchestration code once you already have a `Decision`, never from inside an `Adapter` itself, which authenticates with a different credential this endpoint does not accept.
+
+| Parameter | Type | Required | Notes |
+|---|---|---|---|
+| `decision_id` | `str` | Yes | Must resolve to a Decision whose `outcome` is `ALLOW`. |
+| `audience` | `str` | Yes | Names the enforcement checkpoint (PEP) this Capability is for. Only a `verify_capability()` call presenting this exact audience can consume it. |
+| `ttl_seconds` | `int` | No | Overrides the server's default expiry window. |
+
+Raises `ApiError` (HTTP 409) if the decision is not `ALLOW`, or, for an Adapter-mediated decision, if the underlying `IntegrationIdentity` (Trusted Connection) or `EnforcementBinding` (Runtime Connection) is no longer active, the server's live re-check at issuance time, not merely a check of the decision's historical provenance. Requesting and later consuming a Capability is not proof the downstream enterprise action executed; see `payreality.models.Capability`/`ConsumedCapability` below.
+
+### `agent.verify_capability(token, audience, action, resource, constraints, environment=None, enforcement_binding_id=None, principal=None) -> payreality.models.ConsumedCapability`
+
+The customer-controlled enforcement checkpoint's own call: online verify-and-consume, atomic, single-use (`POST /v1/capability-tokens/verify`). Every argument after `token` must match exactly what the Capability was issued for, or this raises `ApiError` with a specific status: `401` expired or invalid signature, `403` wrong audience, `409` constraint/binding mismatch or already consumed, `404` unknown token.
+
+`environment`/`enforcement_binding_id`/`principal` are all optional: pass any of them if your own checkpoint knows which Runtime Connection, environment, or Agent it expects, to additionally pin that expectation against the Capability's own signed claim. Omit all three to skip those specific checks, the same behavior this method already had for an Agent-direct Capability before this addition.
+
+**Authentication is different from every other administrative call in this class**: `verify_capability()` accepts only the platform Operator Key (`api_key`), never `bearer_token`, because a reference enforcement checkpoint is a trusted internal/platform-level caller with no human RBAC session of its own. Raises `ConfigurationError` if `api_key` was never configured on this `Agent`, even if `bearer_token` was.
+
+A successful return proves a valid Capability was presented and consumed exactly once, at this moment. It does not prove the downstream enterprise action that follows actually executed.
+
 ## `payreality.integration.Adapter`
 
 The Trusted Adapter runtime path (0.5.0+) — a separate identity type from `Agent`. See [SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md](SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md) for the mechanism this wraps, and [SDK_ARCHITECTURE.md](SDK_ARCHITECTURE.md) for how it fits alongside `Agent`.
@@ -108,6 +132,16 @@ Optional, purely local declaration of which fields this Adapter's pinned Action 
 Properties: `.allowed`, `.denied`, `.requires_human_review` (all `bool`), `.pending` (`bool`, `status == "PENDING"`).
 
 Method: `.raise_for_outcome()`: raises `AuthorizationDenied` on `DENY`, `HumanReviewRequired` on `HUMAN_REVIEW`, does nothing on `ALLOW`.
+
+## `payreality.models.Capability` and `payreality.models.ConsumedCapability`
+
+What `agent.request_capability()` and `agent.verify_capability()` return, respectively. **Neither is exported from the top-level `payreality` package** (`payreality/__init__.py`'s own `__all__` does not list them, unlike `Decision`/`RegisteredAgent`/`Resolution`): import them as `from payreality.models import Capability, ConsumedCapability`, not `from payreality import Capability`. This is a real, disclosed gap in this SDK's current surface, not a design choice being defended.
+
+**`Capability`**: `token` (`str`, the full, opaque, signed artifact to hand to whatever enforcement checkpoint enforces `audience`; this SDK never inspects or decodes it), `capability_id` (`str`), `expires_at` (`str`, ISO-8601).
+
+**`ConsumedCapability`**: `capability_id` (`str`), `decision_id` (`str`), `resource` (`str`), `constraints` (`dict`), the exact values the Capability was bound to, for the caller's own record.
+
+Neither model carries a field claiming the downstream enterprise action executed. Issuing a `Capability`, and a checkpoint later consuming it into a `ConsumedCapability`, are both proof that an authorization step happened, never proof of what happened afterward.
 
 ## `payreality.RegisteredAgent`
 
@@ -162,4 +196,4 @@ Specifically, it is **not**: an authority signal (it never influences whether a 
 
 ## Testing note
 
-The SDK's own test suite (`sdk-python/tests/`, 80 tests) mocks every HTTP call; none of it makes a real network request. "100% passing" describes every test in that suite passing, not 100% line coverage of the package, a distinction worth being precise about rather than implying a stronger guarantee than what was actually measured.
+The SDK's own test suite (`sdk-python/tests/`, 97 tests, including `test_agent_capability.py` added alongside `request_capability()`/`verify_capability()`) mocks every HTTP call; none of it makes a real network request. "100% passing" describes every test in that suite passing, not 100% line coverage of the package, a distinction worth being precise about rather than implying a stronger guarantee than what was actually measured.

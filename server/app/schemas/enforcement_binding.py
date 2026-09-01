@@ -21,6 +21,15 @@ class AddAllowedAgentRequest(BaseModel):
     agent_id: uuid.UUID
 
 
+class SetEnforcementAssuranceRequest(BaseModel):
+    # Trusted Integration Architecture, Phase 5: only these two values
+    # have any real implementation behind them -- see
+    # enforcement_binding_service.set_enforcement_assurance's own
+    # docstring for why DECLARED_DECISION_CHECK/VERIFIED/
+    # REGISTERED_EXTERNAL_PEP are deliberately not accepted here.
+    enforcement_assurance: str
+
+
 class BindingResponse(BaseModel):
     id: str
     organization_id: str
@@ -34,6 +43,11 @@ class BindingResponse(BaseModel):
     created_at: datetime
     activated_at: datetime | None
     retired_at: datetime | None
+    # Trusted Integration Architecture, Phase 5: additive, customer-
+    # declared, never independently verified -- see
+    # enforcement_binding_service.set_enforcement_assurance's own
+    # docstring.
+    enforcement_assurance: str = "ADVISORY"
     # Trusted Integration Architecture, Phase 4: additive -- the allow-
     # list's own ids, inline on the Binding itself. Avoids an N+1 fan-out
     # (one GET .../allowed-agents per Binding) for every screen that

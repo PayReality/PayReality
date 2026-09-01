@@ -20,6 +20,7 @@ from app.schemas.enforcement_binding import (
     BindingResponse,
     CreateBindingRequest,
     EditBindingRequest,
+    SetEnforcementAssuranceRequest,
 )
 from app.services import enforcement_binding_service as svc
 from app.services.enforcement_binding_service import (
@@ -27,6 +28,7 @@ from app.services.enforcement_binding_service import (
     BindingValidationError,
     ConcurrentActivationConflictError,
     EnforcementBindingNotFoundError,
+    InvalidEnforcementAssuranceError,
 )
 from app.services.integration_contract_service import ContractVersionNotFoundError
 from app.services.integration_identity_service import IntegrationIdentityNotFoundError
@@ -43,6 +45,7 @@ def _binding_to_response(db: Session, row) -> BindingResponse:
         integration_id=str(row.integration_id), source_operation=row.source_operation,
         environment=row.environment, status=row.status, created_by=row.created_by,
         created_at=row.created_at, activated_at=row.activated_at, retired_at=row.retired_at,
+        enforcement_assurance=row.enforcement_assurance,
         allowed_agent_ids=[str(a.id) for a in allowed_agents],
     )
 
@@ -110,6 +113,23 @@ def edit_draft_binding(
     except BindingInvalidTransitionError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except BindingValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return _binding_to_response(db, binding)
+
+
+@router.post(
+    "/{binding_id}/enforcement-assurance", response_model=BindingResponse,
+    dependencies=[Depends(require_permission(Permission.INTEGRATION_CONTRACT_MANAGE))],
+)
+def set_enforcement_assurance(
+    binding_id: uuid.UUID, body: SetEnforcementAssuranceRequest, db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+):
+    try:
+        binding = svc.set_enforcement_assurance(db, binding_id, organization.id, body.enforcement_assurance)
+    except EnforcementBindingNotFoundError:
+        raise HTTPException(status_code=404, detail="enforcement_binding_not_found")
+    except InvalidEnforcementAssuranceError as e:
         raise HTTPException(status_code=422, detail=str(e))
     return _binding_to_response(db, binding)
 

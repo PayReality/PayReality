@@ -762,10 +762,31 @@ class CapabilityToken(Base):
     consumed_at: Mapped[datetime | None]
     issued_by: Mapped[str | None] = mapped_column(Text)
 
+    # Trusted Integration Architecture, Phase 5: nullable, additive
+    # provenance for the trusted-Adapter capability path only -- every
+    # Agent-direct capability, and every capability issued before this
+    # migration, leaves all five NULL. Mirrors Intent's own Phase 2/3
+    # additive-provenance columns exactly, so a verifier (or a human
+    # reading the Receipt) can see which Runtime Connection, Action
+    # Mapping version, and business operation a capability was actually
+    # bound to, not just which Decision.
+    integration_identity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_identities.id")
+    )
+    enforcement_binding_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("enforcement_bindings.id")
+    )
+    integration_contract_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_contract_versions.id")
+    )
+    environment: Mapped[str | None] = mapped_column(Text)
+    external_operation_id: Mapped[str | None] = mapped_column(Text)
+
     __table_args__ = (
         UniqueConstraint("nonce", name="uq_capability_tokens_nonce"),
         Index("idx_capability_tokens_decision", "decision_id"),
         Index("idx_capability_tokens_organization", "organization_id"),
+        Index("idx_capability_tokens_enforcement_binding", "enforcement_binding_id"),
     )
 
 
@@ -2039,9 +2060,27 @@ class EnforcementBinding(Base):
     activated_at: Mapped[datetime | None]
     retired_at: Mapped[datetime | None]
 
+    # Trusted Integration Architecture, Phase 5: a customer-declared,
+    # never independently verified, label of what this Binding's own
+    # downstream checkpoint claims to require. Only two real values --
+    # ADVISORY (default: no declared requirement) and CAPABILITY_REQUIRED
+    # (the customer declares their checkpoint requires a valid, consumed
+    # Capability before it lets an action proceed). DECLARED_DECISION_CHECK,
+    # VERIFIED, and REGISTERED_EXTERNAL_PEP are deliberately absent from
+    # the CHECK constraint below: this phase never registers or
+    # authenticates a distinct external PEP workload, so no code path may
+    # claim any of those three levels (section 30/32's own instruction:
+    # do not fake completeness to fill an enum). A declaration here is
+    # never proof the checkpoint is non-bypassable.
+    enforcement_assurance: Mapped[str] = mapped_column(Text, nullable=False, server_default="ADVISORY")
+
     __table_args__ = (
         CheckConstraint(
             "status IN ('draft','active','retired')", name="ck_enforcement_bindings_status",
+        ),
+        CheckConstraint(
+            "enforcement_assurance IN ('ADVISORY','CAPABILITY_REQUIRED')",
+            name="ck_enforcement_bindings_enforcement_assurance",
         ),
         Index("idx_enforcement_bindings_organization", "organization_id"),
         Index(

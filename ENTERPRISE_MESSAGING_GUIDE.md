@@ -2,7 +2,7 @@
 
 **Purpose**: the single source of truth for how PayReality should be described, everywhere. Every other deliverable (website copy, sales material, pilot documentation) should trace back to the definitions in this document, not restate them independently.
 
-**Status: rewritten as of Milestone 17.1 (POC Readiness Remediation), 2026-08-25; extended 2026-08-31 (Product & Trust Documentation Baseline) to cover Trusted Integration Architecture Phases 1–4**, superseding the prior version of this guide, which was written around a narrower "policy decision point sitting after identity, before execution" framing. That framing was accurate as far as it went but predates several real, shipped capabilities (Trusted Enterprise Facts, Authority Freshness, Capability Authorization, and now Trusted Integration) and undersold the platform's real architecture. This version is checked directly against the current codebase, `POC_READINESS_REPORT.md`, and [SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md](SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md), not against the aspiration in any planning document.
+**Status: rewritten as of Milestone 17.1 (POC Readiness Remediation), 2026-08-25; extended 2026-08-31 (Product & Trust Documentation Baseline) to cover Trusted Integration Architecture Phases 1–4; extended again 2026-09-01 to cover Trusted Integration Architecture Phase 5 (Adapter-Backed Capability Authorization)**, superseding the prior version of this guide, which was written around a narrower "policy decision point sitting after identity, before execution" framing. That framing was accurate as far as it went but predates several real, shipped capabilities (Trusted Enterprise Facts, Authority Freshness, Capability Authorization, and now Trusted Integration) and undersold the platform's real architecture. This version is checked directly against the current codebase, `POC_READINESS_REPORT.md`, and [SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md](SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md), not against the aspiration in any planning document.
 
 **One correction to this guide's own prior instruction**: §16 below previously listed "Authorization Receipt" as a prohibited artifact name, on the basis that it wasn't a real shipped thing distinct from Evidence. That was accurate on 2026-08-25 and is **no longer accurate** — `GET /v1/decisions/{id}/receipt` is a real, shipped, named endpoint (Issue #4), with a dedicated frontend page and its own permission gate. §16 and §18 below have been corrected. It remains true, and more important than ever to keep saying, that the Receipt is a *packaging* of Evidence, never a stronger or separate proof.
 
@@ -97,7 +97,9 @@ Runtime Policy records carry attestation fields: `last_attested_at`, `next_revie
 
 For an ALLOW decision, PayReality can issue a signed, short lived, single use authorization capability token, reusing the same Ed25519 signing key registry already used for Evidence. The token binds, under signature, the decision id, organization, principal, action, resource, the exact constraints evaluated (for example the specific amount and currency, not a category or a range), the policy version, the fact hashes relied upon, an audience naming the specific enforcement adapter it is valid for, an expiry, and a nonce. It can be verified and consumed exactly once, atomically, by an enforcement adapter, through an online verify and consume call; offline signature verification is a distinct, unbuilt architecture.
 
-**The boundary that must never be dropped, in bold in every document that mentions this capability**: **Capability Authorization is not itself enforcement.** It is a cryptographically tight, single resource, single amount, single expiry, single use binding between a decision and a proposed execution, for whatever real enforcement point chooses to check it. Something downstream must actually require the capability before acting, and nothing does in production today. The only enforcement adapter that exists in this codebase is the reference adapter described in Section 6, which is explicitly proof of mechanism, not a production integration.
+As of Trusted Integration Phase 5, this is true for a decision made through either runtime path, not only the agent-direct one. For a decision produced by a Trusted Adapter, issuance additionally re-checks, live, at the moment of issuance, that the underlying Trusted Connection and Runtime Connection are still active, not merely that they were active when the original Intent was accepted, and fails closed if either has since been suspended, revoked, or retired. When issued for that path, the token also carries the exact Runtime Connection, Action Mapping version, and environment under signature, and a verifier that knows which connection or environment it enforces can optionally pin that expectation against the token's own signed claim. A verifier that supplies neither is unaffected, exactly as before Phase 5.
+
+**The boundary that must never be dropped, in bold in every document that mentions this capability**: **Capability Authorization is not itself enforcement.** It is a cryptographically tight, single resource, single amount, single expiry, single use binding between a decision and a proposed execution, for whatever real enforcement point chooses to check it. Something downstream must actually require the capability before acting, and nothing does in production today. The only enforcement adapter that exists in this codebase is the reference adapter described in Section 6, which is explicitly proof of mechanism, not a production integration. This applies identically, without exception, to a Capability issued for a Trusted-Adapter-mediated decision.
 
 ### 8.4 Trusted Integration
 
@@ -111,9 +113,15 @@ Runtime Authority has two ways to learn what an AI agent is attempting. The orig
 - Only context explicitly bound by an approved mapping may influence a decision — never arbitrary caller-supplied metadata.
 - A pre-evaluation trust failure on this path (an inactive connection, an agent not on the explicit allow-list, a mapping mismatch) is an **integration rejection**, never a `DENY` — no Decision, no Evidence, is produced for it. Keep this distinction as sharp as the ALLOW/DENY/HUMAN_REVIEW distinction itself.
 - One real business operation produces one authority decision: a network retry of the same operation returns the existing Decision, never a new one; the same operation ID with different authority-relevant meaning is a conflict, never silently evaluated.
-- **Capability Authorization is currently, deliberately not issued for any Adapter-mediated decision** — see §8.3's own boundary, doubly true here. This is a named scope boundary, not an oversight; describing when and how it will be safe to extend is future work, not a current capability.
+- **Capability Authorization can now be issued for an Adapter-mediated ALLOW decision** (Trusted Integration Phase 5). See §8.3's own account, including the live re-check at issuance and the still-unconditional "not itself enforcement" boundary, which applies to this path exactly as it does to the agent-direct one.
 
 Full technical account: [SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md](SPECIFICATION/50_TRUSTED_INTEGRATION_ARCHITECTURE.md). Plain-language explainer for customer-facing material: [TRUSTED_ADAPTER_GUIDE.md](TRUSTED_ADAPTER_GUIDE.md).
+
+### 8.5 Enforcement assurance (Trusted Integration Phase 5)
+
+A Runtime Connection can carry a customer-declared `enforcement_assurance` label describing what the customer's own downstream checkpoint claims to require. Only two values exist and have any real implementation behind them: **ADVISORY** (the default, no declared requirement) and **CAPABILITY_REQUIRED** (the customer declares that their own checkpoint requires a valid Capability before it acts).
+
+**The boundary that must never be dropped**: setting `CAPABILITY_REQUIRED` is the customer's own claim about their infrastructure. PayReality never independently verifies, tests, or observes that any downstream checkpoint actually enforces it, and the label carries no authority meaning of its own; Runtime Authority's own evaluation never reads it. Three further levels named in this platform's longer-term vision, **DECLARED_DECISION_CHECK**, **VERIFIED**, and **REGISTERED_EXTERNAL_PEP**, are not implemented: no code path can set them, and none should ever be described as available. This phase never registers or authenticates a distinct external enforcement workload as its own trusted identity, which is what any of those three levels would require.
 
 ## 9. Runtime Policies and OPA (VERIFIED)
 
@@ -153,6 +161,8 @@ Production runs on Azure Container Apps, Azure Database for PostgreSQL Flexible 
 - Production runs on Azure with Managed Identity throughout and a live custom domain with a real certificate.
 - A customer-controlled Trusted Adapter can report a real enterprise operation to Runtime Authority through a deterministic, human-approved Action Mapping, with an explicit Agent allow-list and a genuine, DB-enforced idempotency guarantee against retries.
 - PayReality's Authorization Receipt packages one decision's Evidence, authority, and (where applicable) trusted-integration provenance into one shareable, human-readable view — it is Evidence, presented, never a second or stronger proof.
+- Capability Authorization can be issued for an ALLOW decision made through either runtime path, agent-direct or Trusted-Adapter-mediated; for the Adapter-mediated path, issuance re-checks that the underlying Trusted Connection and Runtime Connection are still active at that exact moment, not only at Intent submission. It remains not itself enforcement on either path.
+- A Runtime Connection can carry a customer-declared `enforcement_assurance` label (`ADVISORY` or `CAPABILITY_REQUIRED`) describing what the customer's own downstream checkpoint claims to require; this is the customer's own unverified claim, never something PayReality tests or observes.
 
 ## 15. Future or conditional claims (state the condition every time)
 
@@ -162,9 +172,10 @@ Production runs on Azure Container Apps, Azure Database for PostgreSQL Flexible 
 - "PayReality supports on premises deployment" is not true today; the platform is a multi tenant, Azure hosted service.
 - "PayReality supports multi step or sequential approval chains" is not true today; only flat, single stage policies exist.
 - Any claim of a named customer, pilot, or reference deployment should be added here only once one genuinely, verifiably exists; see Section 17.
-- "Capability Authorization for a trusted-Adapter-reported action" is not true today, unqualified; Capability Authorization is currently issued only for agent-direct decisions, by explicit, deliberate design.
 - "PayReality has vendor connectors for [named enterprise system]" is not true today; every Trusted Adapter is customer-built against a documented request shape, and no vendor-specific (SAP, Workday, or similar) connector ships with the platform.
 - "PayReality automatically discovers what an enterprise system's operations mean" is not true today; every Action Mapping is hand-authored and requires explicit human approval.
+- "PayReality verifies that a downstream checkpoint actually requires or enforces a Capability" is not true today; a Runtime Connection's `CAPABILITY_REQUIRED` enforcement-assurance label is the customer's own declared claim about their infrastructure, never independently checked.
+- "PayReality supports VERIFIED or REGISTERED_EXTERNAL_PEP enforcement assurance" is not true today, at all; only `ADVISORY` and `CAPABILITY_REQUIRED` have any implementation, and no code path can set the other three named levels.
 
 ## 16. Prohibited current state claims
 
@@ -176,7 +187,9 @@ Do not make any of the following as an unqualified, present tense platform claim
 - "Non bypassable."
 - "Authorization Receipt" described as a **second, independent, or stronger** proof than Evidence, or as proof that a downstream external action executed. (Corrected 2026-08-31: the term itself is now a real, shipped, named artifact — `GET /v1/decisions/{id}/receipt` — and is safe to use; what remains prohibited is overstating what it proves beyond the same Evidence it packages.)
 - "The Trusted Adapter proves the external operation occurred," "the Adapter gives the Agent authority," or "PayReality trusts the Agent because an Adapter exists" — none of the three are true; see §8.4.
-- Any claim that Capability Authorization is available, issued, or usable for a trusted-Adapter-reported decision, unqualified.
+- Any claim that a Trusted-Adapter-mediated Capability, once issued or consumed, is itself enforcement, or proves anything about a downstream action beyond what the underlying Decision already established.
+- Any claim that a Runtime Connection's `CAPABILITY_REQUIRED` enforcement-assurance label is independently verified, tested, or enforced by PayReality. It is the customer's own declared claim about their infrastructure.
+- Any claim that `DECLARED_DECISION_CHECK`, `VERIFIED`, or `REGISTERED_EXTERNAL_PEP` enforcement assurance exists or can be set. None are implemented.
 - "Adapter-mediated enforcement" or similar, implying a real enforcement mechanism exists for the trusted-Adapter path specifically — the same PDP boundary in §6 applies without exception to this path.
 - Any claim that Authority Intelligence eliminates the need for a human reviewer; the opposite is the correct and more defensible claim.
 - Any specific customer, logo, or case study beyond what genuinely exists (see Section 17).
@@ -208,7 +221,9 @@ As of this rewrite, PayReality has no completed enterprise pilot and no referenc
 | Trusted Connection / Runtime Connection | YES | The authenticated identity and its live deployment scope for the Adapter path, respectively. |
 | Authorization Receipt | YES | Real, shipped, named endpoint as of Issue #4. Never describe it as a stronger or second proof beyond the Evidence it packages, and never as proof a downstream action executed. |
 | Runtime Enforcement | NO | As an unqualified PayReality capability, on either runtime path. |
-| Capability Authorization for a trusted-Adapter decision | NO | Deliberately not issued for this path today; see §8.4. |
+| Capability Authorization for a trusted-Adapter decision | YES | Issued subject to a live re-check of the Trusted Connection/Runtime Connection's active status at issuance time (Trusted Integration Phase 5); not itself enforcement, see §8.3. |
+| Enforcement assurance: ADVISORY / CAPABILITY_REQUIRED | YES | Customer-declared labels on a Runtime Connection; never independently verified by PayReality, see §8.5. |
+| Enforcement assurance: DECLARED_DECISION_CHECK / VERIFIED / REGISTERED_EXTERNAL_PEP | NO | Named in the long-term vision only; no implementation exists, and no code path can set them. |
 | Blocks unauthorized actions | NO | |
 | Cannot execute without PayReality | NO | |
 | Non bypassable | NO | |

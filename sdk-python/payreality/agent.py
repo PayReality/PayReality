@@ -25,7 +25,7 @@ from . import auth, crypto
 from .client import HttpClient
 from .configuration import Configuration, CredentialStore
 from .exceptions import ApiError, ConfigurationError, ResolutionTimeoutError
-from .models import Decision, RegisteredAgent, Resolution
+from .models import Capability, ConsumedCapability, Decision, RegisteredAgent, Resolution
 
 _SDK_VERSION = "0.5.0"  # kept in sync with pyproject.toml / __init__.__version__ by hand;
 # not imported from there to avoid a circular import at package init time.
@@ -429,6 +429,104 @@ class Agent:
             resolution=resolution,
             correlation_id=response.get("correlation_id"),
             created_at=response.get("created_at"),
+        )
+
+    def request_capability(
+        self, decision_id: str, audience: str, ttl_seconds: int | None = None,
+    ) -> Capability:
+        """Trusted Integration Architecture, Phase 5: requests a
+        Capability Authorization for an ALLOW decision, an
+        administrative operation using the same credential every other
+        call in this class already requires (`admin_auth=True`), not
+        the Agent's own signing key. This works identically whether
+        `decision_id` names an Agent-direct decision or a Trusted
+        Adapter-mediated one; call it from your own orchestration code
+        once you have a Decision back from either `authorize()` or
+        `payreality.integration.Adapter.attest()`, never from inside the
+        Adapter itself, which authenticates with a different credential
+        that this endpoint does not accept.
+
+        `audience` names the customer-controlled enforcement checkpoint
+        (PEP) this Capability is for; only that checkpoint's own
+        `verify_capability()` call, presenting the exact same audience,
+        can ever consume it. Raises `ApiError` (HTTP 409) if the
+        decision is not ALLOW, or (for an Adapter-mediated decision) if
+        the IntegrationIdentity or Runtime Connection it was evaluated
+        under is no longer active.
+
+        Issuing this, and later consuming it, is not proof the
+        downstream enterprise action executed. See this SDK's own
+        `Capability`/`ConsumedCapability` docstrings."""
+        body: dict[str, Any] = {"audience": audience}
+        if ttl_seconds is not None:
+            body["ttl_seconds"] = ttl_seconds
+        response = self._client.request(
+            "POST", f"/v1/decisions/{decision_id}/capability-token", json=body, admin_auth=True,
+        )
+        return Capability(
+            token=response["token"], capability_id=response["capability_id"], expires_at=response["expires_at"],
+        )
+
+    def verify_capability(
+        self,
+        token: str,
+        audience: str,
+        action: str,
+        resource: str,
+        constraints: dict[str, Any],
+        environment: str | None = None,
+        enforcement_binding_id: str | None = None,
+        principal: str | None = None,
+    ) -> ConsumedCapability:
+        """The customer-controlled enforcement checkpoint's own call:
+        online verify-and-consume, atomic, single-use. Every argument
+        after `token` must match exactly what the Capability was issued
+        for, or this raises `ApiError` with a specific status/detail
+        (401 expired/invalid signature, 403 wrong audience, 409
+        constraint/binding mismatch or already consumed, 404 unknown).
+
+        `environment`/`enforcement_binding_id`/`principal` (Trusted
+        Integration Architecture, Phase 5) are all optional: pass any if
+        your own checkpoint knows which Runtime Connection, environment,
+        or Agent it expects, to additionally pin that expectation
+        against the Capability's own signed claim. Omit all three to
+        skip those specific checks, exactly as this method already
+        worked for an Agent-direct Capability before this phase.
+
+        Unlike every other administrative call in this class, this
+        endpoint accepts only the platform Operator Key (`api_key`), not
+        a `bearer_token` -- it is a trusted internal/platform-level
+        caller check (a reference enforcement checkpoint has no human
+        RBAC session of its own), not `admin_auth`'s usual bearer-token-
+        preferred logic. Raises `ConfigurationError` if `api_key` was
+        never configured on this `Agent`.
+
+        A successful return proves a valid Capability was presented and
+        consumed exactly once, at this moment. It does not prove the
+        downstream enterprise action that follows actually executed."""
+        if not self._config.api_key:
+            raise ConfigurationError(
+                "verify_capability requires api_key (the Operator Key) -- unlike other administrative "
+                "calls in this class, this endpoint does not accept a bearer_token. "
+                "Pass Agent(api_key=...)."
+            )
+        body: dict[str, Any] = {
+            "token": token, "audience": audience, "action": action, "resource": resource,
+            "constraints": constraints,
+        }
+        if environment is not None:
+            body["environment"] = environment
+        if enforcement_binding_id is not None:
+            body["enforcement_binding_id"] = enforcement_binding_id
+        if principal is not None:
+            body["principal"] = principal
+        response = self._client.request(
+            "POST", "/v1/capability-tokens/verify", json=body,
+            headers={"X-PayReality-Operator-Key": self._config.api_key},
+        )
+        return ConsumedCapability(
+            capability_id=response["capability_id"], decision_id=response["decision_id"],
+            resource=response["resource"], constraints=response["constraints"],
         )
 
     def wait_for_resolution(

@@ -376,17 +376,22 @@ def test_adapter_nonce_does_not_collide_with_an_unrelated_agent_direct_nonce(db,
     assert decision.outcome == "ALLOW"
 
 
-# --- Capability suppression and Authorization Receipt provenance ----------
+# --- Capability issuance (Phase 5) and Authorization Receipt provenance ---
 
 
-def test_capability_issuance_is_suppressed_for_adapter_mediated_allow_decision(db, opa_url):
+def test_capability_issuance_now_succeeds_for_adapter_mediated_allow_decision(db, opa_url):
+    """Trusted Integration Architecture, Phase 5: the Phase-2 blanket
+    suppression is lifted. Full binding coverage (identity/binding
+    inactive at issuance time, cross-connection verification, etc.) lives
+    in test_adapter_capability_authorization.py; this is the smoke test
+    confirming the suppression itself is gone."""
     org = _org(db)
-    identity, _cv, binding, agent = _setup(db, org.id, context_bindings={})
+    identity, contract_version, binding, agent = _setup(db, org.id, context_bindings={})
     _deploy_policy(db, org.id, opa_url)
     _intent, decision, _evidence = _attest(db, identity, binding, agent)
 
-    with pytest.raises(capability_service.CapabilityNotAvailableForIntegrationIntentError):
-        capability_service.issue_capability_for_decision(db, org.id, decision.id, audience="reference-adapter")
+    issued = capability_service.issue_capability_for_decision(db, org.id, decision.id, audience="reference-adapter")
+    assert issued.token
 
 
 def test_authorization_receipt_carries_integration_provenance_only_for_adapter_mediated_decisions(db, opa_url):

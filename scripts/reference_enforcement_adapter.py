@@ -22,6 +22,15 @@ the signature itself, against a locally cached public key, with its
 own distributed replay-defense strategy) is a distinct architecture
 this script deliberately does not attempt.
 
+Trusted Integration Architecture, Phase 5: this same script now also
+verifies a Capability issued for a Trusted-Adapter-mediated decision,
+unchanged, since verification only ever depends on the token itself,
+never on which runtime path issued it. The optional --environment/
+--enforcement-binding-id flags let a checkpoint that knows which
+Runtime Connection it enforces pin that expectation too; omit both to
+verify without that additional binding check, the same as before this
+phase.
+
 Usage:
     PAYREALITY_API_URL=http://localhost:8000 \
     PAYREALITY_OPERATOR_KEY=<the ADMIN_API_KEY configured on the backend> \
@@ -29,7 +38,8 @@ Usage:
         --audience sap-reference-adapter \
         --token <capability token from POST /v1/decisions/{id}/capability-token> \
         --resource invoice-123 \
-        --amount 48000 --currency USD
+        --amount 48000 --currency USD \
+        --environment production
 """
 
 import argparse
@@ -66,17 +76,33 @@ def _post(path: str, body: dict) -> tuple[int, dict]:
         return e.code, json.loads(e.read())
 
 
-def attempt_execution(token: str, audience: str, action: str, resource: str, amount: str, currency: str) -> bool:
+def attempt_execution(
+    token: str, audience: str, action: str, resource: str, amount: str, currency: str,
+    environment: str | None = None, enforcement_binding_id: str | None = None,
+) -> bool:
     """Refuses execution unless verify-and-consume succeeds. Every
     rejection reason below (missing/invalid/expired/consumed token,
-    audience/action/resource/amount mismatch) is a real, distinct HTTP
-    status the backend returns -- this function never guesses at why a
-    rejection happened, it reports exactly what the backend said."""
-    status, body = _post(
-        "/v1/capability-tokens/verify",
-        {"token": token, "audience": audience, "action": action, "resource": resource,
-         "constraints": {"amount": amount, "currency": currency}},
-    )
+    audience/action/resource/amount mismatch, and now, Trusted
+    Integration Architecture Phase 5, environment/Runtime Connection
+    mismatch) is a real, distinct HTTP status the backend returns --
+    this function never guesses at why a rejection happened, it reports
+    exactly what the backend said.
+
+    `environment`/`enforcement_binding_id` are optional (Phase 5,
+    section 9): a real checkpoint that knows which Runtime Connection or
+    environment it enforces should pass whichever it knows, so a
+    Capability issued under a different one is rejected here rather than
+    silently accepted. Omit both to verify without that additional
+    binding check, the same as before this phase."""
+    request_body = {
+        "token": token, "audience": audience, "action": action, "resource": resource,
+        "constraints": {"amount": amount, "currency": currency},
+    }
+    if environment is not None:
+        request_body["environment"] = environment
+    if enforcement_binding_id is not None:
+        request_body["enforcement_binding_id"] = enforcement_binding_id
+    status, body = _post("/v1/capability-tokens/verify", request_body)
     if status == 200:
         print(f"EXECUTION ACCEPTED: capability {body['capability_id']} consumed for decision {body['decision_id']}")
         print(f"  (mock action) would now execute: resource={resource} amount={amount} {currency}")
@@ -95,9 +121,21 @@ def main() -> None:
     parser.add_argument("--resource", required=True)
     parser.add_argument("--amount", required=True)
     parser.add_argument("--currency", default="USD")
+    parser.add_argument(
+        "--environment", default=None,
+        help="Optional (Trusted Integration Architecture Phase 5): pin the expected Runtime Connection "
+             "environment (e.g. production, staging) against the capability's own signed claim.",
+    )
+    parser.add_argument(
+        "--enforcement-binding-id", default=None,
+        help="Optional (Phase 5): pin the expected Runtime Connection id against the capability's own signed claim.",
+    )
     args = parser.parse_args()
 
-    ok = attempt_execution(args.token, args.audience, args.action, args.resource, args.amount, args.currency)
+    ok = attempt_execution(
+        args.token, args.audience, args.action, args.resource, args.amount, args.currency,
+        environment=args.environment, enforcement_binding_id=args.enforcement_binding_id,
+    )
     sys.exit(0 if ok else 1)
 
 

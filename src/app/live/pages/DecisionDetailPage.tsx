@@ -506,6 +506,9 @@ export function DecisionDetailPage() {
           {decision.capability?.issued ? (
             <>
               <ContextRow label="Audience" value={decision.capability.audience ?? "Not set"} muted={!decision.capability.audience} />
+              {decision.capability.environment && (
+                <ContextRow label="Environment" value={decision.capability.environment} />
+              )}
               <ContextRow label="Expires" value={decision.capability.expires_at ? new Date(decision.capability.expires_at).toLocaleString() : "Not set"} />
               <ContextRow
                 label="Consumed"

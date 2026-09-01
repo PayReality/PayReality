@@ -58,7 +58,13 @@ No. Nothing in this architecture reaches out to, blocks, or enforces anything ag
 
 ## Does the Adapter guarantee downstream enforcement?
 
-No. Nothing in the current architecture does, on either the agent-direct or the Adapter-mediated path. This is a real, named, honestly-disclosed boundary — not a hidden gap. A future phase of work may extend Capability Authorization to cover this path; it does not exist today, and no documentation, UI copy, or sales material should imply otherwise.
+No. Nothing in the current architecture does, on either the agent-direct or the Adapter-mediated path. This is a real, named, honestly-disclosed boundary — not a hidden gap.
+
+For an ALLOW decision on either path, PayReality can issue a short-lived, single-use Capability Authorization token, and a customer can even declare, on a given Runtime Connection, that their own downstream checkpoint requires one (see the next question). But a declaration is not a guarantee: PayReality never independently verifies that any checkpoint actually enforces it, and issuing or consuming a Capability is never proof the downstream action executed.
+
+## Can I require a Capability before my checkpoint acts?
+
+You can *declare* that requirement on a Runtime Connection, by setting its `enforcement_assurance` to `CAPABILITY_REQUIRED` (the default is `ADVISORY`, meaning no declared requirement). This is your own claim about your own infrastructure, recorded so it's visible on the Runtime Connection, never something PayReality tests, observes, or enforces on your behalf. Two further labels sometimes discussed in this platform's longer-term plans, a registered external checkpoint and an independently verified one, do not exist today: no code path can set them, because doing so honestly would require PayReality to register and authenticate your checkpoint as its own trusted identity, which this phase does not build.
 
 ## What does the Adapter *not* prove?
 

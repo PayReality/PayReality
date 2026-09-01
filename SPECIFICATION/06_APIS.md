@@ -202,6 +202,7 @@ See [17_LEGACY_COMPONENTS.md](17_LEGACY_COMPONENTS.md) for the full retirement r
 | DELETE | `/{binding_id}/allowed-agents/{agent_id}` (remove) | 🛡️`INTEGRATION_CONTRACT_MANAGE` | Remove an Agent from the allow-list (draft only) |
 | POST | `/{binding_id}/activate` | 🛡️`INTEGRATION_CONTRACT_PUBLISH` | draft → active — the actual deployment moment, deliberately gated by the stronger permission |
 | POST | `/{binding_id}/retire` | 🛡️`INTEGRATION_CONTRACT_PUBLISH` | active → retired |
+| POST | `/{binding_id}/enforcement-assurance` | 🛡️`INTEGRATION_CONTRACT_MANAGE` | Trusted Integration Phase 5: sets the customer-declared `enforcement_assurance` label (`ADVISORY` or `CAPABILITY_REQUIRED` only; any other value, including `VERIFIED`/`REGISTERED_EXTERNAL_PEP`, is rejected with `422 InvalidEnforcementAssuranceError`). Carries no authority meaning; not restricted to `draft` status. |
 
 Note this reuses `INTEGRATION_CONTRACT_MANAGE`/`PUBLISH` rather than defining separate Runtime-Connection-specific permissions — a deliberate choice, not an oversight, since a Runtime Connection is inseparable from the Action Mapping it deploys.
 
@@ -219,5 +220,14 @@ Authenticated the same shape as an Agent's own Intent signature (an Ed25519 sign
 |---|---|---|
 | GET | `/v1/decisions/{decision_id}` | Response gained `integration: DecisionIntegrationSummary \| null` |
 | GET | `/v1/decisions/{decision_id}/receipt` | Response gained `integration: ReceiptIntegrationSummary \| null` |
+
+## 6.19 `capability_tokens.py`, prefix `/v1`, Capability Authorization
+
+Predates Trusted Integration (issued for the agent-direct path from the start); extended by Trusted Integration Phase 5 to also cover the Adapter-mediated path. Not previously documented in this part; added here for completeness alongside the Phase 5 update.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/decisions/{decision_id}/capability-token` | 🛡️`CAPABILITY_ISSUE` (deliberately not `DECISIONS_VIEW`; viewing a decision and minting an executable capability for it are different privileges) | Issues a short-lived, signed, single-use Capability for a Decision whose `outcome` is `ALLOW`. `409 decision_not_allow` otherwise. For an Adapter-mediated Decision, also re-checks live that the Trusted Connection and Runtime Connection are still active: `409 integration_identity_not_active` / `409 enforcement_binding_not_active` if either has since been suspended, revoked, or retired. |
+| POST | `/capability-tokens/verify` | Operator key only (`verify_operator_key` directly, not via `require_permission`; no symbol in §6.1's legend covers this shape. The reference enforcement adapter's own call, a trusted machine caller with no human RBAC session, not a human operator) | Verifies and atomically consumes a Capability. Optional `environment`/`enforcement_binding_id` request fields (Phase 5) pin an expectation against the token's own signed claim if supplied; omitted, they're skipped. `409 capability_binding_mismatch` on a mismatch, alongside the pre-existing `404`/`401`/`403`/`409` outcomes for not-found, expired, audience-mismatch, constraint-mismatch, invalid-signature, and already-consumed. |
 
 Both are additive and `null` for every agent-direct decision — no existing caller's parsing breaks.

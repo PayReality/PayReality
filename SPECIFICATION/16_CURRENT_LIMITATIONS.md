@@ -74,7 +74,7 @@ None of the items above are secretly broken production paths silently failing ri
 
 ## 16.7 Trusted Integration Architecture: current vs. future, named explicitly
 
-Trusted Integration Phases 1–4 (see [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md)) are complete and live. Phase 5 (Capability/enforcement work for the Adapter-mediated path) has **not begun**. This split must never blur into a single "Trusted Integration is done" or "Trusted Integration is future" claim — both are simultaneously true, for different parts of it.
+Trusted Integration Phases 1–5 (see [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md)) are complete and live. Phase 5 (Adapter-Backed Capability Authorization, §50.9) shipped Capability issuance for the Adapter-mediated path plus a customer-declared `enforcement_assurance` label (§50.16). What Phase 5 did **not** build is a distinct, registered, authenticated external PEP identity, and no real Policy Enforcement Point exists for either runtime path; see the NOT YET LIVE table below. This split must never blur into a single "Trusted Integration is done" or "Trusted Integration is future" claim: both remain simultaneously true, for different parts of it.
 
 **LIVE TODAY:**
 
@@ -89,12 +89,14 @@ Trusted Integration Phases 1–4 (see [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](5
 | Decision/Receipt integration provenance | `GetDecisionResponse.integration`, `AuthorizationReceiptResponse.integration`, Agent Detail's Trusted Connections section |
 | Settings → Integrations UI | full guided journey: connect a System, create/validate/approve/retire Action Mappings, register a Trusted Connection, configure/activate/test a Runtime Connection |
 | SDK support for the Adapter path | `payreality.integration.Adapter.attest()` (Python SDK 0.5.0) — real, shipped, but undocumented in `SDK_ARCHITECTURE.md`/`SDK_REFERENCE.md` until this pass |
+| Capability Authorization for Adapter-mediated decisions | Trusted Integration Phase 5: issued for an ALLOW decision on this path, subject to a live re-check that the Trusted Connection and Runtime Connection are still active at issuance time. Not itself enforcement; see [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.9 |
+| Enforcement assurance declaration (`ADVISORY`/`CAPABILITY_REQUIRED`) | Trusted Integration Phase 5: a customer-declared label on a Runtime Connection, never independently verified by PayReality; see §50.16 |
 
 **NOT YET LIVE / FUTURE (named, not implied):**
 
 | Item | Status |
 |---|---|
-| Capability Authorization for Adapter-mediated decisions | Explicitly, deliberately suppressed (`CapabilityNotAvailableForIntegrationIntentError`) — not a gap in disguise, a named boundary. See [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.9 |
+| A registered, authenticated external PEP identity, and the `VERIFIED`/`REGISTERED_EXTERNAL_PEP` enforcement-assurance levels it would require | Not built. No code path can set either level; the database `CHECK` constraint only permits `ADVISORY`/`CAPABILITY_REQUIRED`. See [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.16 |
 | A real Policy Enforcement Point for either runtime path | Does not exist for any customer today — see [ENTERPRISE_MESSAGING_GUIDE.md](../ENTERPRISE_MESSAGING_GUIDE.md) §6 |
 | Vendor-specific Adapter connectors (SAP, Workday, etc.) | None exist; every Adapter is customer-built against the documented request shape |
 | Automatic discovery of external operations/schemas | No discovery mechanism of any kind; every Action Mapping is hand-authored and human-approved |

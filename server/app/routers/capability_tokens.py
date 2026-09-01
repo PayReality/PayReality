@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,6 +19,7 @@ from app.schemas.capability import (
 from app.services import capability_service, intent_service
 
 router = APIRouter(prefix="/v1", tags=["capabilities"])
+logger = logging.getLogger("payreality.capability")
 
 
 @router.post(
@@ -46,8 +48,12 @@ def issue_capability(
         raise HTTPException(status_code=404, detail="decision_not_found")
     except capability_service.DecisionNotAllowError:
         raise HTTPException(status_code=409, detail="decision_not_allow")
-    except capability_service.CapabilityNotAvailableForIntegrationIntentError as e:
-        raise HTTPException(status_code=409, detail=f"capability_not_available_for_integration_intent: {e}")
+    except capability_service.IntegrationIdentityNotActiveError as e:
+        raise HTTPException(status_code=409, detail=f"integration_identity_not_active: {e}")
+    except capability_service.EnforcementBindingNotActiveError as e:
+        raise HTTPException(status_code=409, detail=f"enforcement_binding_not_active: {e}")
+    except capability_service.OriginAgentNotActiveError as e:
+        raise HTTPException(status_code=409, detail=f"origin_agent_not_active: {e}")
     return IssueCapabilityResponse(
         token=issued.token, capability_id=issued.capability_id, expires_at=issued.expires_at
     )
@@ -67,17 +73,27 @@ def verify_capability(body: VerifyCapabilityRequest, db: Session = Depends(get_d
     like an Agent or a FactSource."""
     try:
         consumed = capability_service.verify_and_consume_capability(
-            db, body.token, body.audience, body.action, body.resource, body.constraints
+            db, body.token, body.audience, body.action, body.resource, body.constraints,
+            environment=body.environment, enforcement_binding_id=body.enforcement_binding_id,
+            principal=body.principal,
         )
     except capability_service.CapabilityTokenNotFoundError:
+        logger.warning("capability_verification_result=NOT_FOUND")
         raise HTTPException(status_code=404, detail="capability_token_not_found")
     except capability_token.CapabilityTokenExpiredError:
+        logger.warning("capability_verification_result=EXPIRED")
         raise HTTPException(status_code=401, detail="capability_token_expired")
     except capability_token.CapabilityAudienceMismatchError:
+        logger.warning("capability_verification_result=AUDIENCE_MISMATCH audience=%s", body.audience)
         raise HTTPException(status_code=403, detail="capability_audience_mismatch")
     except capability_token.CapabilityConstraintMismatchError:
+        logger.warning("capability_verification_result=CONSTRAINT_MISMATCH audience=%s", body.audience)
         raise HTTPException(status_code=409, detail="capability_constraint_mismatch")
+    except capability_token.CapabilityBindingMismatchError:
+        logger.warning("capability_verification_result=BINDING_MISMATCH audience=%s", body.audience)
+        raise HTTPException(status_code=409, detail="capability_binding_mismatch")
     except capability_token.InvalidCapabilityTokenError:
+        logger.warning("capability_verification_result=INVALID_SIGNATURE_OR_MALFORMED")
         raise HTTPException(status_code=401, detail="invalid_capability_token")
     except capability_service.CapabilityTokenAlreadyConsumedError:
         raise HTTPException(status_code=409, detail="capability_token_already_consumed")
