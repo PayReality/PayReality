@@ -22,7 +22,9 @@ The compact, ready-to-use extract for the next website milestone. Every claim he
 - "Evaluated before execution" — accurate for PayReality's own step. Never extend this into "and therefore the action cannot proceed without PayReality's approval" — whether a calling system actually waits for and respects the answer is up to that system, not something PayReality itself enforces today.
 - "Fail-closed by design" — any ambiguity, timeout, missing fact, or unrecognized situation resolves to `HUMAN_REVIEW`, never a default `ALLOW`.
 - "An explicit, human-approved allow-list, never 'all agents'" — true of Runtime Connections specifically; there is no "represent all current and future agents" option anywhere in the system.
-- "For an ALLOW decision, PayReality can issue a short-lived, single-use Capability Authorization token", true on either runtime path; never state or imply this is itself enforcement, only that a downstream system could choose to require it.
+- "For an ALLOW decision, or for a HUMAN_REVIEW decision an authorized reviewer has since approved, PayReality can issue a short-lived, single-use Capability Authorization token" (Trusted Integration Phase 5.1), true on either runtime path; never state or imply this is itself enforcement, only that a downstream system could choose to require it.
+- "A reference enforcement point, built and controlled by PayReality, demonstrates the full authority-to-execution loop end to end against real code" (Trusted Integration Phase 6) — a real, tested demonstration, not a customer production deployment; never state or imply a customer's own infrastructure has been proven non-bypassable by it.
+- "Capability verification requires authenticating as a specific organization, and a Capability can only be consumed by the organization it was issued for" (Trusted Integration Phase 6.1) — true today; never expand this into a broader security-marketing claim about the platform being "hardened" or "audited."
 
 ## Safe Evidence claims
 
@@ -36,7 +38,7 @@ Never use any of the following as an unqualified, present-tense platform claim (
 
 - "PayReality blocks all unauthorized AI actions" / "prevents AI from executing" / "cannot execute without PayReality" / "non-bypassable."
 - "The Trusted Adapter gives the Agent authority," "proves the external operation occurred," or "PayReality trusts the Agent because an Adapter exists."
-- Capability Authorization for a Trusted-Adapter-reported decision described as itself enforcement, or as proof of anything beyond what the underlying Decision already established.
+- Capability Authorization for a Trusted-Adapter-reported decision described as itself enforcement, or as proof of anything beyond what the underlying Decision already established. Consuming a Capability is proof an execution *permission* was used once, never proof the downstream business action completed.
 - A customer's own `CAPABILITY_REQUIRED` declaration on a Runtime Connection described as independently verified or enforced by PayReality; it is the customer's own unverified claim about their infrastructure.
 - "PayReality secretly watches enterprise systems" or anything implying PayReality itself has access to a customer's systems — the Adapter is customer-controlled, customer-hosted infrastructure.
 - Vendor-named connectors ("works with SAP," "integrates with Workday") — no vendor-specific connector ships with the platform; every Adapter is customer-built.
@@ -49,10 +51,10 @@ Never use any of the following as an unqualified, present-tense platform claim (
 
 | Live today | Future, state the condition every time |
 |---|---|
-| Agent-direct runtime path | A real downstream enforcement point (PEP) requiring PayReality's decision before acting — none exists for any customer |
-| Trusted-Adapter-mediated runtime path, full lifecycle | Verified or registered-external-PEP enforcement assurance; no distinct external-checkpoint trust registration exists |
-| Capability Authorization, for an ALLOW decision on either runtime path | Vendor-specific Adapter connectors (SAP, Workday, etc.) |
-| Signed, verifiable Evidence and Authorization Receipt | Automatic discovery of external operations/schemas |
+| Agent-direct runtime path | A real *customer* downstream enforcement point (PEP) requiring PayReality's decision before acting — none exists for any customer. A reference PEP, built and controlled by PayReality, exists and is tested (Phase 6); it is not a customer deployment. |
+| Trusted-Adapter-mediated runtime path, full lifecycle | Verified or registered-external-PEP enforcement assurance; no distinct external-checkpoint trust registration exists. Only `ADVISORY` and `CAPABILITY_REQUIRED` enforcement-assurance levels are implemented; `VERIFIED`/`REGISTERED_EXTERNAL_PEP` are not. |
+| Capability Authorization, for an ALLOW decision or an approved HUMAN_REVIEW decision, on either runtime path, with organization-scoped verification and consumption-time freshness rechecking (Phase 5.1/6/6.1) | Vendor-specific Adapter connectors (SAP, Workday, etc.) |
+| Signed, verifiable Evidence and Authorization Receipt (including Capability state and human-review resolution) | A portable, offline, third-party-independent Receipt artifact; automatic discovery of external operations/schemas |
 | Trusted Enterprise Facts, fail-closed on absence/conflict | Mapping-drift monitoring |
 | Authority Intelligence (human-gated candidate proposals) | Full self-host / dedicated-instance productization |
 | Multi-tenant, data-layer-isolated, live-tested | On-premises deployment |
