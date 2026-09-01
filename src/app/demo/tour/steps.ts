@@ -63,15 +63,33 @@ export const TOUR_STEPS: TourStep[] = [
     body: "One packaged, shareable document for this decision: the agent, the system, the trusted connection, the mapping, and the decision itself, everything an auditor would ask for, in one place.",
   },
   {
+    // Phase 6 (Reference End-to-End Enforcement Demonstration): the
+    // back half of this exact story -- approval, Capability issuance,
+    // and consumption -- narrated here (the public demo's real
+    // Approve/Deny buttons are intentionally read-only), but proven for
+    // real, automated, against actual code in
+    // server/tests/integration/test_reference_enforcement_demonstration.py.
+    path: `/decisions/${DECISION_HERO_ADAPTER_REVIEW}`,
+    selector: '[data-tour="reference-enforcement-walkthrough"]',
+    title: "8. From approval to execution",
+    body: "A human review doesn't end the story. Once approved, PayReality can issue a short-lived, single-use Capability from that approval -- the original decision still reads Needs human approval, forever. A reference enforcement point verifies and consumes it before anything downstream happens. Click through the steps below, then Next.",
+  },
+  {
+    path: `/decisions/${DECISION_HERO_ADAPTER_REVIEW}`,
+    selector: '[data-tour="reference-enforcement-walkthrough"]',
+    title: "9. One authorization, never two",
+    body: "Try reusing that same Capability, then try requesting a second one for the same decision. Both are refused -- real, tested guarantees, not a UI trick. One approved authority lifecycle produces at most one usable execution permission, ever.",
+  },
+  {
     path: `/decisions/${DECISION_HERO_ADAPTER_REVIEW}`,
     selector: '[data-tour="replay-operation"]',
-    title: "8. Retries don't create new decisions",
+    title: "10. Retries don't create new decisions",
     body: "If SAP reported this exact operation again, a network retry, a duplicate webhook, PayReality recognizes it as the same real-world event and returns this exact decision, never a second one. Try clicking below, then Next.",
   },
   {
     path: `/decisions/${DECISION_HERO_ALLOW}`,
     selector: '[data-tour="decision-outcome"]',
-    title: "9. Not every action needs review",
+    title: "11. Not every action needs review",
     body: "Here, the AP Invoice Agent reported directly, with no Trusted Adapter: a simpler path PayReality still fully supports. Within its delegated authority, the payment is authorized immediately: Allow. PayReality isn't here to block AI; it's here to make sure only what's actually authorized goes through.",
   },
 ];

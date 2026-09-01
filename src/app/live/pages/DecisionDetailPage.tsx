@@ -88,6 +88,23 @@ export function DecisionDetailPage() {
   // own result text, demo-mode only, see the integration-provenance
   // card below.
   const [replayMessage, setReplayMessage] = useState<string | null>(null);
+  // Phase 6 (Reference End-to-End Enforcement Demonstration): a
+  // client-side-only narrative walkthrough of what happens AFTER this
+  // page's own real Approve/Deny buttons would normally fire -- the
+  // public demo's mock router deliberately blocks /resolve (a read-only
+  // demo), so this cannot be a real backend call the way the actual
+  // Capability lifecycle is (see server/tests/integration/
+  // test_reference_enforcement_demonstration.py for that real, tested
+  // proof). Every message below states exactly what the real system
+  // does and the real error codes it actually returns -- never an
+  // invented claim -- the same discipline the replay-operation
+  // affordance above already established.
+  const [walkthroughStep, setWalkthroughStep] = useState<"start" | "approved" | "issued" | "consumed">("start");
+  // The two negative demonstrations are independent of each other once
+  // consumed -- a visitor can try either, or both, without one hiding
+  // the other (section 5's own two SEPARATE required demonstrations).
+  const [replayResult, setReplayResult] = useState<string | null>(null);
+  const [secondIssuanceResult, setSecondIssuanceResult] = useState<string | null>(null);
 
   function load() {
     if (!decisionId) return;
@@ -449,6 +466,130 @@ export function DecisionDetailPage() {
                   <p className="text-xs mt-2" style={{ color: "var(--pr-trust-green)" }} data-tour="replay-result" role="status">
                     {replayMessage}
                   </p>
+                )}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* Phase 6: the reference end-to-end enforcement walkthrough,
+          demo-only, shown only for the exact shape this milestone's own
+          scenario has -- an Adapter-mediated decision still needing
+          human review. Purely local state; see this block's own
+          copy for why it can't be a real backend call in the public
+          demo, and REFERENCE_ENFORCEMENT_DEMONSTRATION.md for the real,
+          automated proof this narrates. */}
+      {DEMO_MODE && decision.outcome === "HUMAN_REVIEW" && decision.integration && (
+        <div className="mb-4 pr-enter" style={enterDelay(70)}>
+          <Card padding={20} data-tour="reference-enforcement-walkthrough">
+            <p className="text-sm font-semibold mb-2" style={{ color: "var(--pr-text-primary)" }}>
+              What happens after a human approves this
+            </p>
+            <p className="text-xs mb-3" style={{ color: "var(--pr-text-muted)" }}>
+              This is a narrated walkthrough of the real sequence (proven, not simulated, in{" "}
+              <code>test_reference_enforcement_demonstration.py</code>), not a live call against this
+              public demo -- the demo's own Approve/Deny buttons above are intentionally read-only.
+            </p>
+
+            {walkthroughStep === "start" && (
+              <button
+                type="button"
+                className="text-xs font-medium"
+                style={{ color: "var(--pr-authority-blue)" }}
+                onClick={() => setWalkthroughStep("approved")}
+              >
+                Simulate: a reviewer approves this &rarr;
+              </button>
+            )}
+
+            {walkthroughStep !== "start" && (
+              <div className="text-xs space-y-2" style={{ color: "var(--pr-text-primary)" }}>
+                <p>
+                  Review resolution: <strong>Approved</strong> by demo-reviewer@example.com.{" "}
+                  <span style={{ color: "var(--pr-text-disabled)" }}>
+                    The original Decision above still reads Needs human approval -- it is never rewritten.
+                  </span>
+                </p>
+
+                {walkthroughStep === "approved" && (
+                  <button
+                    type="button"
+                    className="font-medium"
+                    style={{ color: "var(--pr-authority-blue)" }}
+                    onClick={() => setWalkthroughStep("issued")}
+                  >
+                    Issue a Capability from this approval &rarr;
+                  </button>
+                )}
+
+                {(walkthroughStep === "issued" || walkthroughStep === "consumed") && (
+                  <p>
+                    Capability issued: audience <code>reference-pep</code>, bound to this Agent, this
+                    resource, this environment, this Runtime Connection, and this operation's external
+                    operation ID. Expires in 5 minutes, single-use.
+                  </p>
+                )}
+
+                {walkthroughStep === "issued" && (
+                  <button
+                    type="button"
+                    className="font-medium"
+                    style={{ color: "var(--pr-authority-blue)" }}
+                    onClick={() => setWalkthroughStep("consumed")}
+                  >
+                    Verify &amp; consume via the reference PEP &rarr;
+                  </button>
+                )}
+
+                {walkthroughStep === "consumed" && (
+                  <>
+                    <p style={{ color: "var(--pr-trust-green)" }}>CAPABILITY VERIFIED AND CONSUMED.</p>
+                    <p style={{ color: "var(--pr-trust-green)" }}>
+                      DOWNSTREAM EXECUTION: executed successfully (reference business system stand-in --
+                      not a real SAP/enterprise connector).
+                    </p>
+
+                    <div className="flex flex-wrap gap-3 pt-1">
+                      <button
+                        type="button"
+                        className="font-medium"
+                        style={{ color: "var(--pr-authority-blue)" }}
+                        onClick={() =>
+                          setReplayResult(
+                            "CAPABILITY REJECTED: capability_token_already_consumed. DOWNSTREAM EXECUTION: " +
+                              "not attempted -- a rejected Capability never reaches the reference business system."
+                          )
+                        }
+                      >
+                        Attempt to reuse this Capability &rarr;
+                      </button>
+                      <button
+                        type="button"
+                        className="font-medium"
+                        style={{ color: "var(--pr-authority-blue)" }}
+                        onClick={() =>
+                          setSecondIssuanceResult(
+                            "409 capability_already_consumed_for_decision. One authority lifecycle produces " +
+                              "at most one Capability, ever -- no replacement is minted."
+                          )
+                        }
+                      >
+                        Attempt to request a second Capability &rarr;
+                      </button>
+                    </div>
+
+                    {replayResult && (
+                      <p style={{ color: "var(--pr-critical-red)" }} data-tour="replay-capability-result">
+                        {replayResult}
+                      </p>
+                    )}
+                    {secondIssuanceResult && (
+                      <p style={{ color: "var(--pr-critical-red)" }} data-tour="second-issuance-result">
+                        {secondIssuanceResult}
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
             )}

@@ -23,7 +23,7 @@ const activeRole = await page.evaluate(() => document.activeElement?.getAttribut
 check("focus lands on the tour dialog when a step opens", activeRole === "dialog");
 
 const ariaLabel = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
-check("dialog aria-label announces step number and title", /step 1 of 9/i.test(ariaLabel ?? ""));
+check("dialog aria-label announces step number and title", /step 1 of 11/i.test(ariaLabel ?? ""));
 
 // Tab should reach the visible controls inside the dialog (Skip tour / Back / Next).
 await page.keyboard.press("Tab");
@@ -73,7 +73,7 @@ await page.keyboard.press("Enter");
 await page.waitForTimeout(400);
 
 const step2AriaLabel = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
-check("keyboard-activating Next (Enter) advances to step 2", /step 2 of 9/i.test(step2AriaLabel ?? ""));
+check("keyboard-activating Next (Enter) advances to step 2", /step 2 of 11/i.test(step2AriaLabel ?? ""));
 
 const step2ActiveRole = await page.evaluate(() => document.activeElement?.getAttribute("role"));
 check("focus returns to the dialog itself after Next, not left on the button", step2ActiveRole === "dialog");
@@ -91,7 +91,7 @@ check("Tab then reaches Back on step 2", /^back$/i.test(step2SecondControl));
 await page.keyboard.press("Enter");
 await page.waitForTimeout(400);
 const backAriaLabel = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
-check("keyboard-activating Back (Enter) returns to step 1", /step 1 of 9/i.test(backAriaLabel ?? ""));
+check("keyboard-activating Back (Enter) returns to step 1", /step 1 of 11/i.test(backAriaLabel ?? ""));
 
 // Keyboard-activate Skip tour itself (distinct from the Escape path
 // already checked above) and confirm it closes the tour the same way.

@@ -56,7 +56,7 @@ function check(label, ok, detail) {
   await page.waitForTimeout(500);
   let dialog = page.getByRole("dialog");
   check("tour dialog appears", await dialog.count() > 0);
-  check("step 1 of 9 shown", /step 1 of 9/i.test((await dialog.textContent()) ?? ""));
+  check("step 1 of 11 shown", /step 1 of 11/i.test((await dialog.textContent()) ?? ""));
 
   const EXPECTED_STOPS = [
     { n: 1, selector: '[data-tour="agent-trusted-connections"]', name: "Agent / Trusted Connections", urlIncludes: "/agents/" },
@@ -66,8 +66,10 @@ function check(label, ok, detail) {
     { n: 5, selector: '[data-tour="decision-outcome"]', name: "Decision: Human Review", urlIncludes: "/decisions/" },
     { n: 6, selector: '[data-tour="decision-evidence"]', name: "Evidence", urlIncludes: "/decisions/" },
     { n: 7, selector: '[data-tour="receipt-integration-provenance"]', name: "Authorization Receipt", urlIncludes: "/receipt" },
-    { n: 8, selector: '[data-tour="replay-operation"]', name: "Retry / idempotency", urlIncludes: "/decisions/" },
-    { n: 9, selector: '[data-tour="decision-outcome"]', name: "Allow counterexample", urlIncludes: "/decisions/" },
+    { n: 8, selector: '[data-tour="reference-enforcement-walkthrough"]', name: "Approval to execution (Phase 6)", urlIncludes: "/decisions/" },
+    { n: 9, selector: '[data-tour="reference-enforcement-walkthrough"]', name: "Replay and duplicate issuance both fail (Phase 6)", urlIncludes: "/decisions/" },
+    { n: 10, selector: '[data-tour="replay-operation"]', name: "Retry / idempotency", urlIncludes: "/decisions/" },
+    { n: 11, selector: '[data-tour="decision-outcome"]', name: "Allow counterexample", urlIncludes: "/decisions/" },
   ];
 
   for (const stop of EXPECTED_STOPS) {
@@ -95,6 +97,37 @@ function check(label, ok, detail) {
       check("Receipt states the execution limitation", /does not\s+prove.*executed/i.test(pageText ?? ""));
     }
     if (stop.n === 8) {
+      // Click through the full positive path -- approve, issue, verify
+      // & consume -- and confirm the original Decision's own outcome
+      // badge is never relabeled Allowed (section 9/19's own guarantee,
+      // experienced by the visitor, not just asserted at the service
+      // layer).
+      await page.getByRole("button", { name: /simulate: a reviewer approves this/i }).click();
+      await page.waitForTimeout(200);
+      await page.getByRole("button", { name: /issue a capability from this approval/i }).click();
+      await page.waitForTimeout(200);
+      await page.getByRole("button", { name: /verify & consume via the reference pep/i }).click();
+      await page.waitForTimeout(200);
+      const walkthroughText = await page.textContent('[data-tour="reference-enforcement-walkthrough"]');
+      check("walkthrough shows Capability verified and consumed", /CAPABILITY VERIFIED AND CONSUMED/.test(walkthroughText ?? ""));
+      check("walkthrough shows downstream execution as a separate line", /DOWNSTREAM EXECUTION: executed successfully/.test(walkthroughText ?? ""));
+      const outcomeBadgeText = await page.locator('[data-tour="decision-outcome"]').textContent();
+      check("original Decision outcome is never relabeled Allowed after execution", !/\ballowed\b/i.test(outcomeBadgeText ?? ""));
+    }
+    if (stop.n === 9) {
+      // The two required negative demonstrations, both independently
+      // triggerable from the same consumed-Capability state.
+      await page.getByRole("button", { name: /attempt to reuse this capability/i }).click();
+      await page.waitForTimeout(200);
+      const replayText = await page.locator('[data-tour="replay-capability-result"]').textContent();
+      check("replaying a consumed Capability is refused", /capability_token_already_consumed/i.test(replayText ?? ""));
+
+      await page.getByRole("button", { name: /attempt to request a second capability/i }).click();
+      await page.waitForTimeout(200);
+      const secondIssuanceText = await page.locator('[data-tour="second-issuance-result"]').textContent();
+      check("a second Capability for the same Decision is refused", /capability_already_consumed_for_decision/i.test(secondIssuanceText ?? ""));
+    }
+    if (stop.n === 10) {
       // Actually click the replay affordance and confirm no new Decision appears
       // (the visible decision id must stay the same). This is the idempotency
       // moment the visitor experiences, not just a helper-level check.
@@ -110,7 +143,7 @@ function check(label, ok, detail) {
         check("replay button present", false, "not found");
       }
     }
-    if (stop.n === 9) {
+    if (stop.n === 11) {
       const pageText = await page.textContent("body");
       check("Allow example shows Allowed outcome", /allowed/i.test(pageText ?? ""));
       check("Allow example has no integration provenance card", !/Reported through a trusted connection/i.test(pageText ?? ""));
