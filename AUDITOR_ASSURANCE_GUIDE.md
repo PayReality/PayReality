@@ -30,6 +30,12 @@ If the matched policy referenced any Trusted Enterprise Facts, the exact snapsho
 
 Exactly one of `ALLOW`, `DENY`, or `HUMAN_REVIEW` — never a fourth value, and immutable once created. If it was `HUMAN_REVIEW`, the original Decision **stays** `HUMAN_REVIEW` forever; the human's later `approved`/`denied` answer lives in a separate `DecisionResolution` record and a second, appended Evidence entry. A resolved review does not overwrite or reclassify the original outcome — if you're checking "what did the system decide" versus "what did a human ultimately approve," these are two different, both-preserved records.
 
+## Can one authorized operation ever produce two executable permissions?
+
+No, by construction, as of Trusted Integration Phase 5.1: `capability_tokens.decision_id` is database-unique, not merely checked in application code. One authority authorization lifecycle — one `ALLOW` Decision, or one `HUMAN_REVIEW` Decision an authorized reviewer has since approved — produces at most one currently usable Capability, ever. A repeated or genuinely concurrent request to issue a Capability for the same Decision never mints a second one; it resolves to one of three distinct outcomes (an unexpired one already exists, one was already consumed, or one expired unconsumed) and is rejected. This was verified both as a real database constraint under genuine multi-connection concurrency, and by first confirming — empirically, not by inference — that the pre-fix code allowed exactly this.
+
+A `HUMAN_REVIEW` Decision's later approval authorizes a Capability without ever rewriting the original Decision (see "What Decision occurred?" above): the Authorization Receipt for such an operation shows all three facts side by side — the original runtime Decision (`Needs human approval`), the review resolution (`Approved`, by whom, when), and the Capability's own issuance/consumption state — never a Decision retroactively relabeled `Allowed`.
+
 ## Which versions existed at the time?
 
 The policy version, and — for an Adapter-mediated Decision — the exact Action Mapping version, Trusted Connection, and Runtime Connection scope, all pinned to what they were at submission. None of these are rewritten later: retiring a mapping, rotating a Trusted Connection's certificate, or resolving a `HUMAN_REVIEW` decision never touches this historical record.

@@ -1065,11 +1065,15 @@ def get_earliest_evidence_for_decision(db: Session, decision_id: uuid.UUID) -> E
 
 
 def get_latest_capability_for_decision(db: Session, decision_id: uuid.UUID) -> CapabilityToken | None:
-    """The most recently issued Capability Authorization for this
-    decision, if issuance was ever retried -- the same "most recent one"
-    lookup routers/intents.py's _build_decision_response already
-    performs, factored out so authorization_receipt_service can reuse it
-    without duplicating the query."""
+    """The Capability Authorization issued for this decision, if any.
+    Ordered by issued_at desc even though Phase 5.1 made
+    `capability_tokens.decision_id` unique (at most one row can ever
+    match today) -- the same "most recent one" lookup routers/intents.py's
+    _build_decision_response already performs, factored out so
+    authorization_receipt_service can reuse it without duplicating the
+    query, and left ordered rather than a plain get-by-decision-id so it
+    still reads correctly against any older deployment's row history a
+    Phase 5.1 migration deduplicated down to one."""
     return db.scalar(
         select(CapabilityToken)
         .where(CapabilityToken.decision_id == decision_id)

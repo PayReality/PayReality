@@ -467,6 +467,36 @@ class Agent:
             token=response["token"], capability_id=response["capability_id"], expires_at=response["expires_at"],
         )
 
+    def request_capability_from_review(
+        self, decision_id: str, audience: str, ttl_seconds: int | None = None,
+    ) -> Capability:
+        """Trusted Integration Architecture, Phase 5.1: requests a
+        Capability Authorization for a HUMAN_REVIEW decision an
+        authorized reviewer has since approved, via `resolve_decision()`
+        or the dashboard's own review queue. The original Decision is
+        never rewritten -- `decision_id` still reports
+        `outcome == "HUMAN_REVIEW"` forever; this call authorizes
+        continuation of that specific business operation based on the
+        separate, linked review resolution, not a reinterpretation of
+        the original runtime evaluation.
+
+        Raises `ApiError` (HTTP 409) if the decision is not HUMAN_REVIEW,
+        if no resolution exists yet, if the resolution was "denied", or
+        for any of the same live-status/idempotency reasons
+        `request_capability()` can already raise (see its own
+        docstring) -- one authority authorization lifecycle still
+        produces at most one currently usable Capability, whichever of
+        the two methods issued it."""
+        body: dict[str, Any] = {"audience": audience}
+        if ttl_seconds is not None:
+            body["ttl_seconds"] = ttl_seconds
+        response = self._client.request(
+            "POST", f"/v1/decisions/{decision_id}/capability-token/from-review", json=body, admin_auth=True,
+        )
+        return Capability(
+            token=response["token"], capability_id=response["capability_id"], expires_at=response["expires_at"],
+        )
+
     def verify_capability(
         self,
         token: str,

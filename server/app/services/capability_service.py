@@ -1,16 +1,45 @@
 """Capability Authorization Protocol (PAYREALITY_FUTURE_VISION.md Part
 C): issues and verifies short-lived, signed capabilities bound to one
-ALLOW decision. Reuses this platform's existing Ed25519 signing-key
-registry (signing_key_service.py) unchanged -- a capability token is
-signed with the exact same active evidence-signing key as any other
-signed record here, verified via the exact same historical key lookup
-Evidence verification already relies on, so key rotation never breaks
-an already-issued (but not yet expired) token any more than it breaks
-old Evidence.
+ALLOW decision, or (Phase 5.1) to one approved HUMAN_REVIEW resolution.
+Reuses this platform's existing Ed25519 signing-key registry
+(signing_key_service.py) unchanged -- a capability token is signed with
+the exact same active evidence-signing key as any other signed record
+here, verified via the exact same historical key lookup Evidence
+verification already relies on, so key rotation never breaks an
+already-issued (but not yet expired) token any more than it breaks old
+Evidence.
 
 Explicitly a demonstration protocol, not enforcement infrastructure --
 see domain/capability/token.py's own module docstring for the full,
-deliberately unsoftened statement of what this does and does not prove."""
+deliberately unsoftened statement of what this does and does not prove.
+
+Trusted Integration Architecture, Phase 5.1 (Capability Issuance
+Idempotency): the governing invariant added this phase, applying
+identically to every issuance path in this module --
+
+    One authority authorization lifecycle -> at most one CURRENTLY
+    USABLE execution permission.
+
+`capability_tokens.decision_id` is now UNIQUE (migration
+d4e8b1a6f2c9): a Decision may have at most one Capability row, ever,
+issued through either `issue_capability_for_decision` (ALLOW) or
+`issue_capability_for_reviewed_decision` (approved HUMAN_REVIEW).
+Repeated or concurrent issuance requests against the same Decision
+resolve to exactly one of three outcomes, each with its own distinct,
+deliberately-chosen exception -- see each one's own docstring below for
+the reasoning:
+
+- an unexpired, unconsumed Capability already exists -> `CapabilityAlreadyIssuedError`
+- the Decision's one-and-only Capability was already consumed -> `CapabilityAlreadyConsumedForDecisionError`
+- the Decision's one-and-only Capability expired, unconsumed -> `CapabilityExpiredNotRenewedError`
+
+None of the three silently mints a second Capability. The DB-level
+UNIQUE constraint, not this module's own pre-check, is what actually
+makes this safe under concurrency (`_issue_and_persist` below always
+attempts the INSERT and handles the constraint violation, never trusts
+its own prior SELECT alone -- exactly the same discipline
+resolution_service.resolve_decision's own docstring already documents
+for `decision_resolutions.decision_id`'s identical UNIQUE constraint)."""
 
 import logging
 import uuid
@@ -18,31 +47,36 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Agent, CapabilityToken, EnforcementBinding, Evidence, Intent, IntegrationIdentity
+from app.db.models import Agent, CapabilityToken, DecisionResolution, EnforcementBinding, Evidence, Intent, IntegrationIdentity
 from app.domain.capability import token as capability_token
 from app.services import intent_service, signing_key_service
 from app.services.intent_service import CrossOrganizationAccessError, DecisionNotFoundError
+from app.services.resolution_service import DecisionNotHumanReviewError
 
 logger = logging.getLogger("payreality.capability")
 
 
 class DecisionNotAllowError(Exception):
-    """A capability may only be issued for a Decision whose outcome is
-    literally ALLOW -- issuing one for DENY or HUMAN_REVIEW would mint an
-    executable authorization for an action Runtime Authority never
-    actually permitted. No post-review issuance path exists today for
-    either the Agent-direct or the Trusted-Adapter path: a Decision's
-    `outcome` is immutable (resolve_decision never mutates it, by
-    design -- see Decision's own docstring), so a HUMAN_REVIEW decision
-    that a human later approves still has outcome == HUMAN_REVIEW
-    forever, and this check still correctly rejects it. Building a
-    distinct "issue a capability from an approved HUMAN_REVIEW
-    resolution" path is a materially new capability, not an extension of
-    this one -- deliberately out of this milestone's scope; see
-    Trusted Integration Architecture, Phase 5's own audit notes."""
+    """Raised by issue_capability_for_decision only: that function may
+    issue a capability for a Decision whose outcome is literally ALLOW
+    and nothing else -- issuing one for DENY or HUMAN_REVIEW would mint
+    an executable authorization for an action Runtime Authority itself
+    never actually permitted. A Decision's `outcome` is immutable
+    (resolve_decision never mutates it, by design -- see Decision's own
+    docstring), so a HUMAN_REVIEW decision that a human later approves
+    still has outcome == HUMAN_REVIEW forever, and this check still
+    correctly rejects it here.
+
+    Trusted Integration Architecture, Phase 5.1: a HUMAN_REVIEW decision
+    an authorized reviewer has approved is NOT permanently ineligible
+    for a capability -- see issue_capability_for_reviewed_decision
+    below, a deliberately separate function with its own distinct
+    preconditions (DecisionNotHumanReviewError / ReviewNotResolvedError
+    / ReviewNotApprovedError), not an extension of this one."""
 
 
 class IntegrationIdentityNotActiveError(Exception):
@@ -86,7 +120,78 @@ class CapabilityTokenNotFoundError(Exception):
 
 
 class CapabilityTokenAlreadyConsumedError(Exception):
-    pass
+    """Raised by verify_and_consume_capability when a token presented for
+    VERIFICATION was already consumed -- a different moment, and a
+    different caller (the PEP, not the issuer), from the three
+    ISSUANCE-time errors below. Kept as its own exception, unchanged, so
+    the reference adapter and any existing PEP integration's exception
+    handling is unaffected by this phase."""
+
+
+class CapabilityAlreadyIssuedError(Exception):
+    """Phase 5.1, section 4: issuance was requested again while the
+    Decision's one-and-only Capability is still unexpired and
+    unconsumed. The raw token material is never returned a second time
+    -- CapabilityToken deliberately stores only a hash of it (see the
+    model's own docstring), so there is nothing to hand back even if
+    doing so were desirable. `capability_id`/`expires_at` are exposed so
+    the caller can see that one is already outstanding and when it
+    expires, without exposing the bearer artifact itself."""
+
+    def __init__(self, capability_id: uuid.UUID, expires_at: datetime):
+        self.capability_id = capability_id
+        self.expires_at = expires_at
+        super().__init__(f"capability {capability_id} already issued for this decision, expires {expires_at}")
+
+
+class CapabilityAlreadyConsumedForDecisionError(Exception):
+    """Phase 5.1, section 5: the Decision's one-and-only Capability was
+    already consumed. Fail closed by default -- a second Capability for
+    an already-consumed authorization could permit duplicate execution
+    of the same business operation, exactly the risk this whole phase
+    exists to close. No retry/renewal path is built here; one would be a
+    deliberate, separately-authorized product decision, not an inferred
+    default."""
+
+    def __init__(self, capability_id: uuid.UUID):
+        self.capability_id = capability_id
+        super().__init__(f"capability {capability_id} for this decision was already consumed")
+
+
+class CapabilityExpiredNotRenewedError(Exception):
+    """Phase 5.1, section 6: the Decision's one-and-only Capability
+    expired without being consumed. Deliberately does NOT auto-issue a
+    fresh one: authority conditions may have changed since the original
+    Decision, and silently treating a historical ALLOW (or an approved
+    review) as indefinitely renewable authority is exactly what section
+    6 warns against. A genuine operational need to retry a lapsed
+    authorization is a real, disclosed gap this phase leaves closed
+    rather than papering over with an invented renewal model (section 5's
+    own instruction, applied here too)."""
+
+    def __init__(self, capability_id: uuid.UUID, expired_at: datetime):
+        self.capability_id = capability_id
+        self.expired_at = expired_at
+        super().__init__(f"capability {capability_id} for this decision expired at {expired_at} without being consumed")
+
+
+class ReviewNotResolvedError(Exception):
+    """Phase 5.1, section 12: no DecisionResolution exists yet for this
+    HUMAN_REVIEW decision -- "Unresolved review: no Capability.\""""
+
+
+class ReviewNotApprovedError(Exception):
+    """Phase 5.1, section 12: a DecisionResolution exists but its
+    `resolution` is "denied" -- "Rejected review: no Capability." Only
+    the two resolution values this codebase's own domain model actually
+    has (decision_resolutions.resolution's CHECK constraint:
+    'approved'/'denied') are handled; no "cancelled"/"expired" review
+    state exists anywhere in this schema to check, so none is invented
+    here (section 12's own instruction)."""
+
+    def __init__(self, resolution: str):
+        self.resolution = resolution
+        super().__init__(f"review resolution={resolution!r}, not approved")
 
 
 DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS = 300
@@ -107,6 +212,13 @@ def issue_capability_for_decision(
     issued_by: str | None = None,
     ttl_seconds: int = DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS,
 ) -> IssuedCapability:
+    """Issues a Capability for a Decision Runtime Authority itself
+    already, directly, decided ALLOW. See issue_capability_for_reviewed_decision
+    below for the separate, HUMAN_REVIEW-approved path; the two are
+    intentionally distinct functions with distinct preconditions
+    (section 11: a resolution is never treated as an unrelated new ALLOW
+    decision), converging only on the shared, idempotency-safe
+    _issue_and_persist tail."""
     # Reuses intent_service's own org-scoped decision lookup unchanged
     # (the exact function GET /v1/decisions/{id} is built on) rather
     # than re-deriving organization scoping here a second way.
@@ -115,6 +227,98 @@ def issue_capability_for_decision(
         raise DecisionNotAllowError(f"decision {decision_id} outcome={decision.outcome!r}")
 
     intent = db.get(Intent, decision.intent_id)
+    return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds)
+
+
+def issue_capability_for_reviewed_decision(
+    db: Session,
+    organization_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    audience: str,
+    issued_by: str | None = None,
+    ttl_seconds: int = DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS,
+) -> IssuedCapability:
+    """Trusted Integration Architecture, Phase 5.1, Part B: issues a
+    Capability for a HUMAN_REVIEW decision an authorized reviewer has
+    since approved -- without ever mutating the original Decision, which
+    keeps reading outcome=='HUMAN_REVIEW' forever (section 9, and
+    resolution_service.resolve_decision's own long-standing guarantee:
+    "created once, immutable, never updated"). This is a genuinely
+    separate authorization event bound to the resolution, not a
+    reinterpretation of the original runtime evaluation.
+
+    Section 13 (reviewer authorization): a DecisionResolution row can
+    only ever be created by resolution_service.resolve_decision, which
+    is itself gated on Permission.DECISIONS_RESOLVE and organisation-
+    scoped (see that function's own docstring). Its mere existence with
+    resolution=='approved', found via the same org-scoped decision_id
+    lookup used everywhere else in this module, IS the legitimacy check
+    -- there is no separate, forgeable "approved" signal to re-verify
+    against, and building a second, parallel approval mechanism here
+    would be exactly the "parallel approval system" section 13
+    explicitly forbids."""
+    decision = intent_service.get_decision_for_organization(db, decision_id, organization_id)
+    if decision.outcome != "HUMAN_REVIEW":
+        raise DecisionNotHumanReviewError(decision.outcome)
+
+    resolution_row = db.query(DecisionResolution).filter_by(decision_id=decision_id).one_or_none()
+    if resolution_row is None:
+        raise ReviewNotResolvedError(str(decision_id))
+    if resolution_row.resolution != "approved":
+        raise ReviewNotApprovedError(resolution_row.resolution)
+
+    intent = db.get(Intent, decision.intent_id)
+    logger.info(
+        "capability_issuance_basis=POST_REVIEW decision_id=%s resolved_by=%s resolved_by_user_id=%s",
+        decision_id, resolution_row.resolved_by, resolution_row.resolved_by_user_id,
+    )
+    return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds)
+
+
+def _existing_capability_or_none(db: Session, decision_id: uuid.UUID) -> CapabilityToken | None:
+    return db.scalar(select(CapabilityToken).where(CapabilityToken.decision_id == decision_id))
+
+
+def _raise_for_existing_capability(row: CapabilityToken) -> None:
+    """Phase 5.1, sections 4/5/6: classifies the Decision's one existing
+    Capability row into exactly one of the three deliberately distinct
+    outcomes and raises for it -- never falls through to minting a
+    second one."""
+    if row.consumed_at is not None:
+        raise CapabilityAlreadyConsumedForDecisionError(row.id)
+    now = datetime.now(timezone.utc)
+    expires_at = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
+    if now > expires_at:
+        raise CapabilityExpiredNotRenewedError(row.id, expires_at)
+    raise CapabilityAlreadyIssuedError(row.id, expires_at)
+
+
+def _issue_and_persist(
+    db: Session,
+    organization_id: uuid.UUID,
+    decision,
+    intent: Intent,
+    audience: str,
+    issued_by: str | None,
+    ttl_seconds: int,
+) -> IssuedCapability:
+    """The shared tail every issuance path (ALLOW-direct, post-review)
+    converges on: live fail-closed rechecks, then an idempotency-safe
+    issue-and-persist. Sharing this one implementation, rather than a
+    copy per path, is what section 8 (Agent-direct compatibility) and
+    section 17 (post-review issuance reusing Part A's own invariant)
+    actually mean structurally -- a fix made once here is a fix made
+    everywhere this function is called from, not something that can be
+    forgotten on a second, parallel path."""
+    decision_id = decision.id
+
+    # Fast pre-check: almost always correct, and avoids doing the live
+    # status rechecks and signing work below for a request that's going
+    # to be rejected anyway. NOT the actual safety guarantee -- see the
+    # IntegrityError handling further down for that.
+    existing = _existing_capability_or_none(db, decision_id)
+    if existing is not None:
+        _raise_for_existing_capability(existing)
 
     # Trusted Integration Architecture, Phase 5 (fail-closed re-check,
     # section 6/40): applies to BOTH runtime paths, not only the
@@ -247,7 +451,24 @@ def issue_capability_for_decision(
         external_operation_id=external_operation_id,
     )
     db.add(row)
-    db.commit()
+    # Phase 5.1, section 7: the earlier pre-check above is a convenience,
+    # not the guarantee -- two concurrent requests can both pass it
+    # before either commits. `capability_tokens.decision_id`'s UNIQUE
+    # constraint (migration d4e8b1a6f2c9) is what actually makes this
+    # safe: the loser's INSERT fails atomically here, and is translated
+    # into the same classified error the non-racing pre-check above
+    # already raises, instead of escaping as an unhandled IntegrityError
+    # -- the exact same discipline resolution_service.resolve_decision's
+    # own docstring documents for decision_resolutions.decision_id's
+    # identical UNIQUE constraint.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raced = _existing_capability_or_none(db, decision_id)
+        if raced is not None:
+            _raise_for_existing_capability(raced)
+        raise  # pragma: no cover -- a UNIQUE violation with no row to explain it is unexpected
     db.refresh(row)
     logger.info(
         "capability_issuance_result=ISSUED decision_id=%s capability_id=%s audience=%s "

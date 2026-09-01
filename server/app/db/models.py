@@ -743,7 +743,17 @@ class CapabilityToken(Base):
     the verify-and-consume path -- this row IS the single-use ledger,
     not a separate table, since an issuance record with no consumption
     yet and a consumed one are the same lifecycle object, not two kinds
-    of thing."""
+    of thing.
+
+    Trusted Integration Architecture, Phase 5.1 (Capability Issuance
+    Idempotency): `decision_id` is also unique per row. One authority
+    authorization lifecycle -- one ALLOW decision, or one approved
+    HUMAN_REVIEW resolution -- produces at most one Capability, ever;
+    repeated or concurrent issuance requests against the same Decision
+    reuse or reject against this one row rather than minting a second,
+    independently valid one. See services/capability_service.py's own
+    module docstring for the full reasoning and the three distinct
+    "a capability already exists for this decision" outcomes."""
 
     __tablename__ = "capability_tokens"
 
@@ -784,7 +794,11 @@ class CapabilityToken(Base):
 
     __table_args__ = (
         UniqueConstraint("nonce", name="uq_capability_tokens_nonce"),
-        Index("idx_capability_tokens_decision", "decision_id"),
+        # Phase 5.1: replaces the earlier plain (non-unique) index on
+        # decision_id -- a unique constraint already provides the index,
+        # so this is not an addition alongside the old one, it is what
+        # the old one should have been from the start.
+        UniqueConstraint("decision_id", name="uq_capability_tokens_decision"),
         Index("idx_capability_tokens_organization", "organization_id"),
         Index("idx_capability_tokens_enforcement_binding", "enforcement_binding_id"),
     )

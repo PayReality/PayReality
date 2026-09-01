@@ -54,6 +54,72 @@ def issue_capability(
         raise HTTPException(status_code=409, detail=f"enforcement_binding_not_active: {e}")
     except capability_service.OriginAgentNotActiveError as e:
         raise HTTPException(status_code=409, detail=f"origin_agent_not_active: {e}")
+    except capability_service.CapabilityAlreadyIssuedError as e:
+        raise HTTPException(status_code=409, detail=f"capability_already_issued: {e}")
+    except capability_service.CapabilityAlreadyConsumedForDecisionError as e:
+        raise HTTPException(status_code=409, detail=f"capability_already_consumed_for_decision: {e}")
+    except capability_service.CapabilityExpiredNotRenewedError as e:
+        raise HTTPException(status_code=409, detail=f"capability_expired_not_renewed: {e}")
+    return IssueCapabilityResponse(
+        token=issued.token, capability_id=issued.capability_id, expires_at=issued.expires_at
+    )
+
+
+@router.post(
+    "/decisions/{decision_id}/capability-token/from-review", response_model=IssueCapabilityResponse,
+    dependencies=[Depends(require_permission(Permission.CAPABILITY_ISSUE))],
+)
+def issue_capability_from_review(
+    decision_id: UUID,
+    body: IssueCapabilityRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    """Trusted Integration Architecture, Phase 5.1, Part B: issues a
+    Capability for a HUMAN_REVIEW decision an authorized reviewer has
+    since approved, without ever mutating the original Decision (it
+    still reads outcome=='HUMAN_REVIEW' -- see capability_service.
+    issue_capability_for_reviewed_decision's own docstring). Deliberately
+    a separate endpoint from the one above, not a branch inside it: the
+    two have genuinely different preconditions (ALLOW vs. an approved
+    review resolution), and keeping them visibly distinct in the API
+    surface matches keeping them visibly distinct in the service layer
+    (section 11's own instruction not to conflate a resolution with an
+    unrelated new ALLOW decision).
+
+    Gated on the same Permission.CAPABILITY_ISSUE as direct issuance,
+    deliberately not a new permission -- minting a capability is the
+    same privilege either way; who was allowed to APPROVE the review was
+    already checked when the resolution itself was created (Permission.
+    DECISIONS_RESOLVE, see resolution_service.resolve_decision)."""
+    try:
+        issued = capability_service.issue_capability_for_reviewed_decision(
+            db, organization.id, decision_id, audience=body.audience,
+            issued_by=body.issued_by,
+            ttl_seconds=body.ttl_seconds or capability_service.DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS,
+        )
+    except intent_service.DecisionNotFoundError:
+        raise HTTPException(status_code=404, detail="decision_not_found")
+    except intent_service.CrossOrganizationAccessError:
+        raise HTTPException(status_code=404, detail="decision_not_found")
+    except capability_service.DecisionNotHumanReviewError as e:
+        raise HTTPException(status_code=409, detail=f"decision_not_human_review: {e}")
+    except capability_service.ReviewNotResolvedError:
+        raise HTTPException(status_code=409, detail="review_not_resolved")
+    except capability_service.ReviewNotApprovedError as e:
+        raise HTTPException(status_code=409, detail=f"review_not_approved: {e}")
+    except capability_service.IntegrationIdentityNotActiveError as e:
+        raise HTTPException(status_code=409, detail=f"integration_identity_not_active: {e}")
+    except capability_service.EnforcementBindingNotActiveError as e:
+        raise HTTPException(status_code=409, detail=f"enforcement_binding_not_active: {e}")
+    except capability_service.OriginAgentNotActiveError as e:
+        raise HTTPException(status_code=409, detail=f"origin_agent_not_active: {e}")
+    except capability_service.CapabilityAlreadyIssuedError as e:
+        raise HTTPException(status_code=409, detail=f"capability_already_issued: {e}")
+    except capability_service.CapabilityAlreadyConsumedForDecisionError as e:
+        raise HTTPException(status_code=409, detail=f"capability_already_consumed_for_decision: {e}")
+    except capability_service.CapabilityExpiredNotRenewedError as e:
+        raise HTTPException(status_code=409, detail=f"capability_expired_not_renewed: {e}")
     return IssueCapabilityResponse(
         token=issued.token, capability_id=issued.capability_id, expires_at=issued.expires_at
     )

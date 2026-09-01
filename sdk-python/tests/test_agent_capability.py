@@ -30,6 +30,31 @@ def test_request_capability_passes_ttl_seconds_when_given(credentials_path, fake
     assert call["json"] == {"audience": "reference-adapter", "ttl_seconds": 60}
 
 
+def test_request_capability_from_review_calls_the_post_review_endpoint(credentials_path, fake_http_client):
+    agent = Agent(api_key="op-key", organization_id="org-1", credentials_path=credentials_path)
+    agent._client = fake_http_client
+    fake_http_client.queue_response({"token": "tok-abc", "capability_id": "cap-1", "expires_at": "2026-09-01T00:05:00Z"})
+
+    capability = agent.request_capability_from_review("decision-1", audience="reference-adapter")
+
+    call = fake_http_client.calls[-1]
+    assert call["path"] == "/v1/decisions/decision-1/capability-token/from-review"
+    assert call["admin_auth"] is True
+    assert call["json"] == {"audience": "reference-adapter"}
+    assert capability.token == "tok-abc"
+
+
+def test_request_capability_from_review_passes_ttl_seconds_when_given(credentials_path, fake_http_client):
+    agent = Agent(api_key="op-key", organization_id="org-1", credentials_path=credentials_path)
+    agent._client = fake_http_client
+    fake_http_client.queue_response({"token": "tok-abc", "capability_id": "cap-1", "expires_at": "2026-09-01T00:05:00Z"})
+
+    agent.request_capability_from_review("decision-1", audience="reference-adapter", ttl_seconds=60)
+
+    call = fake_http_client.calls[-1]
+    assert call["json"] == {"audience": "reference-adapter", "ttl_seconds": 60}
+
+
 def test_verify_capability_requires_api_key_not_bearer_token(credentials_path, fake_http_client):
     """Unlike every other administrative call, /v1/capability-tokens/verify
     accepts only the Operator Key, never a bearer_token -- this must be

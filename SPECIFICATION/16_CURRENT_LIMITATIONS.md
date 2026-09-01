@@ -91,6 +91,8 @@ Trusted Integration Phases 1–5 (see [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](5
 | SDK support for the Adapter path | `payreality.integration.Adapter.attest()` (Python SDK 0.5.0) — real, shipped, but undocumented in `SDK_ARCHITECTURE.md`/`SDK_REFERENCE.md` until this pass |
 | Capability Authorization for Adapter-mediated decisions | Trusted Integration Phase 5: issued for an ALLOW decision on this path, subject to a live re-check that the Trusted Connection and Runtime Connection are still active at issuance time. Not itself enforcement; see [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.9 |
 | Enforcement assurance declaration (`ADVISORY`/`CAPABILITY_REQUIRED`) | Trusted Integration Phase 5: a customer-declared label on a Runtime Connection, never independently verified by PayReality; see §50.16 |
+| Capability issuance idempotency | Trusted Integration Phase 5.1: `capability_tokens.decision_id` is database-unique — one Decision produces at most one currently usable Capability, ever, on either runtime path. See [14_SECURITY_MODEL.md](14_SECURITY_MODEL.md) §14.9 |
+| Post-review Capability Authorization | Trusted Integration Phase 5.1: `POST /v1/decisions/{id}/capability-token/from-review` issues a Capability for an approved `HUMAN_REVIEW` decision without ever rewriting the original Decision. See §14.9 |
 
 **NOT YET LIVE / FUTURE (named, not implied):**
 
@@ -102,6 +104,7 @@ Trusted Integration Phases 1–5 (see [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](5
 | Automatic discovery of external operations/schemas | No discovery mechanism of any kind; every Action Mapping is hand-authored and human-approved |
 | Mapping-drift monitoring | No automated detection if an external system's real operation shape diverges from an approved Action Mapping over time |
 | Full self-host / dedicated-instance productization | Not packaged as a SKU; see [50_TRUSTED_INTEGRATION_ARCHITECTURE.md](50_TRUSTED_INTEGRATION_ARCHITECTURE.md) §50.11 |
+| Renewal of a lapsed Capability | Trusted Integration Phase 5.1's own deliberate choice: if a Decision's one-and-only Capability expired without being consumed, no fresh one is auto-issued — `409 capability_expired_not_renewed`, fail closed. Getting a new Capability for that operation requires a new authorization event; no automatic renewal/retry mechanism was built, since authority conditions may have changed since the original Decision and this was judged the safer default over silent indefinite renewability. See [14_SECURITY_MODEL.md](14_SECURITY_MODEL.md) §14.9 |
 
 ## 16.8 Documentation debt disclosed by this pass, not fixed
 

@@ -79,6 +79,14 @@ Works identically whether `decision_id` names an Agent-direct decision (from `au
 
 Raises `ApiError` (HTTP 409) if the decision is not `ALLOW`, or, for an Adapter-mediated decision, if the underlying `IntegrationIdentity` (Trusted Connection) or `EnforcementBinding` (Runtime Connection) is no longer active, the server's live re-check at issuance time, not merely a check of the decision's historical provenance. Requesting and later consuming a Capability is not proof the downstream enterprise action executed; see `payreality.models.Capability`/`ConsumedCapability` below.
 
+Phase 5.1: also raises `ApiError` (HTTP 409) if this Decision already has a Capability — `capability_already_issued` (still valid), `capability_already_consumed_for_decision`, or `capability_expired_not_renewed`. One authority authorization lifecycle produces at most one currently usable Capability, ever; a repeated or concurrent call never mints a second one.
+
+### `agent.request_capability_from_review(decision_id, audience, ttl_seconds=None) -> payreality.models.Capability`
+
+Requests a Capability Authorization for a Decision whose `outcome` is `HUMAN_REVIEW` and which an authorized reviewer has since approved via `resolve_decision()` or the dashboard's review queue (`POST /v1/decisions/{id}/capability-token/from-review`, Trusted Integration Phase 5.1). Same authentication as `request_capability()` above. The original Decision is never rewritten — it still reports `outcome == "HUMAN_REVIEW"` forever; this authorizes continuation of that specific business operation based on the separate, linked review resolution.
+
+Raises `ApiError` (HTTP 409) `decision_not_human_review` if the Decision isn't `HUMAN_REVIEW`, `review_not_resolved` if no resolution exists yet, `review_not_approved` if the resolution is `"denied"` — plus every precondition and error code `request_capability()` already raises (live status re-checks, the three idempotency outcomes above), via the same underlying issuance path.
+
 ### `agent.verify_capability(token, audience, action, resource, constraints, environment=None, enforcement_binding_id=None, principal=None) -> payreality.models.ConsumedCapability`
 
 The customer-controlled enforcement checkpoint's own call: online verify-and-consume, atomic, single-use (`POST /v1/capability-tokens/verify`). Every argument after `token` must match exactly what the Capability was issued for, or this raises `ApiError` with a specific status: `401` expired or invalid signature, `403` wrong audience, `409` constraint/binding mismatch or already consumed, `404` unknown token.
@@ -196,4 +204,4 @@ Specifically, it is **not**: an authority signal (it never influences whether a 
 
 ## Testing note
 
-The SDK's own test suite (`sdk-python/tests/`, 97 tests, including `test_agent_capability.py` added alongside `request_capability()`/`verify_capability()`) mocks every HTTP call; none of it makes a real network request. "100% passing" describes every test in that suite passing, not 100% line coverage of the package, a distinction worth being precise about rather than implying a stronger guarantee than what was actually measured.
+The SDK's own test suite (`sdk-python/tests/`, 101 tests, including `test_agent_capability.py` added alongside `request_capability()`/`verify_capability()`, extended for `request_capability_from_review()` in Phase 5.1) mocks every HTTP call; none of it makes a real network request. "100% passing" describes every test in that suite passing, not 100% line coverage of the package, a distinction worth being precise about rather than implying a stronger guarantee than what was actually measured.
