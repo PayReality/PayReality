@@ -9,7 +9,6 @@ from app.db.session import get_db
 from app.dependencies import get_current_organization, require_permission
 from app.domain.capability import token as capability_token
 from app.domain.rbac.permissions import Permission
-from app.security import verify_operator_key
 from app.schemas.capability import (
     IssueCapabilityRequest,
     IssueCapabilityResponse,
@@ -127,21 +126,44 @@ def issue_capability_from_review(
 
 @router.post(
     "/capability-tokens/verify", response_model=VerifyCapabilityResponse,
-    dependencies=[Depends(verify_operator_key)],
+    dependencies=[Depends(require_permission(Permission.CAPABILITY_VERIFY))],
 )
-def verify_capability(body: VerifyCapabilityRequest, db: Session = Depends(get_db)):
-    """The reference enforcement adapter's own call (scripts/
-    reference_enforcement_adapter.py) -- gated on the Operator-Key-only
-    check, the same platform-admin-machine-caller primitive
-    process_due_schedules already uses, since a reference PEP is a
-    trusted internal/platform-level caller with no human RBAC session of
-    its own, not a human operator and not a signature-bearing identity
-    like an Agent or a FactSource."""
+def verify_capability(
+    body: VerifyCapabilityRequest,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    """Phase 6.1, Part B (Tenant Scoped Verification Identity): Phase 6's
+    own hostile review reconfirmed this endpoint had no per-request
+    tenant scope at all -- gated only on the platform-wide Operator Key,
+    with no way to express "this caller may only verify THIS
+    organisation's Capabilities." That was not itself a cross-tenant
+    bypass (token lookup is by the token's own unique hash, so no
+    caller's request can ever be confused for another's), but it was a
+    real, avoidable trust-boundary gap this section closes.
+
+    Now gated exactly like every other org-scoped Capability endpoint
+    (require_permission + get_current_organization) rather than the bare
+    Operator-Key-only check this used before -- reusing the existing
+    RBAC/ApiKey machinery, not a new identity concept: an organisation
+    creates a real, tenant-bound `ApiKey` with a role holding
+    Permission.CAPABILITY_VERIFY (the same way Governance Administrator
+    already holds CAPABILITY_ISSUE) and hands it to its own reference
+    PEP. The platform Operator Key still works here too (Milestone 2's
+    own model: it must now name its target organisation explicitly via
+    X-PayReality-Organization-Id) -- preserved deliberately, not
+    silently broken, and still narrowed by the same tenant check below,
+    not exempt from it.
+
+    `organization.id` is always passed through as
+    `expected_organization_id`, so a Capability signed for a different
+    organisation is rejected (CapabilityTenantMismatchError) regardless
+    of which of the two auth paths the caller used."""
     try:
         consumed = capability_service.verify_and_consume_capability(
             db, body.token, body.audience, body.action, body.resource, body.constraints,
             environment=body.environment, enforcement_binding_id=body.enforcement_binding_id,
-            principal=body.principal,
+            principal=body.principal, expected_organization_id=organization.id,
         )
     except capability_service.CapabilityTokenNotFoundError:
         logger.warning("capability_verification_result=NOT_FOUND")
@@ -149,6 +171,9 @@ def verify_capability(body: VerifyCapabilityRequest, db: Session = Depends(get_d
     except capability_token.CapabilityTokenExpiredError:
         logger.warning("capability_verification_result=EXPIRED")
         raise HTTPException(status_code=401, detail="capability_token_expired")
+    except capability_token.CapabilityTenantMismatchError:
+        logger.warning("capability_verification_result=TENANT_MISMATCH organization_id=%s", organization.id)
+        raise HTTPException(status_code=403, detail="capability_tenant_mismatch")
     except capability_token.CapabilityAudienceMismatchError:
         logger.warning("capability_verification_result=AUDIENCE_MISMATCH audience=%s", body.audience)
         raise HTTPException(status_code=403, detail="capability_audience_mismatch")
@@ -163,6 +188,14 @@ def verify_capability(body: VerifyCapabilityRequest, db: Session = Depends(get_d
         raise HTTPException(status_code=401, detail="invalid_capability_token")
     except capability_service.CapabilityTokenAlreadyConsumedError:
         raise HTTPException(status_code=409, detail="capability_token_already_consumed")
+    except capability_service.OriginAgentNotActiveError as e:
+        raise HTTPException(status_code=409, detail=f"origin_agent_not_active: {e}")
+    except capability_service.IntegrationIdentityNotActiveError as e:
+        raise HTTPException(status_code=409, detail=f"integration_identity_not_active: {e}")
+    except capability_service.EnforcementBindingNotActiveError as e:
+        raise HTTPException(status_code=409, detail=f"enforcement_binding_not_active: {e}")
+    except capability_service.TenantNotActiveError as e:
+        raise HTTPException(status_code=409, detail=f"tenant_not_active: {e}")
     return VerifyCapabilityResponse(
         capability_id=consumed.capability_id, decision_id=consumed.decision_id,
         resource=consumed.resource, constraints=consumed.constraints,

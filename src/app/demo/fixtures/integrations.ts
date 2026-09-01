@@ -36,11 +36,23 @@ export const demoMappings: ActionMapping[] = [
     organization_id: "org-demo",
     source_operation: "ChangeSupplierBankDetails",
     version: 1,
-    canonical_action: "vendor_payment",
+    // Trusted Integration Architecture, Phase 6.1 (Production
+    // Authorization Assurance, Part C): was "vendor_payment", the
+    // closest value the closed vocabulary had when this fixture was
+    // first written. Changing a supplier's bank details and actually
+    // paying a vendor are materially different authorities; this
+    // mapping now uses its own precise canonical action instead
+    // (compiler_v2.GENERALIZATION_PROOF_SCOPES). No amount_path/
+    // currency_path: this operation itself moves no money, so it never
+    // had a real payment.amount/payment.currency to bind -- the
+    // demo's own earlier "$84,000" framing was a narrative liberty this
+    // milestone's own precision goal corrects, not a real field of the
+    // reference business system's actual API.
+    canonical_action: "supplier_bank_details_change",
     resource_path: "supplier.id",
     fact_subject_path: "supplier.id",
-    amount_path: "payment.amount",
-    currency_path: "payment.currency",
+    amount_path: null,
+    currency_path: null,
     context_bindings: { department: "dept.name" },
     content_hash: "sha256:demo-mapping-hash-v1",
     source_schema_fingerprint: null,

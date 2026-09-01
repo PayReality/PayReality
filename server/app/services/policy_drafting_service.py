@@ -20,7 +20,7 @@ from app.db.models import Organization
 from app.domain.ai_policy_builder.provider import CandidateRuntimePolicy
 from app.domain.ai_provider.azure_foundry_provider import AzureAIFoundryProvider
 from app.domain.ai_provider.interface import AIProvider
-from app.domain.compiler_v2.compiler_v2 import FINANCIAL_VOCABULARY
+from app.domain.compiler_v2.compiler_v2 import GENERIC_VOCABULARY
 from app.domain.policy_drafting.schema import TOOL_NAME, build_system_prompt, build_tool_schema, parse_draft_result
 from app.services import agent_service, enterprise_system_service
 from app.services.ai_policy_builder_service import candidate_to_content
@@ -76,7 +76,7 @@ def _validate_entities(
     decided (section 47)."""
     unknown: list[UnknownEntity] = []
 
-    if candidate.action not in FINANCIAL_VOCABULARY.known_actions:
+    if candidate.action not in GENERIC_VOCABULARY.known_actions:
         unknown.append(UnknownEntity(field="action", value=candidate.action))
 
     principals = agent_service.list_principals(db, organization_id)

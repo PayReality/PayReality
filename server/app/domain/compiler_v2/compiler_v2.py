@@ -126,7 +126,24 @@ FINANCIAL_VOCABULARY = FinancialVocabulary()
 # KNOWN_SCOPES itself, so FinancialVocabulary (finance-only, by design,
 # for a deployment that wants tighter validation) is completely
 # unaffected by this addition.
-GENERALIZATION_PROOF_SCOPES = frozenset({"disable_user"})
+#
+# Trusted Integration Architecture, Phase 6.1 (Production Authorization
+# Assurance, Part C): `supplier_bank_details_change` added alongside
+# `disable_user`. Phase 6's reference scenario had used `vendor_payment`
+# for this exact real-world operation -- the closest value KNOWN_SCOPES
+# had, and the only option that milestone's own brief allowed ("do not
+# invent uncontrolled semantics purely for the demo"). Changing a
+# supplier's payout routing and actually paying a vendor are materially
+# different business authorities: a RuntimePolicy that authorizes one
+# must not be read as having authorized the other. Scope.action's own
+# exact-string matching (compiler_v2/rego_generator.py) already makes
+# this true structurally the moment the two are distinct strings -- no
+# inheritance or wildcard mechanism exists anywhere in this codebase for
+# one action to silently grant another's authority. See
+# PHASE_6_1_PRODUCTION_AUTHORIZATION_ASSURANCE.md for the full
+# reasoning and the migration of Phase 6's own reference scenario to
+# this precise action.
+GENERALIZATION_PROOF_SCOPES = frozenset({"disable_user", "supplier_bank_details_change"})
 
 
 @dataclass(frozen=True)

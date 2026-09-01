@@ -51,7 +51,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Agent, CapabilityToken, DecisionResolution, EnforcementBinding, Evidence, Intent, IntegrationIdentity
+from app.db.models import Agent, CapabilityToken, Decision, DecisionResolution, EnforcementBinding, Evidence, Intent, IntegrationIdentity, Organization
 from app.domain.capability import token as capability_token
 from app.services import intent_service, signing_key_service
 from app.services.intent_service import CrossOrganizationAccessError, DecisionNotFoundError
@@ -112,7 +112,26 @@ class OriginAgentNotActiveError(Exception):
     Agent from it is not possible without retiring the whole Binding
     (already covered by EnforcementBindingNotActiveError above) -- this
     is the other, equally real half: the Agent's OWN eligibility,
-    independent of any Binding."""
+    independent of any Binding.
+
+    Phase 6.1 (Production Authorization Assurance, Part A): this same
+    exception is now also raised at CONSUMPTION time, by
+    verify_and_consume_capability -- not only at issuance. See
+    _check_consumption_freshness's own docstring for the full reasoning
+    on why consumption needs this too, and for exactly what is (and is
+    deliberately not) re-checked there."""
+
+
+class TenantNotActiveError(Exception):
+    """Phase 6.1, Part A: the Organization that owns this Decision/
+    Capability is no longer 'active' (Milestone 3's own Organization
+    Lifecycle: active -> deactivated -> archived). Not checked before
+    this phase, at either issuance or consumption -- a real, small,
+    obviously-correct consistency gap this milestone closes on both
+    paths at once, using the exact same live-status-recheck discipline
+    already established for Agent/IntegrationIdentity/EnforcementBinding,
+    rather than leaving Organization as the one authoritative object
+    nothing here ever re-checked."""
 
 
 class CapabilityTokenNotFoundError(Exception):
@@ -293,6 +312,75 @@ def _raise_for_existing_capability(row: CapabilityToken) -> None:
     raise CapabilityAlreadyIssuedError(row.id, expires_at)
 
 
+def _check_agent_active(db: Session, decision_id: uuid.UUID, agent_id: uuid.UUID, *, moment: str) -> Agent:
+    """Shared by issuance AND (Phase 6.1) consumption -- see each
+    caller's own docstring for why the SAME check applies at both
+    moments. `moment` is only for the log line ("ISSUANCE"/
+    "CONSUMPTION"), so an operator reading logs can tell which one
+    rejected without needing two near-identical log statements."""
+    agent = db.get(Agent, agent_id)
+    if agent is None or agent.status != "active":
+        logger.warning(
+            "capability_%s_result=REJECTED_AGENT_NOT_ACTIVE decision_id=%s agent_id=%s status=%s",
+            moment, decision_id, agent_id, agent.status if agent else "not_found",
+        )
+        raise OriginAgentNotActiveError(
+            f"decision {decision_id}: agent_id={agent_id} status={agent.status if agent else 'not_found'!r}"
+        )
+    return agent
+
+
+def _check_integration_identity_active(
+    db: Session, decision_id: uuid.UUID, integration_identity_id: uuid.UUID, *, moment: str
+) -> IntegrationIdentity:
+    identity = db.get(IntegrationIdentity, integration_identity_id)
+    if identity is None or identity.status != "active":
+        logger.warning(
+            "capability_%s_result=REJECTED_IDENTITY_NOT_ACTIVE decision_id=%s "
+            "integration_identity_id=%s status=%s",
+            moment, decision_id, integration_identity_id, identity.status if identity else "not_found",
+        )
+        raise IntegrationIdentityNotActiveError(
+            f"decision {decision_id}: integration_identity_id={integration_identity_id} "
+            f"status={identity.status if identity else 'not_found'!r}"
+        )
+    return identity
+
+
+def _check_enforcement_binding_active(
+    db: Session, decision_id: uuid.UUID, enforcement_binding_id: uuid.UUID, *, moment: str
+) -> EnforcementBinding:
+    binding = db.get(EnforcementBinding, enforcement_binding_id)
+    if binding is None or binding.status != "active":
+        logger.warning(
+            "capability_%s_result=REJECTED_BINDING_NOT_ACTIVE decision_id=%s "
+            "enforcement_binding_id=%s status=%s",
+            moment, decision_id, enforcement_binding_id, binding.status if binding else "not_found",
+        )
+        raise EnforcementBindingNotActiveError(
+            f"decision {decision_id}: enforcement_binding_id={enforcement_binding_id} "
+            f"status={binding.status if binding else 'not_found'!r}"
+        )
+    return binding
+
+
+def _check_organization_active(db: Session, decision_id: uuid.UUID, organization_id: uuid.UUID, *, moment: str) -> Organization:
+    """Phase 6.1, Part A: added to both issuance and consumption at
+    once -- Organization was the one authoritative object neither path
+    ever re-checked before this milestone, an inconsistency once every
+    other revocable identity already had this exact recheck."""
+    org = db.get(Organization, organization_id)
+    if org is None or org.status != "active":
+        logger.warning(
+            "capability_%s_result=REJECTED_TENANT_NOT_ACTIVE decision_id=%s organization_id=%s status=%s",
+            moment, decision_id, organization_id, org.status if org else "not_found",
+        )
+        raise TenantNotActiveError(
+            f"decision {decision_id}: organization_id={organization_id} status={org.status if org else 'not_found'!r}"
+        )
+    return org
+
+
 def _issue_and_persist(
     db: Session,
     organization_id: uuid.UUID,
@@ -324,16 +412,9 @@ def _issue_and_persist(
     # section 6/40): applies to BOTH runtime paths, not only the
     # Adapter-mediated one -- the origin Agent's own eligibility can
     # change at any point after its Intent was accepted, independent of
-    # any Binding.
-    agent = db.get(Agent, intent.agent_id)
-    if agent is None or agent.status != "active":
-        logger.warning(
-            "capability_issuance_result=REJECTED_AGENT_NOT_ACTIVE decision_id=%s agent_id=%s status=%s",
-            decision_id, intent.agent_id, agent.status if agent else "not_found",
-        )
-        raise OriginAgentNotActiveError(
-            f"decision {decision_id}: agent_id={intent.agent_id} status={agent.status if agent else 'not_found'!r}"
-        )
+    # any Binding. Phase 6.1: Organization joins this same re-check.
+    _check_organization_active(db, decision_id, organization_id, moment="ISSUANCE")
+    agent = _check_agent_active(db, decision_id, intent.agent_id, moment="ISSUANCE")
 
     # Trusted Integration Architecture, Phase 5: the Phase-2 blanket
     # suppression (CapabilityNotAvailableForIntegrationIntentError) is
@@ -353,28 +434,8 @@ def _issue_and_persist(
     external_operation_id: str | None = None
 
     if intent.integration_identity_id is not None:
-        identity = db.get(IntegrationIdentity, intent.integration_identity_id)
-        if identity is None or identity.status != "active":
-            logger.warning(
-                "capability_issuance_result=REJECTED_IDENTITY_NOT_ACTIVE decision_id=%s "
-                "integration_identity_id=%s status=%s",
-                decision_id, intent.integration_identity_id, identity.status if identity else "not_found",
-            )
-            raise IntegrationIdentityNotActiveError(
-                f"decision {decision_id}: integration_identity_id={intent.integration_identity_id} "
-                f"status={identity.status if identity else 'not_found'!r}"
-            )
-        binding = db.get(EnforcementBinding, intent.enforcement_binding_id)
-        if binding is None or binding.status != "active":
-            logger.warning(
-                "capability_issuance_result=REJECTED_BINDING_NOT_ACTIVE decision_id=%s "
-                "enforcement_binding_id=%s status=%s",
-                decision_id, intent.enforcement_binding_id, binding.status if binding else "not_found",
-            )
-            raise EnforcementBindingNotActiveError(
-                f"decision {decision_id}: enforcement_binding_id={intent.enforcement_binding_id} "
-                f"status={binding.status if binding else 'not_found'!r}"
-            )
+        identity = _check_integration_identity_active(db, decision_id, intent.integration_identity_id, moment="ISSUANCE")
+        binding = _check_enforcement_binding_active(db, decision_id, intent.enforcement_binding_id, moment="ISSUANCE")
         integration_identity_id = identity.id
         enforcement_binding_id = binding.id
         integration_contract_version_id = intent.integration_contract_version_id
@@ -486,6 +547,66 @@ class ConsumedCapability:
     constraints: dict
 
 
+def _check_consumption_freshness(db: Session, row: CapabilityToken) -> None:
+    """Phase 6.1, Part A (Authorization Freshness at Capability
+    Consumption): Phase 6's own hostile review reconfirmed a real,
+    pre-existing gap -- an Agent could be issued a Capability while
+    active, then be revoked, and the already-signed Capability remained
+    consumable for the rest of its short TTL regardless (proven by
+    test_revoked_integration_identity_after_issuance_but_before_
+    verification_fails_closed, which documented this honestly rather
+    than asserting a guarantee that didn't exist). This function is
+    that guarantee, added deliberately, not assumed.
+
+    The freshness boundary, drawn precisely (section 6 of this
+    milestone's own brief): this re-checks whether the revocable
+    identities and bindings a Capability depends on are STILL eligible
+    right now, using the exact same "is a real, live authoritative
+    object active" checks issuance already performs -- reusing
+    _check_agent_active/_check_organization_active/
+    _check_integration_identity_active/_check_enforcement_binding_active
+    unchanged, not a copy. It deliberately does NOT re-run Runtime
+    Authority evaluation, re-check the original RuntimePolicy, or
+    re-verify Trusted Enterprise Facts: those determined whether the
+    action was authorized under the authority state that existed at
+    Decision time, a question this Capability's own signed payload
+    already answers immutably. Turning verification into a second full
+    policy evaluation would be a materially different, larger
+    architecture this milestone's own brief explicitly warns against
+    inventing without proof it's necessary -- no such proof exists here,
+    and the smaller, precise freshness check below is what section 6
+    calls "the smallest clear freshness boundary."
+
+    The Capability's own signed claims (decision_id, organization_id,
+    integration_identity_id, enforcement_binding_id, ...) are read
+    verbatim and never mutated -- this is live validation against
+    CURRENT state, not retroactive rewriting of what was true at
+    issuance (section 5's own distinction).
+
+    Ordering is the actual safety property here, not an implementation
+    detail: this function is called (see verify_and_consume_capability)
+    strictly BEFORE the atomic consume UPDATE, in the same, uncommitted
+    transaction. A failed check here returns via a raised exception
+    with no write to `consumed_at` having happened at all -- the token
+    remains exactly as usable (or not) as it was before this call, so a
+    caller who retries after the underlying state is restored (e.g. an
+    Agent un-suspended within the Capability's remaining TTL) gets a
+    fresh, correctly-current answer, not a token permanently burned by
+    a transient failure. This is a deliberate choice, stated explicitly
+    per this milestone's own instruction not to leave it ambiguous: a
+    freshness failure is never itself a consumption event."""
+    decision = db.get(Decision, row.decision_id)
+    intent = db.get(Intent, decision.intent_id)
+
+    _check_organization_active(db, row.decision_id, row.organization_id, moment="CONSUMPTION")
+    _check_agent_active(db, row.decision_id, intent.agent_id, moment="CONSUMPTION")
+
+    if row.integration_identity_id is not None:
+        _check_integration_identity_active(db, row.decision_id, row.integration_identity_id, moment="CONSUMPTION")
+    if row.enforcement_binding_id is not None:
+        _check_enforcement_binding_active(db, row.decision_id, row.enforcement_binding_id, moment="CONSUMPTION")
+
+
 def verify_and_consume_capability(
     db: Session,
     token: str,
@@ -496,14 +617,15 @@ def verify_and_consume_capability(
     environment: str | None = None,
     enforcement_binding_id: uuid.UUID | None = None,
     principal: str | None = None,
+    expected_organization_id: uuid.UUID | None = None,
 ) -> ConsumedCapability:
     """Online verify-and-consume (PAYREALITY_FUTURE_VISION.md Part C's
     own explicit scoping: this milestone is online verify-and-consume,
     not offline verification -- a future offline-verification design is
-    a distinct, NOT-built-here architecture). Signature/expiry/audience/
-    parameter checks happen inside domain/capability/token.py first;
-    this function's own job is looking up the persisted row by the
-    token's own hash and atomically marking it consumed, so two
+    a distinct, NOT-built-here architecture). Signature/expiry/tenant/
+    audience/parameter checks happen inside domain/capability/token.py
+    first; this function's own job is looking up the persisted row by
+    the token's own hash and atomically marking it consumed, so two
     concurrent presentations of the same token cannot both succeed.
 
     Trusted Integration Architecture, Phase 5: `environment`/
@@ -511,7 +633,12 @@ def verify_and_consume_capability(
     -- a PEP that knows which Runtime Connection, environment, or Agent
     it expects may pin any of them; a PEP that supplies none skips those
     checks entirely, exactly as every pre-Phase-5 Agent-direct verifier
-    already does."""
+    already does.
+
+    Phase 6.1, Part B: `expected_organization_id` is also optional here
+    for the same backward-compatible reason, but routers/capability_
+    tokens.py's own real, production-facing endpoint always supplies it
+    now -- see that router's own docstring for why."""
     envelope_hash = capability_token.token_hash(token)
     row = db.scalar(select(CapabilityToken).where(CapabilityToken.token_hash == envelope_hash))
     if row is None:
@@ -526,8 +653,18 @@ def verify_and_consume_capability(
         token, public_key_b64=public_key, expected_audience=audience, expected_action=action,
         expected_resource=resource, expected_constraints=constraints,
         expected_environment=environment, expected_enforcement_binding_id=enforcement_binding_id,
+        expected_organization_id=expected_organization_id,
         expected_principal=principal,
     )
+
+    # Phase 6.1, Part A (Authorization Freshness at Capability
+    # Consumption): re-checks live status BEFORE the atomic consume
+    # below, never after -- see _check_consumption_freshness's own
+    # docstring for the full reasoning, the freshness boundary this
+    # deliberately does and does not cover, and why the ordering here is
+    # itself the safety property (a failed freshness check must never
+    # mark this token consumed).
+    _check_consumption_freshness(db, row)
 
     # Atomic single-use consumption: an UPDATE ... WHERE consumed_at IS
     # NULL affects exactly one row the first time and zero rows on any

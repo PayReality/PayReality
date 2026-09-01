@@ -63,6 +63,19 @@ class CapabilityBindingMismatchError(Exception):
     already does)."""
 
 
+class CapabilityTenantMismatchError(Exception):
+    """Phase 6.1, Part B (Tenant Scoped Verification Identity): a
+    Capability signed for one organization does not verify against a
+    caller authenticated for a different one. Kept as its own distinct
+    exception, not folded into CapabilityBindingMismatchError, since
+    tenant scope is a different KIND of boundary (who may verify
+    anything at all here) from a Runtime-Connection/environment
+    preference (which specific capability a PEP expects) -- section 12's
+    own explicit hostile-test list treats them as separate cases, and
+    this codebase's own "meaningful classification, not one ambiguous
+    generic error" discipline (section 7) applies here too."""
+
+
 @dataclass(frozen=True)
 class CapabilityTokenPayload:
     """The full, security-relevant, signed assertion. Every field here
@@ -246,28 +259,42 @@ def verify_capability_token(
     expected_environment: str | None = None,
     expected_enforcement_binding_id: uuid.UUID | None = None,
     expected_principal: str | None = None,
+    expected_organization_id: uuid.UUID | None = None,
 ) -> VerifiedCapability:
-    """Signature, expiry, audience, exact-parameter, then binding, in
-    that order -- a signature check happens before anything else is
-    trusted (including the claimed audience/resource inside the payload
-    itself). Never raises for "this token happens to be for a different
-    decision" as a distinct case from any other mismatch: every failure
-    here is fail-closed rejection, not a spectrum of trust.
+    """Signature, expiry, tenant, audience, exact-parameter, then
+    binding, in that order -- a signature check happens before anything
+    else is trusted (including the claimed audience/resource inside the
+    payload itself). Never raises for "this token happens to be for a
+    different decision" as a distinct case from any other mismatch:
+    every failure here is fail-closed rejection, not a spectrum of
+    trust.
 
     `expected_principal`/`expected_environment`/`expected_enforcement_
-    binding_id` (section 6/9) are optional: a caller that does not
-    supply one skips that specific check, exactly the same backward-
-    compatible shape every other optional binding in this codebase
-    uses. A caller that DOES supply one is checked against the token's
-    own signed claim, never against live database state -- the token's
-    claim is what was actually true at issuance, and that is what a PEP
-    is verifying. `principal` was already part of the signed payload
-    before this phase (populated from the Decision's own Evidence); this
-    adds the ability to actually check it, closing a real gap a hostile
-    review of this milestone's own new bindings found: a PEP had no way
-    to assert "this capability must belong to this specific Agent" as
+    binding_id`/`expected_organization_id` (sections 6/9, and Phase 6.1
+    section 10) are optional: a caller that does not supply one skips
+    that specific check, exactly the same backward-compatible shape
+    every other optional binding in this codebase uses. A caller that
+    DOES supply one is checked against the token's own signed claim,
+    never against live database state -- the token's claim is what was
+    actually true at issuance, and that is what a PEP is verifying.
+    `principal` was already part of the signed payload before Phase
+    5.1 (populated from the Decision's own Evidence); this adds the
+    ability to actually check it, closing a real gap a hostile review
+    of that milestone's own new bindings found: a PEP had no way to
+    assert "this capability must belong to this specific Agent" as
     something distinct from whatever the resource/action/constraints
-    happen to imply."""
+    happen to imply.
+
+    `expected_organization_id` (Phase 6.1, Part B): checked before
+    audience, deliberately -- a caller authenticated for the wrong
+    tenant should learn nothing else about a token it has no business
+    inspecting, not even whether the audience it guessed happens to
+    match. The real, production-facing verification endpoint
+    (routers/capability_tokens.py) always supplies this now (it always
+    has a real, authenticated organization to check against); it stays
+    optional here purely so this function itself, and any other
+    internal caller with no organization context of its own, is
+    unaffected."""
     now = now or datetime.now(timezone.utc)
     payload, signature_b64, key_id = _decode_token(token)
 
@@ -279,6 +306,11 @@ def verify_capability_token(
     expires_at = datetime.fromisoformat(payload.expires_at)
     if now > expires_at:
         raise CapabilityTokenExpiredError(payload.expires_at)
+
+    if expected_organization_id is not None and payload.organization_id != str(expected_organization_id):
+        raise CapabilityTenantMismatchError(
+            f"token organization_id={payload.organization_id!r} expected={str(expected_organization_id)!r}"
+        )
 
     if payload.audience != expected_audience:
         raise CapabilityAudienceMismatchError(f"token audience={payload.audience!r} expected={expected_audience!r}")

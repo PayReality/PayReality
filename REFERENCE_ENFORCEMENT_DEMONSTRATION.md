@@ -47,15 +47,15 @@ cd server
 
 Every step above (1-8) is a real assertion in this file. Read the test names and docstrings in order; they narrate the scenario as they prove it.
 
-**The reference PEP script standalone**, against a real running backend (local `uvicorn app.main:app`, or any environment where you hold the Operator Key), once you already have a valid Capability token (obtained via `POST /v1/decisions/{id}/capability-token/from-review`, or the SDK's `agent.request_capability_from_review()`):
+**The reference PEP script standalone**, against a real running backend (local `uvicorn app.main:app`, or any environment where you hold a tenant-scoped `ApiKey` or the Operator Key -- see [PHASE_6_1_PRODUCTION_AUTHORIZATION_ASSURANCE.md](PHASE_6_1_PRODUCTION_AUTHORIZATION_ASSURANCE.md) Part B), once you already have a valid Capability token (obtained via `POST /v1/decisions/{id}/capability-token/from-review`, or the SDK's `agent.request_capability_from_review()`):
 
 ```
 PAYREALITY_API_URL=http://localhost:8000 \
-PAYREALITY_OPERATOR_KEY=<ADMIN_API_KEY> \
+PAYREALITY_API_KEY=<an ApiKey whose role holds Permission.CAPABILITY_VERIFY> \
 python scripts/reference_enforcement_adapter.py \
     --audience reference-pep \
     --token <the capability token> \
-    --action vendor_payment \
+    --action supplier_bank_details_change \
     --resource supplier:SUPPLIER_482 \
     --environment demo
 ```
@@ -109,8 +109,8 @@ Nothing here required a new representation. The existing Receipt (`Authorization
 ## Known, disclosed, structural limits (not regressions)
 
 - A `DecisionResolution` (approval) is not itself gated on the originating Agent/IntegrationIdentity still being active -- the fail-closed check happens at Capability *issuance* time, not at approval time. This is a deliberate design point, not an oversight: the approval is a human's authorization signal; issuance is where authority is actually granted, and that is where the live re-check belongs.
-- An Identity revoked *after* a Capability has already been issued, but *before* it is verified, does not retroactively invalidate that already-issued Capability -- verification checks the token's own signed claim (what was true at issuance), never live database state at verification time. This is Phase 5's own already-documented TOCTOU limit (`SPECIFICATION/14_SECURITY_MODEL.md` §14.8), unchanged and unregressed by this milestone. The Capability's own short TTL and single-use consumption bound this window.
-- `POST /v1/capability-tokens/verify` is gated by the platform Operator Key only, with no per-request tenant scoping -- by design, matching every other Operator-Key-authenticated endpoint (`RBAC.md`: "Operator key bypass — deliberately permanent"). This is not a cross-tenant bypass in practice: a Capability token can only ever match the one `CapabilityToken` row whose hash it corresponds to, so there is no confusion vector between tenants' tokens, only a shared trust boundary on who may call the verify endpoint at all -- an already-known, pre-existing platform characteristic, not something this milestone introduces or could reasonably close without redesigning the Operator Key model itself (explicitly out of scope).
+- **Fixed in Phase 6.1** (was disclosed here as a limit; see [PHASE_6_1_PRODUCTION_AUTHORIZATION_ASSURANCE.md](PHASE_6_1_PRODUCTION_AUTHORIZATION_ASSURANCE.md) Part A): an Identity revoked *after* a Capability has already been issued, but *before* it is verified, now correctly fails consumption closed -- `verify_and_consume_capability` re-checks live status immediately before consuming, not only the token's signed claim. The one remaining, narrower window: an identity revoked in the instant between that freshness check and the atomic consume itself is not additionally locked against with a database row lock -- an accepted, small, disclosed window, not solved with `SELECT ... FOR UPDATE` across Agent/Organization for this milestone (the "smallest defensible change" instruction this phase's own brief gave).
+- **Fixed in Phase 6.1** (was disclosed here as a limit; see Part B of the same document): `POST /v1/capability-tokens/verify` is no longer Operator-Key-only or tenant-unscoped -- it requires `Permission.CAPABILITY_VERIFY` and checks the caller's own resolved organisation against the Capability's signed tenant claim. This was never an exploitable cross-tenant bypass (a token can only ever match the one row its hash corresponds to), but it is now also a real, expressible, revocable tenant boundary, not merely "no confusion vector happened to exist."
 - Bypassing the reference PEP entirely -- reaching the real enterprise system through some other path that never calls it -- is not detectable or preventable by anything in this architecture. See "What this does not prove" above.
 
 ## Files

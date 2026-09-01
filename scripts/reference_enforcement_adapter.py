@@ -57,11 +57,11 @@ never a second, parallel shape.
 
 Usage:
     PAYREALITY_API_URL=http://localhost:8000 \
-    PAYREALITY_OPERATOR_KEY=<the ADMIN_API_KEY configured on the backend> \
+    PAYREALITY_API_KEY=<a tenant-bound ApiKey whose role holds Permission.CAPABILITY_VERIFY> \
     python scripts/reference_enforcement_adapter.py \
         --audience reference-pep \
         --token <capability token from POST /v1/decisions/{id}/capability-token/from-review> \
-        --action vendor_payment \
+        --action supplier_bank_details_change \
         --resource supplier:SUPPLIER_482 \
         --environment demo
 
@@ -69,6 +69,18 @@ Run the exact same command a second time with the exact same --token to
 observe the required negative demonstration: the second attempt is
 refused with "capability_token_already_consumed", and
 execute_downstream_operation() is never called for it.
+
+Phase 6.1 (Production Authorization Assurance, Part B): the verify
+endpoint is now tenant-scoped (routers/capability_tokens.py's own
+docstring has the full reasoning). This script's preferred auth is now
+a real, organisation-bound `ApiKey` (PAYREALITY_API_KEY, sent as a
+bearer token) -- the production-appropriate credential for a reference
+PEP, distinct from an Agent's own signing key and from an Adapter's
+IntegrationIdentity certificate. The platform Operator Key
+(PAYREALITY_OPERATOR_KEY) still works, exactly as it always has,
+provided PAYREALITY_ORGANIZATION_ID is also set -- Milestone 2's own
+model, that the Operator Key names no organisation by default. Set
+exactly one of the two credential pairs, never both.
 """
 
 import argparse
@@ -84,19 +96,35 @@ def _api_url() -> str:
     return os.environ.get("PAYREALITY_API_URL", "http://localhost:8000")
 
 
-def _operator_key() -> str:
-    key = os.environ.get("PAYREALITY_OPERATOR_KEY", "")
-    if not key:
-        print("PAYREALITY_OPERATOR_KEY must be set", file=sys.stderr)
-        sys.exit(2)
-    return key
+def _auth_headers() -> dict:
+    """Phase 6.1: prefers a real, tenant-bound ApiKey (bearer token) --
+    the production-appropriate credential for a reference PEP -- falling
+    back to the platform Operator Key (plus its now-required target
+    organisation) for backward compatibility and administrative/
+    development use. Exits loudly if neither is configured, rather than
+    silently sending an unauthenticated request."""
+    api_key = os.environ.get("PAYREALITY_API_KEY", "")
+    if api_key:
+        return {"Authorization": f"Bearer {api_key}"}
+
+    operator_key = os.environ.get("PAYREALITY_OPERATOR_KEY", "")
+    organization_id = os.environ.get("PAYREALITY_ORGANIZATION_ID", "")
+    if operator_key and organization_id:
+        return {"X-PayReality-Operator-Key": operator_key, "X-PayReality-Organization-Id": organization_id}
+
+    print(
+        "Set either PAYREALITY_API_KEY, or both PAYREALITY_OPERATOR_KEY and "
+        "PAYREALITY_ORGANIZATION_ID.",
+        file=sys.stderr,
+    )
+    sys.exit(2)
 
 
 def _post(path: str, body: dict) -> tuple[int, dict]:
     req = urllib.request.Request(
         f"{_api_url()}{path}",
         data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json", "X-PayReality-Operator-Key": _operator_key()},
+        headers={"Content-Type": "application/json", **_auth_headers()},
         method="POST",
     )
     try:

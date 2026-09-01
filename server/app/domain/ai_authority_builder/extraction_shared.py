@@ -23,7 +23,7 @@ from app.domain.ai_authority_builder.provider import (
     CandidateResource,
 )
 from app.domain.ai_policy_builder.provider import CandidateCondition, CandidateRuntimePolicy
-from app.domain.compiler_v2.compiler_v2 import FINANCIAL_VOCABULARY
+from app.domain.compiler_v2.compiler_v2 import GENERIC_VOCABULARY
 from app.domain.runtime_policy.conditions import Operator
 
 TOOL_NAME = "record_authority_graph"
@@ -105,12 +105,12 @@ match; do not invent a new action name."""
 
 
 def build_system_prompt() -> str:
-    known_actions = sorted(FINANCIAL_VOCABULARY.known_actions)
+    known_actions = sorted(GENERIC_VOCABULARY.known_actions)
     return SYSTEM_PROMPT_TEMPLATE.format(known_actions=", ".join(known_actions))
 
 
 def build_tool_schema() -> dict:
-    known_actions = sorted(FINANCIAL_VOCABULARY.known_actions)
+    known_actions = sorted(GENERIC_VOCABULARY.known_actions)
     known_operators = [o.value for o in Operator]
 
     cited = {

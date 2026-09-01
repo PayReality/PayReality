@@ -8,6 +8,7 @@ import {
   POLICY_VENDOR_ONBOARDING,
   POLICY_SYSTEM_ACCESS,
   POLICY_DISABLE_PRIVILEGED_ACCOUNT,
+  POLICY_SUPPLIER_BANK_DETAILS_REVIEW,
   MANDATE_AP_INVOICE_50K,
 } from "./policies";
 import { ES_SAP, ES_COUPA, ES_SERVICENOW } from "./enterpriseSystems";
@@ -121,11 +122,17 @@ const seeds: DemoDecisionSeed[] = [
     outcome: "HUMAN_REVIEW",
     reason: "Changing a supplier's payment routing details is routed to human review every time, regardless of amount. This is a deliberate control against a classic vendor-fraud pattern, not an exception being made for this request.",
     agent_id: AGENT_AP_INVOICE,
-    action: "vendor_payment",
+    // Trusted Integration Architecture, Phase 6.1 (Part C): was
+    // "vendor_payment" -- the closest value the closed vocabulary had
+    // when this fixture was first written. Changing bank details and
+    // actually paying a vendor are different authorities; no
+    // amount/currency either, since this operation itself moves no
+    // money (see fixtures/integrations.ts's own mapping fixture).
+    action: "supplier_bank_details_change",
     resource: `supplier:${SUPPLIERS[0]}`,
-    amount: 84000,
-    currency: "USD",
-    evaluated_mandates: [POLICY_VENDOR_PAYMENT_UNDER_50K, POLICY_INVOICE_REVIEW_OVER_50K],
+    amount: null,
+    currency: null,
+    evaluated_mandates: [POLICY_SUPPLIER_BANK_DETAILS_REVIEW],
     evaluated_mandate_ids: [],
     enterprise_system_id: ES_SAP,
     enterprise_system_name: "SAP S/4HANA",

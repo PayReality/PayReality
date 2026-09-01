@@ -91,6 +91,17 @@ class Permission(str, Enum):
     # authorize the underlying action to actually execute.
     CAPABILITY_ISSUE = "capability.issue"
 
+    # Phase 6.1 (Production Authorization Assurance, Part B): verifying
+    # and consuming a Capability is a distinct privilege from ISSUING
+    # one -- the party that approved/issued the authority is not
+    # necessarily the same party operating the downstream enforcement
+    # checkpoint that redeems it. Deliberately its own permission, not
+    # folded into CAPABILITY_ISSUE, so an organisation can hand a
+    # narrowly-scoped credential to its own reference PEP (via a real,
+    # tenant-bound ApiKey) without that credential also being able to
+    # mint new Capabilities.
+    CAPABILITY_VERIFY = "capability.verify"
+
     # Trusted Integration Architecture, Phase 1 (Founder Decisions &
     # Design Closure Addendum, RBAC decision): deliberately NOT reusing
     # RUNTIME_POLICY_PUBLISH -- mapping-semantic governance (does this
@@ -142,6 +153,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.AGENT_VIEW,
             Permission.FACTS_MANAGE,
             Permission.CAPABILITY_ISSUE,
+            Permission.CAPABILITY_VERIFY,
             Permission.INTEGRATION_CONTRACT_MANAGE,
             Permission.INTEGRATION_CONTRACT_PUBLISH,
         }

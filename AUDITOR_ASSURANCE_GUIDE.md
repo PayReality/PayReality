@@ -36,6 +36,14 @@ No, by construction, as of Trusted Integration Phase 5.1: `capability_tokens.dec
 
 A `HUMAN_REVIEW` Decision's later approval authorizes a Capability without ever rewriting the original Decision (see "What Decision occurred?" above): the Authorization Receipt for such an operation shows all three facts side by side — the original runtime Decision (`Needs human approval`), the review resolution (`Approved`, by whom, when), and the Capability's own issuance/consumption state — never a Decision retroactively relabeled `Allowed`.
 
+## Can a revoked Agent or Adapter still redeem an already-issued Capability?
+
+Not since Trusted Integration Phase 6.1. Before that phase, a Capability issued while its Agent, IntegrationIdentity, or Runtime Connection were active remained consumable for the rest of its short TTL even if one of them was revoked in between — a real, honestly-disclosed limit, not a hidden one. Consumption now re-checks the same live status issuance already checked, immediately before the token is marked used; a failed check never marks it consumed, so the underlying authorization is neither destroyed nor granted by the failed attempt itself. Only if the revoked object is restored before the Capability expires can a later attempt succeed — the check is against current state every time, never a one-way lock.
+
+## Can a Capability issued for one organisation be verified by another?
+
+No. Verification now requires the caller to authenticate as a specific, real organisation (a tenant-bound `ApiKey`, or the platform Operator Key naming its target organisation explicitly) and checks that organisation against the Capability's own signed claim before anything else. This closes a real trust-boundary gap Phase 6 disclosed honestly: the verify endpoint previously had no tenant concept at all. It was never an exploitable cross-tenant bypass even before this — a Capability can only ever be found by its own unique token hash — but it is now also a real, revocable, auditable tenant scope, not merely an absence of confusion.
+
 ## Which versions existed at the time?
 
 The policy version, and — for an Adapter-mediated Decision — the exact Action Mapping version, Trusted Connection, and Runtime Connection scope, all pinned to what they were at submission. None of these are rewritten later: retiring a mapping, rotating a Trusted Connection's certificate, or resolving a `HUMAN_REVIEW` decision never touches this historical record.

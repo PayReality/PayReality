@@ -16,6 +16,11 @@ export const DEMO_ACTIONS = [
   // itself, that it isn't a payments product -- no amount/currency
   // anywhere in this policy or the decision it produces.
   "disable_user",
+  // Trusted Integration Architecture, Phase 6.1 (Part C): its own
+  // precise action, distinct from vendor_payment -- changing a
+  // supplier's bank details and actually paying a vendor are different
+  // authorities. Was represented as "vendor_payment" before this phase.
+  "supplier_bank_details_change",
 ] as const;
 
 export const POLICY_VENDOR_PAYMENT_UNDER_50K = "vendor-payment-under-50k";
@@ -26,6 +31,7 @@ export const POLICY_SYSTEM_ACCESS = "system-access-provisioning";
 export const POLICY_CONTRACT_RENEWAL = "contract-auto-renewal-restriction";
 export const POLICY_LEGACY_VENDOR_PAYMENT = "legacy-vendor-payment-rule";
 export const POLICY_DISABLE_PRIVILEGED_ACCOUNT = "disable-privileged-production-account";
+export const POLICY_SUPPLIER_BANK_DETAILS_REVIEW = "supplier-bank-details-change-review";
 
 export const AUTHORITY_CFO_DELEGATION = "authority-cfo-treasury-delegation";
 export const MANDATE_AP_INVOICE_50K = "mandate-ap-invoice-under-50k";
@@ -77,6 +83,37 @@ export const demoPolicies: RuntimePolicy[] = [
     audit: { last_reviewed_by: "Priya Chandrasekaran", last_reviewed_at: agoMs(14 * DAY) },
     bundle_id: "bundle-invoice-review-over-50k-v2",
     bundle_hash: "sha256:1b7e9d2f4a6c8035be29f1a0d3c7b6294",
+    created_at: agoMs(60 * DAY),
+  },
+  {
+    // Trusted Integration Architecture, Phase 6.1 (Part C): the
+    // reference scenario's own precise authority -- unconditional
+    // (no amount condition at all, unlike the vendor-payment policies
+    // above, since this action carries no amount/currency), matching
+    // the decision's own reason text ("routed to human review every
+    // time, regardless of amount"): a deliberate control, not a
+    // fallback for an unmatched action.
+    policy_key: POLICY_SUPPLIER_BANK_DETAILS_REVIEW,
+    version: 1,
+    status: "active",
+    name: "Supplier bank details change — always reviewed",
+    description: "Routes any supplier bank-details change to human review, regardless of amount — a deliberate control against vendor-fraud (payment redirection), not an auto-approved administrative edit.",
+    scope: { principal: PRINCIPAL_OKONKWO, action: "supplier_bank_details_change", agent: AGENT_AP_INVOICE, resource: null },
+    conditions: [],
+    effect: "require_human_review",
+    constraints: {
+      delegated_by: "Priya Chandrasekaran, CFO",
+      expires: null,
+      evidence_required: true,
+      risk_level: "HIGH",
+      authority_id: AUTHORITY_CFO_DELEGATION,
+      mandate_id: null,
+      enterprise_system_id: ES_SAP,
+    },
+    metadata: { owner: "David Okonkwo", created_by: "Priya Chandrasekaran", tags: ["finance", "accounts-payable", "review", "fraud-control"] },
+    audit: { last_reviewed_by: "Priya Chandrasekaran", last_reviewed_at: agoMs(14 * DAY) },
+    bundle_id: "bundle-supplier-bank-details-change-review-v1",
+    bundle_hash: "sha256:2c8f0e3a5b7d9146cf30a2b1e4d8c7305",
     created_at: agoMs(60 * DAY),
   },
   {

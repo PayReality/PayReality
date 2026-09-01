@@ -20,12 +20,14 @@ cross-tenant, expired-no-renewal) -- those are proven there and remain
 in force, referenced rather than duplicated wholesale. What is new here:
 the full scenario stitched into one real, runnable sequence matching
 this milestone's own recommended reference scenario (a supplier
-bank-details change -- canonically the same `vendor_payment` action every
-earlier milestone's own demo fixture already uses for this identical
-scenario (the closed action vocabulary, scope_vocabulary.py's
-KNOWN_SCOPES, has no separate "change bank details" action of its own),
-but with no amount/currency at all, proving the constraints model
-doesn't secretly require them), the reference PEP script's own
+bank-details change, mapped since Phase 6.1 (Part C) to its own precise
+canonical action, `supplier_bank_details_change` -- Phase 6 originally
+used `vendor_payment` here, the closest value the closed vocabulary had
+at the time; see compiler_v2.GENERALIZATION_PROOF_SCOPES and
+PHASE_6_1_PRODUCTION_AUTHORIZATION_ASSURANCE.md for why that was
+deliberately narrowed. No amount/currency at all, proving the
+constraints model doesn't secretly require them), the reference PEP
+script's own
 execute_downstream_operation() actually being invoked (not mocked away)
 after real consumption, and the specific negative demonstrations
 section 5 of this milestone's brief requires: replaying a consumed
@@ -72,7 +74,10 @@ _spec = importlib.util.spec_from_file_location("reference_enforcement_adapter_e2
 reference_pep = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(reference_pep)
 
-ACTION = "vendor_payment"  # the only real, closed-vocabulary action a supplier bank-details change canonically maps to -- see scope_vocabulary.py's KNOWN_SCOPES; the same mapping the existing demo fixture (DECISION_HERO_ADAPTER_REVIEW) already uses for this identical scenario
+ACTION = "supplier_bank_details_change"  # Trusted Integration Architecture, Phase 6.1, Part C: Phase 6 originally used
+# "vendor_payment" here -- the closest value the closed vocabulary had at the time, and the only option that
+# milestone's own brief allowed. Changing a supplier's bank details and actually paying a vendor are materially
+# different authorities; compiler_v2.GENERALIZATION_PROOF_SCOPES now has a precise action for this instead.
 RESOURCE = "supplier:SUPPLIER_482"
 SOURCE_OPERATION = "ChangeSupplierBankDetails"
 AUDIENCE = "reference-pep"
@@ -440,14 +445,19 @@ def test_revoked_agent_after_approval_but_before_issuance_fails_closed(db, opa_u
 
 def test_revoked_integration_identity_after_issuance_but_before_verification_fails_closed(db, opa_url):
     """Section 13's other ordering: revoked AFTER issuance, before
-    verification. Capability issuance itself only re-checks live status
-    at the moment of issuance (Phase 5's own documented TOCTOU limit,
-    SPECIFICATION/14_SECURITY_MODEL.md sS14.8) -- an already-issued,
-    unexpired token still verifies successfully even if the identity is
-    revoked a moment later, since verify_and_consume_capability checks
-    the token's own signed claim, not live database state. This test
-    documents that honestly rather than asserting a guarantee that
-    doesn't exist."""
+    verification.
+
+    Trusted Integration Architecture, Phase 6.1 (Production Authorization
+    Assurance, Part A): this used to be honestly documented as NOT
+    blocked -- Phase 5's own TOCTOU limit, verification checking only the
+    token's signed claim, never live database state. Phase 6.1 closes
+    this specific gap deliberately: verify_and_consume_capability now
+    re-checks the relevant live identities immediately before consuming,
+    so a Capability issued while an IntegrationIdentity was active is
+    correctly refused once that identity is suspended, even though the
+    token itself remains cryptographically valid and unexpired. See
+    capability_service._check_consumption_freshness's own docstring for
+    the full freshness-boundary reasoning."""
     org = _org(db)
     identity, _cv, binding, _agent, _intent, decision = _scenario(db, org.id, opa_url)
     resolution_service.resolve_decision(db, decision.id, org.id, resolution="approved", resolved_by="governance-admin@example.com")
@@ -455,9 +465,20 @@ def test_revoked_integration_identity_after_issuance_but_before_verification_fai
 
     identity_svc.suspend_integration_identity(db, identity.id, org.id)
 
-    # Documented, not a regression: verification is against the token's
-    # own signed claim (what was true at issuance), never a fresh
-    # database lookup of current identity status.
+    with pytest.raises(capability_service.IntegrationIdentityNotActiveError):
+        capability_service.verify_and_consume_capability(
+            db, issued.token, AUDIENCE, ACTION, RESOURCE, {"environment": binding.environment},
+            environment=binding.environment,
+        )
+
+    # The failed freshness check must not have consumed the token --
+    # section 7's own explicit requirement, and section 6 of Phase 6.1's
+    # own brief: restoring the identity should let a subsequent, still-
+    # unexpired attempt succeed.
+    row = db.get(CapabilityToken, issued.capability_id)
+    assert row.consumed_at is None
+
+    identity_svc.activate_integration_identity(db, identity.id, org.id)
     consumed = capability_service.verify_and_consume_capability(
         db, issued.token, AUDIENCE, ACTION, RESOURCE, {"environment": binding.environment},
         environment=binding.environment,

@@ -130,7 +130,12 @@ describe("AuthorizationReceiptPage integration provenance (mocked Adapter-mediat
     expect(container.textContent).toContain("SAP Procurement Adapter trusted connection");
     expect(container.textContent).toContain("SAP S/4HANA");
     expect(container.textContent).toContain("ChangeSupplierBankDetails");
-    expect(container.textContent).toContain("Vendor Payment");
+    // Trusted Integration Architecture, Phase 6.1 (Part C): the demo's
+    // own SAP mapping fixture (fixtures/integrations.ts) now maps
+    // ChangeSupplierBankDetails to its own precise canonical action,
+    // supplier_bank_details_change, not vendor_payment -- the whole
+    // point of this part of that milestone.
+    expect(container.textContent).toContain("Supplier Bank Details Change");
     expect(container.textContent).toContain("OP-92819");
     expect(container.textContent).not.toMatch(/action (actually )?executed/i);
 

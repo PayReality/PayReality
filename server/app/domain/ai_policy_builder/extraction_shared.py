@@ -17,7 +17,7 @@ hoped-for prompt outcome.
 """
 
 from app.domain.ai_policy_builder.provider import CandidateCondition, CandidateRuntimePolicy
-from app.domain.compiler_v2.compiler_v2 import FINANCIAL_VOCABULARY
+from app.domain.compiler_v2.compiler_v2 import GENERIC_VOCABULARY
 from app.domain.runtime_policy.conditions import Operator
 
 TOOL_NAME = "record_candidate_runtime_policies"
@@ -58,7 +58,7 @@ that candidate entirely rather than forcing a mismatch."""
 
 
 def build_system_prompt() -> str:
-    known_actions = sorted(FINANCIAL_VOCABULARY.known_actions)
+    known_actions = sorted(GENERIC_VOCABULARY.known_actions)
     return SYSTEM_PROMPT_TEMPLATE.format(known_actions=", ".join(known_actions))
 
 
@@ -68,7 +68,7 @@ def build_tool_schema() -> dict:
     "input_schema" field; the Foundry provider passes it as-is to
     generate_structured's json_schema parameter. Matches
     domain/ai_authority_builder/extraction_shared.py's identical split."""
-    known_actions = sorted(FINANCIAL_VOCABULARY.known_actions)
+    known_actions = sorted(GENERIC_VOCABULARY.known_actions)
     known_operators = [o.value for o in Operator]
     candidate_item = {
         "type": "object",

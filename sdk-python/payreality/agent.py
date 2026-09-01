@@ -523,23 +523,23 @@ class Agent:
         skip those specific checks, exactly as this method already
         worked for an Agent-direct Capability before this phase.
 
-        Unlike every other administrative call in this class, this
-        endpoint accepts only the platform Operator Key (`api_key`), not
-        a `bearer_token` -- it is a trusted internal/platform-level
-        caller check (a reference enforcement checkpoint has no human
-        RBAC session of its own), not `admin_auth`'s usual bearer-token-
-        preferred logic. Raises `ConfigurationError` if `api_key` was
-        never configured on this `Agent`.
+        Trusted Integration Architecture, Phase 6.1 (Production
+        Authorization Assurance, Part B): this call is now tenant-scoped,
+        like every other administrative call in this class --
+        `admin_auth=True`'s own preference order (a `bearer_token`, a
+        real organisation-bound API key with Permission.CAPABILITY_VERIFY
+        on its role, before the platform Operator Key). Before this
+        phase, this method accepted only the Operator Key; a reference
+        enforcement checkpoint should now hold its own scoped credential
+        instead, so a Capability belonging to a different organisation
+        is rejected server-side (CapabilityTenantMismatchError) rather
+        than this SDK trusting whatever organisation it happened to be
+        configured for. The Operator Key still works here, exactly as
+        `admin_auth=True` already documents.
 
         A successful return proves a valid Capability was presented and
         consumed exactly once, at this moment. It does not prove the
         downstream enterprise action that follows actually executed."""
-        if not self._config.api_key:
-            raise ConfigurationError(
-                "verify_capability requires api_key (the Operator Key) -- unlike other administrative "
-                "calls in this class, this endpoint does not accept a bearer_token. "
-                "Pass Agent(api_key=...)."
-            )
         body: dict[str, Any] = {
             "token": token, "audience": audience, "action": action, "resource": resource,
             "constraints": constraints,
@@ -551,8 +551,7 @@ class Agent:
         if principal is not None:
             body["principal"] = principal
         response = self._client.request(
-            "POST", "/v1/capability-tokens/verify", json=body,
-            headers={"X-PayReality-Operator-Key": self._config.api_key},
+            "POST", "/v1/capability-tokens/verify", json=body, admin_auth=True,
         )
         return ConsumedCapability(
             capability_id=response["capability_id"], decision_id=response["decision_id"],

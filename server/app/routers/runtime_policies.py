@@ -9,7 +9,7 @@ from app.config import settings
 from app.db.models import Organization, User
 from app.db.session import get_db
 from app.dependencies import get_current_organization, get_current_user_if_session, require_permission
-from app.domain.compiler_v2.compiler_v2 import FINANCIAL_VOCABULARY
+from app.domain.compiler_v2.compiler_v2 import GENERIC_VOCABULARY
 from app.domain.runtime_policy.conditions import Condition, ConditionSet, Operator
 from app.domain.runtime_policy.constraints import Constraints, RiskLevel
 from app.domain.runtime_policy.effects import Effect
@@ -148,10 +148,24 @@ def get_vocabulary():
     (`context.<key>`), which is organisation-defined and cannot be
     enumerated here, but a builder can still label a field starting
     with this prefix as coming from a trusted enterprise source rather
-    than the Intent itself."""
+    than the Intent itself.
+
+    Trusted Integration Architecture, Phase 6.1 (Part C): switched from
+    FINANCIAL_VOCABULARY to GENERIC_VOCABULARY -- a real, pre-existing
+    gap this milestone's own action-precision work surfaced: `compile_
+    bundle`'s actual runtime default (compiler_v2.py) already validates
+    against GENERIC_VOCABULARY, so a non-financial action already
+    compiles and deploys correctly, but this endpoint (and therefore the
+    manual builder's own action dropdown) still only ever offered the
+    narrower financial-only set -- meaning `disable_user`, and now
+    `supplier_bank_details_change`, could be authored via a direct API
+    call but never through the product's own authoring surface.
+    `known_intent_fields` is identical between the two vocabularies
+    (confirmed by reading both class definitions), so this changes only
+    which actions are offered, nothing else."""
     return {
-        "actions": sorted(FINANCIAL_VOCABULARY.known_actions),
-        "condition_fields": sorted(FINANCIAL_VOCABULARY.known_intent_fields),
+        "actions": sorted(GENERIC_VOCABULARY.known_actions),
+        "condition_fields": sorted(GENERIC_VOCABULARY.known_intent_fields),
         "trusted_context_prefix": "context.",
     }
 

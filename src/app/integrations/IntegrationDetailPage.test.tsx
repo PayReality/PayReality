@@ -62,7 +62,10 @@ describe("IntegrationDetailPage (demo mode)", () => {
 
     expect(container.textContent).toContain("SAP S/4HANA");
     expect(container.textContent).toContain("ChangeSupplierBankDetails");
-    expect(container.textContent).toContain("Vendor Payment");
+    // Trusted Integration Architecture, Phase 6.1 (Part C): the seeded
+    // mapping's own canonical action, not vendor_payment -- see
+    // fixtures/integrations.ts's own comment on why.
+    expect(container.textContent).toContain("Supplier Bank Details Change");
     expect(container.textContent).not.toMatch(/IntegrationContractVersion|EnforcementBinding|canonical fingerprint/i);
   });
 
