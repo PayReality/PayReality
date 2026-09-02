@@ -60,7 +60,7 @@ class EmailAlreadyRegisteredError(Exception):
 
 
 def create_organization(
-    db: Session, name: str, owner_email: str, owner_name: str
+    db: Session, name: str, owner_email: str, owner_name: str, environment: str = "production"
 ) -> tuple[Organization, User, str]:
     """Mirrors `ensure_owner_bootstrapped`'s own Owner-creation shape
     (a temporary, unrecoverable password; `must_reset_password=True`;
@@ -69,8 +69,15 @@ def create_organization(
     than a boot-time side effect that only ever runs once. Returns the
     raw temporary password -- shown to the platform admin exactly once,
     the same discipline `generate_api_key`/`create_user` already hold
-    themselves to for a newly minted secret."""
-    organization = Organization(name=name)
+    themselves to for a newly minted secret.
+
+    `environment` (Developer Distribution & Sandbox v1): defaults to
+    "production" so every existing caller of this function is
+    unaffected. `routers/sandbox.py`'s own provisioning endpoint is the
+    only caller that ever passes "sandbox" -- see Organization.environment's
+    own docstring in db/models.py for what this label does and does not
+    mean (never a security boundary of its own)."""
+    organization = Organization(name=name, environment=environment)
     db.add(organization)
     db.flush()
 
@@ -255,3 +262,59 @@ def accept_invitation(db: Session, raw_token: str, name: str, password: str) -> 
     db.commit()
     db.refresh(user)
     return user
+
+
+# --- Developer Distribution & Sandbox v1: sandbox lifecycle -----------------
+
+
+def find_sandbox_organization_by_owner_email(db: Session, owner_email: str) -> Organization | None:
+    """Enforces "one sandbox per developer" at provisioning time
+    (`routers/sandbox.py`): a non-archived sandbox Organization whose
+    Owner already has this email means a new one is refused, not
+    silently created alongside it. Archived sandboxes don't count --
+    someone whose earlier sandbox was cleaned up may request a new one."""
+    return db.scalar(
+        select(Organization)
+        .join(User, User.organization_id == Organization.id)
+        .where(
+            Organization.environment == "sandbox",
+            Organization.status != "archived",
+            User.email == owner_email,
+            User.role == Role.OWNER.value,
+        )
+    )
+
+
+def list_stale_sandbox_organizations(db: Session, older_than_days: int) -> list[Organization]:
+    """Sandbox Organizations, still active, created more than
+    `older_than_days` ago -- the candidate set `scripts/
+    cleanup_stale_sandboxes.py` archives. Never includes a
+    'production' Organization regardless of age; never includes one
+    already deactivated/archived (nothing to do)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+    return list(
+        db.scalars(
+            select(Organization).where(
+                Organization.environment == "sandbox",
+                Organization.status == "active",
+                Organization.created_at < cutoff,
+            )
+        )
+    )
+
+
+def archive_stale_sandbox_organizations(
+    db: Session, older_than_days: int, actor: str = "sandbox-cleanup"
+) -> list[Organization]:
+    """Runs the real, unmodified deactivate-then-archive sequence
+    (`deactivate_organization` / `archive_organization` above) against
+    every stale sandbox found by `list_stale_sandbox_organizations` --
+    no shortcut, no direct status write. Returns the archived
+    Organizations. Not wired into any scheduler by this milestone; see
+    `scripts/cleanup_stale_sandboxes.py` for the operational entry
+    point this function is meant to be called from."""
+    archived = []
+    for organization in list_stale_sandbox_organizations(db, older_than_days):
+        deactivate_organization(db, organization.id, actor=actor)
+        archived.append(archive_organization(db, organization.id, actor=actor))
+    return archived

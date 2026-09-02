@@ -33,6 +33,7 @@ from app.schemas.runtime_policy import (
     ScopeSchema,
 )
 from app.services import runtime_policy_service as svc
+from app.services import sandbox_limits
 from app.services.runtime_policy_service import (
     BundleChangedSinceCompileError,
     CompilationRequiredError,
@@ -244,7 +245,10 @@ def create_policy(
     policy = _build_runtime_policy(
         body, policy_id=str(uuid.uuid4()), version=1, status=PolicyStatus.DRAFT, audit=audit
     )
-    row = svc.create_policy(db, policy, organization.id)
+    try:
+        row = svc.create_policy(db, policy, organization.id)
+    except sandbox_limits.SandboxLimitExceededError as e:
+        raise HTTPException(status_code=403, detail=f"sandbox_limit_exceeded:{e.resource}")
     return _record_to_response(row)
 
 

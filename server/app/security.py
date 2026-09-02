@@ -45,6 +45,26 @@ def _client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def check_rate_limit(key: str, log_store: dict[str, deque], window_seconds: float, max_requests: int) -> bool:
+    """The same sliding-window check `observability_middleware` applies
+    to every request, extracted so a specific endpoint can apply a
+    SECOND, stricter limit on top of it against its own dedicated
+    `log_store` (never sharing `_request_log`, so a burst against one
+    endpoint can't exhaust another's budget). Returns True if the
+    request is allowed (and records it); False if the limit is
+    exceeded (nothing recorded for the rejected attempt). In-process
+    only, the same disclosed limitation `_request_log` itself already
+    has (resets on restart, not shared across workers/instances)."""
+    now = time.monotonic()
+    log = log_store[key]
+    while log and now - log[0] > window_seconds:
+        log.popleft()
+    if len(log) >= max_requests:
+        return False
+    log.append(now)
+    return True
+
+
 async def observability_middleware(request: Request, call_next):
     """Rate limiting, request id, access logging, security headers, and the
     last-resort 500 handler, in one middleware.
@@ -59,13 +79,8 @@ async def observability_middleware(request: Request, call_next):
     reliable version of the same behavior.
     """
     key = _client_key(request)
-    now = time.monotonic()
-    log = _request_log[key]
-    while log and now - log[0] > _RATE_LIMIT_WINDOW_SECONDS:
-        log.popleft()
-    if len(log) >= _RATE_LIMIT_MAX_REQUESTS:
+    if not check_rate_limit(key, _request_log, _RATE_LIMIT_WINDOW_SECONDS, _RATE_LIMIT_MAX_REQUESTS):
         return JSONResponse(status_code=429, content={"detail": "rate_limit_exceeded"})
-    log.append(now)
 
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
     start = time.monotonic()

@@ -50,6 +50,7 @@ ALLOWED_UNGATED = {
     ("GET", "/v1/ai-authority-builder/status"): "returns only a global ai_enabled boolean, no organization-scoped data",
     ("POST", "/v1/facts"): "authenticated by the fact's own Ed25519 signature against its registered FactSource, the same machine-to-machine model as POST /v1/intents -- deliberately never trusts the requesting agent's own RBAC role or session to self-attest an external fact",
     ("POST", "/v1/integration-runtime/intents"): "gated by verify_integration_identity_signature -- the Trusted Integration Architecture Phase 2 Adapter-mediated runtime path, authenticated by an Integration Identity's own Ed25519 request signature, the same machine-to-machine model as POST /v1/intents, deliberately not a human RBAC role",
+    ("POST", "/v1/sandbox/organizations"): "deliberately public by design (Developer Distribution & Sandbox v1) -- the entire point is letting a brand-new external developer, who holds no credential of any kind yet, obtain one. Never accepts or exposes the Operator Key; always forces environment='sandbox' (see routers/sandbox.py); protected instead by a dedicated per-IP rate limit stricter than the general one, a one-sandbox-per-email cap, and sandbox-only resource caps on everything created afterward -- not by an RBAC permission, since none can apply before any credential exists.",
 }
 
 

@@ -5,6 +5,7 @@ import { RequirePermission } from "../auth/RequireAuth";
 import { describeApiError } from "../live/format";
 import { getTheme, setTheme, type Theme } from "../lib/theme";
 import { PageHeader } from "../components/ui/page-header";
+import { StatusBadge } from "../components/ui/status-badge";
 import type {
   BusinessUnit,
   Department,
@@ -1133,7 +1134,15 @@ export function OrganizationSettingsPage() {
   return (
     <RequirePermission permission="settings.view">
       <div className="p-8" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
-        <PageHeader title="Organisation Settings" description="How this organisation is configured, who has access, and whether the platform is healthy." />
+        <PageHeader
+          title="Organisation Settings"
+          description="How this organisation is configured, who has access, and whether the platform is healthy."
+          status={
+            settings?.environment === "sandbox" ? (
+              <StatusBadge color="var(--pr-warning-amber)" label="Sandbox" />
+            ) : undefined
+          }
+        />
         <p className="mb-6 -mt-4" style={{ color: "var(--pr-text-muted)", fontSize: 13, maxWidth: 640 }}>
           <Link to="/organization/integrations" style={{ color: "var(--pr-authority-blue)" }}>Manage integrations →</Link>
           {" "}

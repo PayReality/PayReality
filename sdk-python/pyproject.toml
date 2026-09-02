@@ -1,22 +1,45 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "payreality"
-version = "0.5.0"
+version = "0.5.1"
 description = "Official Python SDK for PayReality: authorize an AI agent's action in one call, no manual signing."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "Proprietary" }
+license = "MIT"
+authors = [
+    { name = "PayReality" },
+]
+keywords = ["payreality", "authorization", "authority", "ai-agents", "policy", "runtime-authority"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "requests>=2.31",
     "PyNaCl>=1.5",
 ]
 
+[project.urls]
+Homepage = "https://aisecurewatch.com"
+Documentation = "https://github.com/PayReality/PayReality/blob/main/SDK_QUICKSTART.md"
+Repository = "https://github.com/PayReality/PayReality"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3",
+    "build>=1.2",
+    "twine>=5.0",
 ]
 
 [tool.setuptools.packages.find]

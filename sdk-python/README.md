@@ -40,6 +40,14 @@ No timestamps, nonces, signatures, or headers to build by hand. `register()` gen
 pip install -e .
 ```
 
+from a checkout of this directory -- the real, current install path. `pip install payreality` from
+public PyPI is not available yet; the package is built and release-ready (MIT license, real
+metadata, a `sdk-vX.Y.Z`-tagged Trusted-Publishing release workflow) but the one-time PyPI Trusted
+Publisher registration hasn't been completed. See `../INTEGRATION_KIT.md`'s Installation section.
+
+No repository access or Operator Key needed to get started at all -- see `../EXTERNAL_QUICKSTART.md`
+for how to get a real, isolated sandbox Organization and credential in one public API call.
+
 ## Beyond Agent-direct authorization
 
 - `payreality.adapter_templates.HttpApiAdapterTemplate`: a generic, configuration-driven Trusted Adapter template for higher-assurance trusted observation of a real attempted operation, built on `payreality.integration.Adapter`.

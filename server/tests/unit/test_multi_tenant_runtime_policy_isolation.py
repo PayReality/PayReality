@@ -48,6 +48,15 @@ class _FakeSession:
         self.statements.append(stmt)
         return self._scalar_results.pop(0) if self._scalar_results else None
 
+    def get(self, model, pk):
+        # Developer Distribution & Sandbox v1: create_policy now checks
+        # sandbox_limits.is_sandbox_organization(db, organization_id),
+        # a real db.get(Organization, ...) lookup -- None here means
+        # "no such row," which is_sandbox_organization already treats as
+        # "not sandbox" (uncapped), exactly right for these org-scoping
+        # tests, none of which are testing sandbox cap behavior.
+        return None
+
     def scalars(self, stmt):
         self.statements.append(stmt)
         return self._scalars_results.pop(0) if self._scalars_results else []

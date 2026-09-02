@@ -19,6 +19,8 @@ API, SDK_ARCHITECTURE.md for how this maps onto PayReality's actual
 HTTP API, and SDK_SECURITY.md for how signing and key storage work.
 """
 
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
 from .agent import Agent
 from .exceptions import (
     ApiError,
@@ -34,7 +36,18 @@ from .exceptions import (
 from .integration import Adapter, ContractShape
 from .models import Capability, ConsumedCapability, Decision, RegisteredAgent, Resolution
 
-__version__ = "0.5.0"
+# Single source of truth is pyproject.toml's own `version` -- resolved
+# from the installed package's real metadata (works for a wheel/sdist
+# install, and for `pip install -e .`, which also writes real metadata).
+# The literal fallback only matters if this package is ever imported
+# WITHOUT having been installed at all (e.g. `sys.path` manipulation in
+# a test harness) -- kept in sync with pyproject.toml by hand for that
+# one narrow case, same discipline this file already held itself to
+# before this fix, just no longer duplicated a second time in agent.py.
+try:
+    __version__ = _pkg_version("payreality")
+except PackageNotFoundError:
+    __version__ = "0.5.1"
 
 __all__ = [
     "Agent",

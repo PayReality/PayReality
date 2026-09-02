@@ -89,8 +89,19 @@ def _translate_capability_error(exc: Exception) -> Exception:
         return exc
     return exc
 
-_SDK_VERSION = "0.5.0"  # kept in sync with pyproject.toml / __init__.__version__ by hand;
-# not imported from there to avoid a circular import at package init time.
+# Integration Kit v1 / Developer Distribution v1: resolved from the
+# installed package's own real metadata (same mechanism __init__.py's
+# __version__ now uses), not a hardcoded literal -- a bare `from . import
+# __version__` here would be circular (this module is what __init__.py
+# imports first), so this calls importlib.metadata directly instead of
+# importing the already-resolved value; the two never disagree because
+# they resolve the exact same installed distribution.
+try:
+    from importlib.metadata import version as _pkg_version
+
+    _SDK_VERSION = _pkg_version("payreality")
+except Exception:
+    _SDK_VERSION = "0.5.1"
 # Bumped 0.1.0 -> 0.2.0 for organization_id: a real breaking change under
 # semver -- every operator-key call that previously worked now requires
 # it (PayReality Enterprise v1.0, Milestone 2's platform-admin-only
@@ -112,6 +123,11 @@ _SDK_VERSION = "0.5.0"  # kept in sync with pyproject.toml / __init__.__version_
 # this milestone's own audit), so the blast radius of this break is
 # zero in practice, but it is disclosed here exactly like the two
 # breaking bumps above.
+# Bumped 0.5.0 -> 0.5.1 for Developer Distribution & Sandbox v1: purely
+# packaging/metadata (real LICENSE, correct classifiers, single-sourced
+# version) plus the new adapter_templates/enforcement modules Integration
+# Kit v1 already added without a version bump -- not a breaking change to
+# any existing public method's own signature or behavior.
 
 
 class Agent:

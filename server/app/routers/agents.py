@@ -29,7 +29,7 @@ from app.schemas.agent import (
     UpdateAgentRequest,
     VerifyAuditEventResponse,
 )
-from app.services import agent_service, intent_service, runtime_policy_service
+from app.services import agent_service, intent_service, runtime_policy_service, sandbox_limits
 from app.services.agent_service import (
     AgentNotFoundError,
     AuditEventNotFoundError,
@@ -123,6 +123,8 @@ def create_agent(
         )
     except PrincipalNotFoundError:
         raise HTTPException(status_code=404, detail="principal_not_found")
+    except sandbox_limits.SandboxLimitExceededError as e:
+        raise HTTPException(status_code=403, detail=f"sandbox_limit_exceeded:{e.resource}")
     return _to_response(agent, certificate)
 
 

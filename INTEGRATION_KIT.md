@@ -32,23 +32,81 @@ stage already guarantees -- Stage 3's Capability verification carries every inva
 
 ## Quickstart: zero to first Decision
 
-Read `SDK_QUICKSTART.md` for the SDK call reference. The complete zero-to-first-Decision path,
-including the parts `SDK_QUICKSTART.md` assumes already exist, is:
+As of Developer Distribution & Sandbox v1, this no longer requires the platform Operator Key, a
+repository checkout, or any admin intervention. Read `SDK_QUICKSTART.md` for the SDK call
+reference, or `EXTERNAL_QUICKSTART.md` for the short, external-developer-facing version. The
+complete zero-to-first-Decision path is:
 
-1. **Organization.** Not self-serve today: creating a new organization requires the platform
-   Operator Key (`POST /v1/organizations`, an administrative action -- see
-   `routers/organization_lifecycle.py`). A new developer today gets an organization from the
-   PayReality team, or holds the Operator Key themselves in a self-hosted/eval context. This
-   milestone does not add self-serve signup, and does not pretend it exists.
-2. **Register the Agent.** `agent.register(name=..., principal=...)` -- real, live, one call.
-3. **Install the SDK.** `pip install -e sdk-python/` from a local checkout -- see "Installation" below for why this, and only this, is the real supported path today.
-4. **Create one starter policy**, through the real, unmodified lifecycle (create -> submit-for-review -> approve -> compile -> deploy). See "Starter policy templates" below for three ready-to-adapt examples. Applying a template never skips review or approval -- it's a starting point for an authored, approved policy, not a bypass.
-5. **Submit one test action.** `agent.authorize(principal=..., operation=..., resource=...)`.
-6. **Interpret the Decision.** `ALLOW`/`DENY`/`HUMAN_REVIEW`, exactly one of the three, with real Evidence and an Authorization Receipt behind it -- see `SDK_QUICKSTART.md` step 3/4.
+1. **Get a sandbox.** `POST /v1/sandbox/organizations` with `{"email": "you@example.com"}` --
+   public, no credential required (that's the point), rate-limited, capped at one per email.
+   Returns a ready-to-use API key, a dashboard login, and the id of a starter Runtime Policy
+   already deployed for you. See "Sandbox" below for exactly what this endpoint does and doesn't
+   let you do.
+2. **Install the SDK.** `pip install -e sdk-python/` from a local checkout today (see
+   "Installation" below for the real, current state of public PyPI distribution).
+3. **Register a test Agent.** `agent.register(name=..., principal="Sandbox Principal")` -- real,
+   live, one call, using the API key step 1 returned.
+4. **The starter policy already exists.** Provisioned automatically in step 1, through the real,
+   unmodified create -> submit-for-review -> approve -> compile -> deploy lifecycle -- not a
+   shortcut. See "Starter policy templates" below for two more you can add by hand for Human
+   Review / higher-assurance scenarios.
+5. **Submit one test action.** `agent.authorize(principal="Sandbox Principal",
+   operation="purchase_order_create", resource=...)`.
+6. **Interpret the Decision.** `ALLOW`/`DENY`/`HUMAN_REVIEW`, exactly one of the three, with real
+   Evidence and an Authorization Receipt behind it -- see `SDK_QUICKSTART.md` step 3/4.
 
-`sdk-python/examples/quickstart.py` runs all six steps in one script. **Time to first Decision is a
-product design target of under an hour, not a measured commercial claim** -- see "What was and
-wasn't measured" below for exactly what was and wasn't verified this milestone.
+`sdk-python/examples/quickstart.py` runs steps 1, 3, 5, and 6 against a real, live backend in one
+script -- no Operator Key, no repository access beyond installing the SDK itself. **Time to first
+Decision is a product design target of under an hour, not a measured commercial claim** -- see
+"What was and wasn't measured" below for exactly what was and wasn't verified this milestone.
+
+### Sandbox
+
+A sandbox Organization is a real Organization on the same, already-deployed backend, running the
+exact same authority pipeline as production -- never a second, simplified engine, and never a
+frontend simulation (the interactive product demo, `VITE_PUBLIC_DEMO_MODE`, is confirmed
+frontend-only and is explicitly not what this is; see "What this is not" below). It's distinguished
+by one field, `Organization.environment` (`"sandbox"` or `"production"`), which is never a security
+boundary on its own -- tenant isolation is, and remains, `organization_id`-scoped regardless of
+this label, the same guarantee every Organization already had.
+
+**What `POST /v1/sandbox/organizations` does**, all through real, unmodified, already-tested
+service functions, not new authority mechanism:
+- Creates a real Organization (`environment="sandbox"`) and its Owner, via
+  `organization_lifecycle_service.create_organization` -- the exact function the (still
+  Operator-Key-only) admin org-creation path already used, just with one new parameter.
+- Provisions one starter Runtime Policy through its real lifecycle, approved by that same new
+  Owner -- the identical self-service path any Owner already has for their own organization, not a
+  governance bypass.
+- Mints one scoped API key via `auth_service.generate_api_key`, the same mechanism
+  `POST /v1/organization/api-keys` already uses for self-service key creation.
+
+**What it deliberately does not do**: expose or require the platform Operator Key; let a caller
+choose `environment="production"`; grant access to any other organization, sandbox or production.
+
+**Limits** (enforced only for `environment="sandbox"`, never for production):
+
+| Resource | Limit |
+|---|---|
+| Sandbox organizations per email | 1 (non-archived) |
+| Sandbox-creation requests | 3 per IP per hour (a dedicated, stricter limit than the general per-IP request limit) |
+| Agents per sandbox | 5 |
+| Runtime Policies per sandbox | 10 |
+| Integration Identities per sandbox | 3 |
+
+**Data lifecycle**: a sandbox Organization is not automatically deleted. `scripts/
+cleanup_stale_sandboxes.py` (real, callable, reuses the unmodified deactivate -> archive sequence)
+archives sandboxes older than a given age -- run it manually, or wire it into your own scheduler
+(cron, a GitHub Actions scheduled workflow, an Azure WebJob). It is **not** wired into anything
+automatically by this milestone; that remains a disclosed, explicit operational requirement.
+
+**Dashboard**: a logged-in sandbox Owner sees a small "Sandbox" badge on Organisation Settings
+(reusing the existing `StatusBadge` left-border pattern) -- no other dashboard change was made; a
+sandbox organization is otherwise a completely normal organization in every other screen.
+
+**What this is not**: not a new, simplified sandbox authority engine; not the frontend-mocked
+interactive demo; not a promotion path into production (see "Sandbox-to-production boundary" below
+-- none exists, deliberately).
 
 ### Starter policy templates
 
@@ -221,12 +279,17 @@ call, and the resulting token feeds the middleware, including the required repla
 
 ## Installation
 
-The only real, supported install path today is a local editable install from a checkout of this
-repository: `pip install -e sdk-python/`. There is no PyPI package, no private package registry,
-and no CI job that publishes one -- confirmed by inspection of `sdk-python/pyproject.toml` and
-`.github/workflows/ci.yml` (which this milestone extends with a test job, not a publish job). Any
-documentation or website copy describing a different install method would be inaccurate; none was
-found this milestone, and none was introduced.
+`pip install -e sdk-python/` from a local checkout is still the only install path actually proven
+to work end to end. As of Developer Distribution & Sandbox v1, the package itself is real-PyPI-ready
+(MIT-licensed, real `LICENSE` file, correct classifiers/metadata, a clean sdist/wheel actually built
+and `twine check`-passed this milestone, a `sdk-vX.Y.Z`-tagged release workflow using PyPI Trusted
+Publishing) -- but **it is not yet published to PyPI**. `pip install payreality` does not work
+publicly today. The remaining step, registering this repository's release workflow as a PyPI
+Trusted Publisher for the "payreality" project name, requires a PyPI account with ownership of that
+name, which this milestone did not have access to -- see the final report's "package publication
+status" section for exactly what was and wasn't completed. No documentation or website copy claims
+`pip install payreality` works publicly; none should, until that step is actually done and verified
+from a genuinely fresh environment.
 
 ## Trusted Enterprise Facts (documented direction, not built in v1)
 
@@ -249,17 +312,42 @@ underlying business fact -- the source system remains responsible for that.
 
 ## Sandbox
 
-No new sandbox system was built, and none should be inferred from this document. Today's real
-options are: (a) run the actual backend locally against a real Postgres + OPA (see
-`DEPLOYMENT.md`'s local-run instructions and `docker-compose.yml`) -- this is genuinely the same
-code path production uses, just running on your machine; or (b) the interactive product demo
-(`VITE_PUBLIC_DEMO_MODE`), which is a **frontend-only mock** (`src/app/demo/mockRouter.ts`) that
-narrates the Agent/policy/Human-Review/Capability story for illustration but never calls a real
-backend, real OPA, or real Capability service -- confirmed by inspection this milestone, and
-disclosed here explicitly rather than left to imply otherwise. A real, dedicated hosted sandbox
-organization (test Agent, test policy, a sample mapping, a simulated downstream action, a full
-Capability round trip, all pre-wired and safe to break) is a reasonable future direction; it is not
-built, and is not claimed as built, in v1.
+Superseded by Developer Distribution & Sandbox v1 -- see the "Sandbox" subsection under the
+Quickstart above for the real, now-built mechanism (`POST /v1/sandbox/organizations`, real backend,
+real authority pipeline, tenant-isolated, resource-capped). This section originally disclosed that
+no sandbox existed yet; that gap is what the later milestone closed. The interactive product demo
+(`VITE_PUBLIC_DEMO_MODE`) remains, separately, a **frontend-only mock** -- still true, still not
+what "sandbox" refers to anywhere in this document.
+
+## Sandbox-to-production boundary
+
+Deliberately no promotion mechanism exists, and none was added. A sandbox Organization is a real,
+fully-functional Organization -- but getting from "it worked in my sandbox" to a real production
+customer relationship is, and remains, deliberate enterprise onboarding: a real Organization created
+through the existing Operator-Key-gated path, its own Runtime Policies authored and approved fresh
+(a sandbox's starter policy is never copied or migrated anywhere), its own Agents and Integration
+Identities registered fresh, its own review of what assurance level each action actually needs. Nothing
+about a sandbox's configuration, credentials, or Capability history carries over. This is treated as
+a security property, not a gap to eventually close: sandbox authority must never silently become
+production authority.
+
+## Hostile security review
+
+A deliberate pass against this milestone's own attack list, each mapped to the specific test that
+exercises it -- not inferred from code presence alone:
+
+| Attempt | Result | Proof |
+|---|---|---|
+| A sandbox's own credential presented against a *different* sandbox organization's data | Rejected -- the credential resolves to its own `organization_id` only, the same tenant-scoping every credential already has | `test_sandbox.py::test_sandbox_org_cannot_see_a_different_sandbox_orgs_agents` |
+| A sandbox's own credential presented against a *production* organization's data | Rejected, same mechanism | `test_sandbox.py::test_sandbox_org_cannot_see_a_production_orgs_agents` |
+| "Sandbox credential used against production" / "production credential used against sandbox" | Not possible by construction -- a credential's `organization_id` is fixed at creation and never chosen by the caller at request time; there is no code path where presenting a credential lets a caller name a *different* organization to act as | `test_sandbox.py::test_sandbox_api_key_resolves_only_its_own_organization` |
+| Creating more Agents/Runtime Policies/Integration Identities than the sandbox cap | Rejected (`SandboxLimitExceededError`, HTTP 403), production organizations unaffected | `test_sandbox.py::test_sandbox_agent_cap_is_enforced`, `test_sandbox_integration_identity_cap_is_enforced`, `test_production_organization_is_never_capped` |
+| Requesting a second sandbox for an email that already has one | Rejected (409) | `test_sandbox.py::test_second_sandbox_for_the_same_email_is_refused` |
+| Bursting `POST /v1/sandbox/organizations` past the per-IP rate limit | Rejected (429); a different IP's own budget is untouched | `test_sandbox.py::test_sandbox_creation_rate_limit_is_enforced`, `test_rate_limit_is_scoped_per_ip_not_global` |
+| Creating a privileged IntegrationIdentity or an unrestricted Runtime Connection from a sandbox | Not a distinct privilege to escalate to -- IntegrationIdentity/Runtime Connection creation is the same self-service, `require_permission`-gated, org-scoped path every organization (sandbox or production) already has; a sandbox's own Owner can only ever act within its own organization, capped by the same limits above | Code inspection: `routers/integration_identities.py`, `routers/enforcement_bindings.py`, both `require_permission`-gated, never Operator-Key-exclusive |
+| Sandbox configuration silently reaching production | Not possible -- no promotion mechanism exists at all (see "Sandbox-to-production boundary" above); a negative-space check, not a test of removed functionality | Code inspection: no code path anywhere copies a sandbox Organization's rows into a different Organization |
+| Stale-sandbox cleanup touching a production organization, or a non-stale sandbox | Rejected -- `environment == "sandbox"` and `created_at` age are both required | `test_sandbox.py::test_stale_sandbox_cleanup_only_touches_old_sandbox_orgs` |
+| The sandbox-creation endpoint itself being unintentionally left ungated | Caught by this repo's own pre-existing route-permission-gate guard test, which flags any `/v1/*` route with no `require_permission`/`verify_operator_key` dependency and no reviewed, justified exemption -- the sandbox route's public-by-design status is now a recorded, reviewed exemption, not an oversight | `test_route_permission_gates.py::test_every_v1_route_is_permission_gated_or_explicitly_justified` |
 
 ## Integration health (recommended future enhancement, not built in v1)
 
@@ -273,21 +361,27 @@ Integration Kit v1 is scoped to productizing existing integration primitives, no
 assurance surface; this section exists so the exact extension point is documented for whoever picks
 it up next.
 
-## What was and wasn't measured this milestone
+## What was and wasn't measured, across both milestones
 
-- **Code inspection**: every claim in this document about what the platform does today (the
-  install path, the Adapter/Capability service functions, the vocabulary, the assurance summary's
-  current fields, the Trusted Enterprise Facts model) was verified by reading the actual source,
-  not inferred or assumed.
-- **Unit/integration test proof**: the new `HttpApiAdapterTemplate` and `CapabilityEnforcer`
-  classes, and the new typed Capability exceptions, are covered by real, passing tests (SDK-level,
-  mocked HTTP layer, and one new real-SQLite-plus-OPA server-side test for a previously-untested
-  gap -- a revoked IntegrationIdentity cannot submit a new attested intent). See the milestone's
+- **Code inspection**: every claim in this document about what the platform does today was
+  verified by reading the actual source, not inferred or assumed -- including, this milestone,
+  Organization/RBAC/tenant-isolation code read before choosing the sandbox mechanism, per Developer
+  Distribution & Sandbox v1's own explicit instruction not to guess.
+- **Unit/integration test proof**: `HttpApiAdapterTemplate`/`CapabilityEnforcer`/typed Capability
+  exceptions (Integration Kit v1), and the sandbox creation/isolation/caps/rate-limit/cleanup tests
+  (Developer Distribution & Sandbox v1, real SQLite + real ephemeral OPA) all pass. See the latest
   final report for exact counts.
-- **Package installation proof**: `pip install -e sdk-python/` was actually run in this
-  environment against the updated package; see the final report for the result.
-- **Not measured, disclosed plainly**: a full, live, network-round-trip "time to first Decision"
-  timing run. This environment's Docker daemon is not reachable (the same, already-established
-  limitation this repository's own Postgres-gated tests disclose), so a real Postgres + OPA + a
-  running server were not available to boot `examples/quickstart.py` against over HTTP. "Under an
-  hour" remains a stated product design target, not a number this milestone proved.
+- **Package build proof**: `python -m build` + `twine check` were actually run this milestone
+  against the real package; both passed.
+- **Clean-environment install proof**: the built wheel (not editable) was actually installed into a
+  fresh, empty virtualenv and every public module imported and smoke-tested successfully.
+- **Package publication proof**: unavailable -- no PyPI account/credentials exist in this
+  environment. The release workflow was written and is ready; the one-time Trusted Publisher
+  registration on pypi.org was not, and could not be, completed here.
+- **Hosted sandbox proof**: see the final report's own "sandbox deployment status" and "clean
+  developer acceptance test" sections for exactly what was verified against the real, live,
+  deployed backend versus only locally.
+- **Not measured, disclosed plainly**: a full, real "time to first Decision" timing run performed
+  by an actual unfamiliar developer. What this milestone did measure is disclosed precisely,
+  separated from provisioning/deploy wait time, in the final report -- "under an hour" remains a
+  stated product design target, never asserted as a proven, general result.

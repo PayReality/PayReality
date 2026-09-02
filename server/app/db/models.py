@@ -452,9 +452,22 @@ class Organization(Base):
     deactivated_by: Mapped[str | None] = mapped_column(Text)
     archived_at: Mapped[datetime | None]
     archived_by: Mapped[str | None] = mapped_column(Text)
+    # Developer Distribution & Sandbox v1: a real Organization on the same
+    # backend, same authority pipeline, distinguished only by this label --
+    # never a second, simplified engine. 'production' is the only value
+    # prior to this milestone, so every pre-existing row backfills to it,
+    # the sole correct value since nothing before this could create a
+    # sandbox Organization at all. Used for: (a) the dashboard's "Sandbox"
+    # badge, (b) sandbox-only resource caps (see agent_service.
+    # register_agent and friends), (c) stale-sandbox cleanup (see
+    # organization_lifecycle_service.list_stale_sandbox_organizations).
+    # Deliberately NOT a security boundary of its own -- tenant isolation
+    # is, and always was, by organization_id, regardless of this label.
+    environment: Mapped[str] = mapped_column(Text, nullable=False, server_default="production")
 
     __table_args__ = (
         CheckConstraint("status IN ('active','deactivated','archived')", name="ck_organizations_status"),
+        CheckConstraint("environment IN ('production','sandbox')", name="ck_organizations_environment"),
     )
 
 

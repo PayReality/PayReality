@@ -16,11 +16,12 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import Agent, Authority, EnterpriseSystem, Mandate, Policy, RuntimePolicyRecord
+from app.services import sandbox_limits
 from app.domain.compiler_v2.bundle_builder import retarget_package
 from app.domain.compiler_v2.compiler_errors import CompilerDiagnostics
 from app.domain.compiler_v2.compiler_v2 import compile_bundle
@@ -543,6 +544,15 @@ def create_policy(
     passes a real value, once, at creation. Never set on a later
     edit_policy version; provenance describes where a policy_key's
     lineage *originated*, not its current version."""
+    if sandbox_limits.is_sandbox_organization(db, organization_id):
+        existing = db.scalar(
+            select(func.count(func.distinct(RuntimePolicyRecord.policy_key))).where(
+                RuntimePolicyRecord.organization_id == organization_id
+            )
+        )
+        if existing >= sandbox_limits.MAX_POLICIES_PER_SANDBOX:
+            raise sandbox_limits.SandboxLimitExceededError("policies", sandbox_limits.MAX_POLICIES_PER_SANDBOX)
+
     try:
         policy_key = uuid.UUID(policy.id)
     except ValueError:

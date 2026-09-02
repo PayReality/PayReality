@@ -41,6 +41,7 @@ def get_settings(organization: Organization = Depends(get_current_organization))
         default_currency=data["default_currency"],
         default_language=data["default_language"],
         settings=organization.settings,
+        environment=data["environment"],
     )
 
 
@@ -66,6 +67,7 @@ def update_settings(
         default_currency=data["default_currency"],
         default_language=data["default_language"],
         settings=organization.settings,
+        environment=data["environment"],
     )
 
 

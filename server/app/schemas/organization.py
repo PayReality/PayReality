@@ -12,6 +12,10 @@ class OrganizationSettingsResponse(BaseModel):
     default_currency: str
     default_language: str
     settings: dict[str, Any]
+    # Developer Distribution & Sandbox v1: read-only. 'sandbox' or
+    # 'production' -- see Organization.environment's own docstring
+    # (db/models.py) for what this does and does not mean.
+    environment: str
 
 
 class UpdateOrganizationSettingsRequest(BaseModel):

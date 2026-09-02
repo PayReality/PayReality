@@ -22,6 +22,7 @@ from app.schemas.integration_identity import (
     RotateCertificateRequest,
 )
 from app.services import integration_identity_service as svc
+from app.services import sandbox_limits
 from app.services.integration_identity_service import (
     IntegrationIdentityInvalidTransitionError,
     IntegrationIdentityNotFoundError,
@@ -54,7 +55,10 @@ def register_integration_identity(
     body: RegisterIntegrationIdentityRequest, db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
 ):
-    identity, _certificate = svc.register_integration_identity(db, organization.id, body.name, body.public_key)
+    try:
+        identity, _certificate = svc.register_integration_identity(db, organization.id, body.name, body.public_key)
+    except sandbox_limits.SandboxLimitExceededError as e:
+        raise HTTPException(status_code=403, detail=f"sandbox_limit_exceeded:{e.resource}")
     return _identity_to_response(identity)
 
 

@@ -17,10 +17,11 @@ discipline already warns against.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import IntegrationIdentity, IntegrationIdentityCertificate
+from app.services import sandbox_limits
 
 # Identical shape to agent_service._ALLOWED_TRANSITIONS -- this identity's
 # operational lifecycle is not meant to differ from Agent's at all.
@@ -59,6 +60,17 @@ def register_integration_identity(
     required before this identity's signature is accepted at all (the
     runtime auth dependency only resolves an `active` certificate, the
     same rule verify_agent_signature already enforces for Agent)."""
+    if sandbox_limits.is_sandbox_organization(db, organization_id):
+        existing = db.scalar(
+            select(func.count())
+            .select_from(IntegrationIdentity)
+            .where(IntegrationIdentity.organization_id == organization_id)
+        )
+        if existing >= sandbox_limits.MAX_INTEGRATION_IDENTITIES_PER_SANDBOX:
+            raise sandbox_limits.SandboxLimitExceededError(
+                "integration identities", sandbox_limits.MAX_INTEGRATION_IDENTITIES_PER_SANDBOX
+            )
+
     identity = IntegrationIdentity(
         organization_id=organization_id, name=name, status="registered", created_by=created_by,
     )

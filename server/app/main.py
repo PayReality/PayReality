@@ -32,6 +32,7 @@ from app.routers import (
     principals,
     runtime_policies,
     runtime_policy_lifecycle,
+    sandbox,
     users as users_router,
 )
 from app.security import observability_middleware
@@ -304,6 +305,7 @@ def create_app() -> FastAPI:
     app.include_router(facts.router)
     app.include_router(capability_tokens.router)
     app.include_router(assurance.router)
+    app.include_router(sandbox.router)
 
     return app
 

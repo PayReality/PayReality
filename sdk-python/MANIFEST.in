@@ -1,0 +1,10 @@
+# The wheel is already clean (setuptools package discovery only picks up
+# the `payreality` package itself), but the sdist's legacy default
+# template picks up `tests/*.py` with no explicit config at all --
+# confirmed by inspecting a real `egg_info` build. Nothing in tests/ is
+# sensitive, but shipping the internal test suite in a public source
+# distribution is unintended, not a deliberate choice. `examples/` is
+# kept -- genuinely useful reference material, nothing to exclude it for.
+prune tests
+include LICENSE
+include examples/*.py

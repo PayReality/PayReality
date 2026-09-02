@@ -1,10 +1,12 @@
 # SDK Quickstart
 
 This page assumes an organization and a Runtime Policy already exist and jumps straight to
-`authorize()`. If you're starting from nothing -- no organization, no policy -- see
-`INTEGRATION_KIT.md`'s own Quickstart section first, and `examples/quickstart.py` for the complete,
-runnable zero-to-first-Decision script (organization, agent, policy, first request, in one file).
-Everything below still applies once that setup exists.
+`authorize()`. If you're starting from nothing -- no organization, no policy, no relationship with
+PayReality at all -- see `EXTERNAL_QUICKSTART.md` for the short version (get a real sandbox
+Organization in one public API call, no Operator Key, no repository access beyond the SDK itself)
+or `INTEGRATION_KIT.md`'s own Quickstart section for the full detail, and
+`examples/quickstart.py` for the complete, runnable script. Everything below still applies once
+that setup exists.
 
 ## Install
 
@@ -12,7 +14,12 @@ Everything below still applies once that setup exists.
 pip install -e sdk-python/
 ```
 
-(Not yet published to PyPI; this phase ships the package, not the release. See `SDK_ARCHITECTURE.md` for why.)
+The package itself is now real-PyPI-ready (MIT-licensed, correct metadata, a release workflow using
+PyPI Trusted Publishing) as of Developer Distribution & Sandbox v1, but publishing it to PyPI
+requires a one-time, credentialed step (registering a Trusted Publisher for the "payreality" name)
+that has not been completed -- `pip install payreality` does not work publicly yet. Local editable
+install remains the real, current path. See `INTEGRATION_KIT.md`'s Installation section for the
+full, honest state.
 
 ## 1. Register an agent, once
 

@@ -80,6 +80,10 @@ def get_settings(organization: Organization) -> dict:
         "timezone": organization.timezone,
         "default_currency": organization.default_currency,
         "default_language": organization.default_language,
+        # Developer Distribution & Sandbox v1: read-only, never added to
+        # _ORGANIZATION_COLUMNS below -- an organization cannot PATCH its
+        # own way out of being a sandbox.
+        "environment": organization.environment,
         **organization.settings,
     }
 

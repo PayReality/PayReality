@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db.models import Agent, AgentAuditEvent, Certificate, Principal
 from app.domain.evidence.signing import sign_payload, verify_payload, Signature
-from app.services import signing_key_service
+from app.services import sandbox_limits, signing_key_service
 from app.services.organization_structure_service import (
     BusinessUnitNotFoundError,
     DepartmentNotFoundError,
@@ -178,6 +178,16 @@ def create_agent(
     principal = db.get(Principal, acting_for_principal_id)
     if principal is None or principal.organization_id != organization_id:
         raise PrincipalNotFoundError(str(acting_for_principal_id))
+
+    if sandbox_limits.is_sandbox_organization(db, organization_id):
+        existing = db.scalar(
+            select(func.count())
+            .select_from(Agent)
+            .join(Principal, Agent.acting_for_principal_id == Principal.id)
+            .where(Principal.organization_id == organization_id)
+        )
+        if existing >= sandbox_limits.MAX_AGENTS_PER_SANDBOX:
+            raise sandbox_limits.SandboxLimitExceededError("agents", sandbox_limits.MAX_AGENTS_PER_SANDBOX)
 
     agent = Agent(
         name=name,

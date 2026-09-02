@@ -1,0 +1,130 @@
+name: SDK Release
+
+# Developer Distribution & Sandbox v1. Triggered on a pushed `sdk-vX.Y.Z`
+# tag -- a distinctly prefixed scheme, deliberately NOT `vX.Y` (this
+# repo's existing tags, e.g. `v4.0`/`v5.0`, are unrelated main-app
+# versioning; a naive `vX.Y` SDK tag would collide with that namespace).
+#
+# The publish step requires a one-time, credentialed setup on pypi.org
+# (registering this repo + this workflow as a Trusted Publisher for the
+# "payreality" project) that only someone with PyPI account access can
+# complete -- see INTEGRATION_KIT.md's Installation section. Until that
+# setup exists, the publish step is expected to fail; it is deliberately
+# NOT wrapped in continue-on-error, so a real, later failure (e.g. a
+# genuinely broken release) is never masked by that same suppression.
+
+on:
+  push:
+    tags:
+      - "sdk-v*"
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk-python
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test + build tooling
+        run: pip install -e ".[dev]"
+
+      - name: Run the real test suite (release gate)
+        run: pytest tests/ -q
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - name: Inspect package metadata and contents
+        run: |
+          twine check dist/*
+          python - <<'PY'
+          import tarfile, zipfile, glob
+
+          sdist = glob.glob("dist/*.tar.gz")[0]
+          wheel = glob.glob("dist/*.whl")[0]
+          with tarfile.open(sdist) as t:
+              names = t.getnames()
+              assert not any("/tests/" in n for n in names), f"sdist leaked tests/: {names}"
+              print(f"sdist OK: {len(names)} entries, no tests/ leaked")
+          with zipfile.ZipFile(wheel) as z:
+              names = z.namelist()
+              assert any(n.endswith("LICENSE") for n in names), "wheel is missing LICENSE"
+              print(f"wheel OK: {len(names)} entries, LICENSE present")
+          PY
+
+      - name: Determine version from the built artifact (not the git tag)
+        id: version
+        run: |
+          VERSION=$(python -c "import re,glob; print(re.match(r'payreality-([\d.]+)-', glob.glob('dist/*.whl')[0].split('/')[-1]).group(1))")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Built version: $VERSION"
+
+      - name: Install the BUILT wheel (not editable) into a clean environment
+        run: |
+          python -m venv /tmp/release-verify
+          /tmp/release-verify/bin/pip install --quiet dist/*.whl
+
+      - name: Import every public module from the clean install
+        run: |
+          /tmp/release-verify/bin/python - <<'PY'
+          import payreality
+          from payreality import Agent
+          from payreality.adapter_templates import AdapterFieldRules, HttpApiAdapterTemplate
+          from payreality.enforcement import CapabilityEnforcer
+          from payreality.integration import Adapter, ContractShape
+          from payreality import exceptions  # noqa: F401
+          from payreality import models  # noqa: F401
+          print("payreality.__version__ =", payreality.__version__)
+          PY
+
+      - name: Smoke test (no live network -- constructs real objects, generates a real keypair)
+        run: |
+          /tmp/release-verify/bin/python - <<'PY'
+          from payreality import Agent, crypto
+          from payreality.enforcement import CapabilityEnforcer
+          from payreality.adapter_templates import AdapterFieldRules, HttpApiAdapterTemplate
+
+          keypair = crypto.generate_keypair()
+          agent = Agent(private_key=keypair.private_key_b64, bearer_token="ci-smoke-test")
+          assert agent.is_registered is False
+
+          enforcer = CapabilityEnforcer(agent=agent, audience="ci-smoke-test")
+
+          fields = AdapterFieldRules(
+              source_operation="X", action="y", origin_agent_id="agt_1",
+              external_operation_id_source="op.id",
+          )
+          HttpApiAdapterTemplate(
+              integration_identity_id="ii-1", certificate_id="cert-1",
+              private_key=keypair.private_key_b64, enforcement_binding_id="binding-1", fields=fields,
+          )
+          print("SMOKE TEST PASSED")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: payreality-sdk-dist
+          path: sdk-python/dist/
+
+  publish:
+    needs: build-and-verify
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # PyPI Trusted Publishing (OIDC) -- no stored token, matching this
+                        # repo's own existing AZURE_CICD_CLIENT_ID OIDC precedent for Azure.
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: payreality-sdk-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

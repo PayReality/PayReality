@@ -5,6 +5,9 @@ export interface OrganizationSettings {
   default_currency: string;
   default_language: string;
   settings: Record<string, unknown>;
+  // Developer Distribution & Sandbox v1: read-only, "sandbox" or
+  // "production". Never settable from this page.
+  environment: "sandbox" | "production";
 }
 
 export type IntegrationStatus = "connected" | "disconnected" | "configuration_required";
