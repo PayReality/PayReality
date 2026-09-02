@@ -44,3 +44,20 @@ jobs:
           node-version: "20"
       - run: npm ci
       - run: npm run build
+
+  sdk-tests:
+    # Integration Kit v1: the SDK had zero CI coverage before this job --
+    # confirmed by inspection, not assumed. Package install + test run
+    # only; no publish step, since no PyPI/private registry exists yet
+    # (see INTEGRATION_KIT.md's Installation section).
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk-python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -q

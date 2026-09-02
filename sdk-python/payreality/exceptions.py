@@ -94,6 +94,70 @@ class HumanReviewRequired(PayRealityError):
         super().__init__(decision.reason or "This action requires human review.")
 
 
+class CapabilityTokenExpiredError(AuthenticationError):
+    """`verify_capability()` only: the Capability's own signed `expires_at`
+    has passed. Distinct from a bad verifier credential -- the caller's
+    own auth was fine, the token itself is simply too old to consume."""
+
+
+class InvalidCapabilityTokenError(AuthenticationError):
+    """`verify_capability()` only: the token failed signature
+    verification, or doesn't decode as a capability token at all
+    (corrupted, truncated, or not a PayReality token). Not the same as
+    an expired token, and not the same as the verifier's own credentials
+    being rejected."""
+
+
+class CapabilityTenantMismatchError(AuthenticationError):
+    """`verify_capability()` only: the Capability was issued for a
+    different organization than the one this verifier is authenticated
+    as. See Trusted Integration Phase 6.1 -- a verifier scoped to one
+    organization can never consume another organization's Capability."""
+
+
+class CapabilityAudienceMismatchError(AuthenticationError):
+    """`verify_capability()` only: the Capability was issued for a
+    different `audience` (a different named enforcement checkpoint) than
+    the one presented here."""
+
+
+class CapabilityNotFoundError(ApiError):
+    """`verify_capability()` only: no issued Capability matches this
+    token's hash at all -- not "wrong," simply unknown to PayReality."""
+
+
+class CapabilityConstraintMismatchError(ApiError):
+    """`verify_capability()` only: the presented `action`, `resource`,
+    `constraints`, or `principal` doesn't match exactly what the
+    Capability was issued for. PayReality does not report which specific
+    field mismatched (by design -- see domain/capability/token.py); treat
+    any of the four as a possible cause."""
+
+
+class CapabilityBindingMismatchError(ApiError):
+    """`verify_capability()` only: the presented `environment` or
+    `enforcement_binding_id` doesn't match what the Capability was issued
+    for."""
+
+
+class CapabilityAlreadyConsumedError(ApiError):
+    """`verify_capability()` only: this exact Capability was already
+    consumed once, by this call or a concurrent/earlier one. Single-use
+    is enforced at the database level -- this is the replay/race signal,
+    never a sign the first consumption failed."""
+
+
+class CapabilityTrustNotActiveError(ApiError):
+    """`verify_capability()` only: consumption was refused because a live
+    identity or binding the Capability depends on is no longer active --
+    the originating Agent, the Organization (tenant), the Trusted
+    Integration identity, or the Enforcement Binding, rechecked
+    immediately before consumption (Trusted Integration Phase 6.1). The
+    Capability itself was never marked consumed by this failed attempt;
+    a later attempt is checked against whatever state exists at that
+    time. `str(exc)` names which specific one failed."""
+
+
 class ResolutionTimeoutError(PayRealityError):
     """Raised only by `agent.wait_for_resolution()`: the bounded polling
     window elapsed with the decision still `HUMAN_REVIEW`/pending. Not

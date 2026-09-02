@@ -40,16 +40,24 @@ No timestamps, nonces, signatures, or headers to build by hand. `register()` gen
 pip install -e .
 ```
 
+## Beyond Agent-direct authorization
+
+- `payreality.adapter_templates.HttpApiAdapterTemplate`: a generic, configuration-driven Trusted Adapter template for higher-assurance trusted observation of a real attempted operation, built on `payreality.integration.Adapter`.
+- `payreality.enforcement.CapabilityEnforcer`: a reference verify-and-consume wrapper for a Capability-enforcement checkpoint, built on `Agent.verify_capability()`.
+
+See [`../INTEGRATION_KIT.md`](../INTEGRATION_KIT.md) for the full productized integration story: progressive assurance, starter policy templates, the Adapter template, the enforcement middleware, and one worked recipe.
+
 ## Docs
 
-- [`../SDK_QUICKSTART.md`](../SDK_QUICKSTART.md): get running in under 5 minutes
+- [`../SDK_QUICKSTART.md`](../SDK_QUICKSTART.md): get running in under 5 minutes (assumes an organization and policy already exist -- see `../INTEGRATION_KIT.md` for zero-to-first-Decision)
 - [`../SDK_REFERENCE.md`](../SDK_REFERENCE.md): every class, method, and exception
 - [`../SDK_ARCHITECTURE.md`](../SDK_ARCHITECTURE.md): how this maps onto PayReality's real API today
 - [`../SDK_SECURITY.md`](../SDK_SECURITY.md): what gets signed, where keys live, what `api_key` really is
+- [`../INTEGRATION_KIT.md`](../INTEGRATION_KIT.md): the Integration Kit -- Quickstart, Adapter template, enforcement middleware, progressive assurance, recipes
 
 ## Examples
 
-See [`examples/`](examples/): `register_agent.py`, `approve_payment.py`, `approve_invoice.py`, `custom_operation.py`.
+See [`examples/`](examples/): `quickstart.py` (zero to first Decision), `register_agent.py`, `approve_payment.py`, `approve_invoice.py`, `custom_operation.py`.
 
 ## Tests
 

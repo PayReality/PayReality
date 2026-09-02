@@ -223,6 +223,20 @@ def test_suspended_origin_agent_is_rejected_not_routed_to_human_review(db, opa_u
         _attest(db, identity, binding, agent)
 
 
+def test_revoked_integration_identity_cannot_submit_a_new_attested_intent(db, opa_url):
+    """Integration Kit v1, section 11: a revoked IntegrationIdentity must
+    fail closed on a brand new submission attempt, not only on consuming
+    an already-issued Capability (Phase 6.1 covers that separately). The
+    identity starts active (registration itself requires that) and is
+    revoked afterward, the realistic sequence this runtime check guards
+    against."""
+    org = _org(db)
+    identity, _cv, binding, agent = _setup(db, org.id, context_bindings={})
+    identity_svc.revoke_integration_identity(db, identity.id, org.id)
+    with pytest.raises(IntegrationRejectionError, match="integration_identity_not_active"):
+        _attest(db, identity, binding, agent)
+
+
 def test_unknown_binding_is_rejected(db, opa_url):
     org = _org(db)
     identity, _cv, binding, agent = _setup(db, org.id, context_bindings={})

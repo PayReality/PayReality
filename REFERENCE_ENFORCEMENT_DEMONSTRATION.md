@@ -62,6 +62,8 @@ python scripts/reference_enforcement_adapter.py \
 
 **To reproduce the negative replay test manually**: run the exact same command a second time, unchanged. The first run prints `CAPABILITY VERIFIED AND CONSUMED` followed by a separate `DOWNSTREAM EXECUTION: executed successfully` line; the second prints `CAPABILITY REJECTED: capability_token_already_consumed` and `DOWNSTREAM EXECUTION: not attempted` -- the reference business system function is never called for it. To reproduce the duplicate-issuance negative test, call `POST /v1/decisions/{id}/capability-token/from-review` again for the same Decision; it returns `409 capability_already_consumed_for_decision` (or `capability_already_issued`, depending on whether the first Capability has been consumed yet).
 
+**Integration Kit v1**: this script remains the CLI reference and is unchanged. For embedding the same verify-and-consume lifecycle directly in your own enforcement checkpoint's code (rather than shelling out to a script), see `payreality.enforcement.CapabilityEnforcer` in [`INTEGRATION_KIT.md`](INTEGRATION_KIT.md) -- it calls the identical `Agent.verify_capability()` path this script's own `verify_and_consume()` function reimplements by hand today, so both carry the exact same guarantees.
+
 ## Reference architecture
 
 ```
@@ -118,3 +120,4 @@ Nothing here required a new representation. The existing Receipt (`Authorization
 - `scripts/reference_enforcement_adapter.py` -- the reference PEP: verify-and-consume, then (only on success) invoke the reference downstream stand-in, as two separately-reported steps.
 - `server/tests/integration/test_reference_enforcement_demonstration.py` -- the automated, real end-to-end proof.
 - `server/tests/unit/test_reference_enforcement_adapter.py` -- unit tests of the script's own new control-flow logic (never invoke downstream execution when verification fails).
+- `sdk-python/payreality/enforcement.py` (Integration Kit v1) -- the productized, embeddable equivalent of this script's own `verify_and_consume()`/`run()` functions, for a customer who wants this in their own process rather than a standalone script. See [`INTEGRATION_KIT.md`](INTEGRATION_KIT.md).

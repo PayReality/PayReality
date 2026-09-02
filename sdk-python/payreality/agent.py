@@ -24,8 +24,70 @@ from typing import Any
 from . import auth, crypto
 from .client import HttpClient
 from .configuration import Configuration, CredentialStore
-from .exceptions import ApiError, ConfigurationError, ResolutionTimeoutError
+from .exceptions import (
+    ApiError,
+    AuthenticationError,
+    CapabilityAlreadyConsumedError,
+    CapabilityAudienceMismatchError,
+    CapabilityBindingMismatchError,
+    CapabilityConstraintMismatchError,
+    CapabilityNotFoundError,
+    CapabilityTenantMismatchError,
+    CapabilityTokenExpiredError,
+    CapabilityTrustNotActiveError,
+    ConfigurationError,
+    InvalidCapabilityTokenError,
+    ResolutionTimeoutError,
+)
 from .models import Capability, ConsumedCapability, Decision, RegisteredAgent, Resolution
+
+# Integration Kit v1: maps the exact `detail` string capability_tokens.py's
+# router raises (POST /v1/capability-tokens/verify) onto a specific SDK
+# exception, so a caller (e.g. a CapabilityEnforcer) can react to "this
+# token expired" differently from "your own verifier credentials are bad"
+# instead of catching one generic ApiError/AuthenticationError for both.
+# Keys are matched as an exact string (401/403 cases, checked against the
+# exception's own message text -- AuthenticationError carries no
+# structured body) or a prefix (409 "not active" cases, whose detail is
+# f"{code}: {reason}"). Falls back to re-raising the original, untouched,
+# if nothing matches -- this must never hide a real failure mode this
+# table doesn't yet know about.
+_CAPABILITY_EXACT_DETAIL_ERRORS: dict[str, type[ApiError | AuthenticationError]] = {
+    "capability_token_expired": CapabilityTokenExpiredError,
+    "invalid_capability_token": InvalidCapabilityTokenError,
+    "capability_tenant_mismatch": CapabilityTenantMismatchError,
+    "capability_audience_mismatch": CapabilityAudienceMismatchError,
+    "capability_token_not_found": CapabilityNotFoundError,
+    "capability_constraint_mismatch": CapabilityConstraintMismatchError,
+    "capability_binding_mismatch": CapabilityBindingMismatchError,
+    "capability_token_already_consumed": CapabilityAlreadyConsumedError,
+}
+_CAPABILITY_PREFIX_DETAIL_ERRORS: dict[str, type[ApiError]] = {
+    "origin_agent_not_active:": CapabilityTrustNotActiveError,
+    "integration_identity_not_active:": CapabilityTrustNotActiveError,
+    "enforcement_binding_not_active:": CapabilityTrustNotActiveError,
+    "tenant_not_active:": CapabilityTrustNotActiveError,
+}
+
+
+def _translate_capability_error(exc: Exception) -> Exception:
+    if isinstance(exc, ApiError) and isinstance(exc.body, dict):
+        detail = exc.body.get("detail")
+        if isinstance(detail, str):
+            exact = _CAPABILITY_EXACT_DETAIL_ERRORS.get(detail)
+            if exact is not None and issubclass(exact, ApiError):
+                return exact(str(exc), status_code=exc.status_code, body=exc.body)
+            for prefix, cls in _CAPABILITY_PREFIX_DETAIL_ERRORS.items():
+                if detail.startswith(prefix):
+                    return cls(str(exc), status_code=exc.status_code, body=exc.body)
+        return exc
+    if isinstance(exc, AuthenticationError):
+        message = str(exc)
+        for detail, cls in _CAPABILITY_EXACT_DETAIL_ERRORS.items():
+            if issubclass(cls, AuthenticationError) and detail in message:
+                return cls(message, status_code=exc.status_code)
+        return exc
+    return exc
 
 _SDK_VERSION = "0.5.0"  # kept in sync with pyproject.toml / __init__.__version__ by hand;
 # not imported from there to avoid a circular import at package init time.
@@ -511,9 +573,20 @@ class Agent:
         """The customer-controlled enforcement checkpoint's own call:
         online verify-and-consume, atomic, single-use. Every argument
         after `token` must match exactly what the Capability was issued
-        for, or this raises `ApiError` with a specific status/detail
-        (401 expired/invalid signature, 403 wrong audience, 409
-        constraint/binding mismatch or already consumed, 404 unknown).
+        for, or this raises one of a specific set of typed exceptions
+        (Integration Kit v1): `CapabilityTokenExpiredError`,
+        `InvalidCapabilityTokenError`, `CapabilityTenantMismatchError`,
+        `CapabilityAudienceMismatchError`, `CapabilityNotFoundError`,
+        `CapabilityConstraintMismatchError` (wrong action, resource,
+        constraints, or principal), `CapabilityBindingMismatchError`
+        (wrong environment or enforcement_binding_id),
+        `CapabilityAlreadyConsumedError`, or `CapabilityTrustNotActiveError`
+        (the Agent, Organization, Trusted Integration identity, or
+        Enforcement Binding this Capability depends on is no longer
+        active). Each subclasses whichever of `AuthenticationError`/
+        `ApiError` this call always raised before -- existing code that
+        only catches those generic bases keeps working unchanged; catch
+        the specific subclass where you need to react differently.
 
         `environment`/`enforcement_binding_id`/`principal` (Trusted
         Integration Architecture, Phase 5) are all optional: pass any if
@@ -550,9 +623,12 @@ class Agent:
             body["enforcement_binding_id"] = enforcement_binding_id
         if principal is not None:
             body["principal"] = principal
-        response = self._client.request(
-            "POST", "/v1/capability-tokens/verify", json=body, admin_auth=True,
-        )
+        try:
+            response = self._client.request(
+                "POST", "/v1/capability-tokens/verify", json=body, admin_auth=True,
+            )
+        except (ApiError, AuthenticationError) as exc:
+            raise _translate_capability_error(exc) from exc
         return ConsumedCapability(
             capability_id=response["capability_id"], decision_id=response["decision_id"],
             resource=response["resource"], constraints=response["constraints"],

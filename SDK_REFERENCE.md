@@ -122,6 +122,42 @@ Constructs, signs, and submits one attested Intent through the trusted-Adapter r
 
 Optional, purely local declaration of which fields this Adapter's pinned Action Mapping actually extracts — mirrors the same presence/absence rule the server enforces authoritatively. Never required; omitting it just means `attest()`'s local pre-flight check is skipped and every field passes straight through to the server's own (authoritative) validation.
 
+## `payreality.adapter_templates.HttpApiAdapterTemplate` and `AdapterFieldRules` (Integration Kit v1)
+
+A configuration-driven wrapper over `Adapter.attest()` above -- see [`INTEGRATION_KIT.md`](INTEGRATION_KIT.md) for the full guide. Not exported from the top-level `payreality` package; import from `payreality.adapter_templates`.
+
+### `AdapterFieldRules(*, source_operation, action, external_operation_id_source, origin_agent_id=None, origin_agent_id_source=None, resource_source=None, amount_source=None, currency_source=None, counterparty_source=None, context_sources=None, correlation_id_source=None)`
+
+`source_operation`/`action` are always fixed strings, never read from a payload. Every `*_source` argument is either a dotted-path string (`"payment.amount"`) or a callable taking the raw payload dict. Exactly one of `origin_agent_id` (fixed) or `origin_agent_id_source` (extracted) is required. Raises `ConfigurationError` at construction time if neither, or both, are given.
+
+### `HttpApiAdapterTemplate(*, integration_identity_id, certificate_id, private_key, enforcement_binding_id, fields, base_url=..., timeout=10.0, retry_count=3, contract_shape=None)`
+
+Same identity/certificate/`ContractShape` arguments as `Adapter` above, plus `fields` (an `AdapterFieldRules`).
+
+### `template.handle(payload: dict) -> Decision`
+
+Extracts every configured field from `payload`, raising `ConfigurationError` (before any network call) if a required one is missing or a declared context key doesn't resolve, then calls `Adapter.attest()` with the extracted values. Returns the same `Decision` `attest()` returns.
+
+## `payreality.enforcement.CapabilityEnforcer` (Integration Kit v1)
+
+A reference verify-and-consume wrapper over `Agent.verify_capability()` -- see [`INTEGRATION_KIT.md`](INTEGRATION_KIT.md) for the full guide. Not exported from the top-level `payreality` package; import from `payreality.enforcement`.
+
+### `CapabilityEnforcer(*, agent, audience, environment=None, enforcement_binding_id=None)`
+
+`agent` is an already-constructed `Agent` holding the verifier's own credentials -- tenant scoping comes from whichever organization that credential resolves to, not a separate parameter.
+
+### `enforcer.verify(token, *, action, resource, constraints, principal=None) -> ConsumedCapability`
+
+Calls `agent.verify_capability()` with this checkpoint's configured audience/environment/binding plus the given action/resource/constraints/principal. Raises the same typed Capability exceptions `verify_capability()` does. Does not call anything else.
+
+### `enforcer.enforce(token, *, action, resource, constraints, downstream, principal=None) -> T`
+
+`verify()`, then -- only on success -- calls `downstream(consumed_capability)` and returns its result unchanged. `downstream` is never called if verification raises. `downstream`'s own return value is never inspected or treated as additional proof of anything.
+
+### `enforcer.wrap(downstream) -> Callable`
+
+Decorator form of `enforce()`: returns a callable with the signature `(token, *, action, resource, constraints, principal=None)` that enforces then calls the bound `downstream`.
+
 ## `payreality.Decision`
 
 | Attribute | Type | Notes |
@@ -177,6 +213,20 @@ All inherit from `payreality.PayRealityError`.
 | `AuthorizationDenied` | Only from `Decision.raise_for_outcome()` on a `DENY`. Has `.decision`. |
 | `HumanReviewRequired` | Only from `Decision.raise_for_outcome()` on a `HUMAN_REVIEW`. Has `.decision`. |
 | `ResolutionTimeoutError` | Only from `wait_for_resolution()`, when `timeout` elapses with the decision still pending. Has `.decision` (the last-known, still-pending `Decision`) and `.timeout` (`float`). Not a failure of the decision itself -- it may still resolve later; poll again or call `wait_for_resolution()` again to keep waiting. |
+
+**Capability-specific exceptions (Integration Kit v1)**, raised only by `verify_capability()`, each subclassing whichever of `AuthenticationError`/`ApiError` above already covers its HTTP status -- existing code that only catches the generic base keeps working unchanged:
+
+| Exception | Base | Raised when |
+|---|---|---|
+| `CapabilityTokenExpiredError` | `AuthenticationError` | The Capability's own signed `expires_at` has passed. |
+| `InvalidCapabilityTokenError` | `AuthenticationError` | Signature verification failed, or the token doesn't decode at all. |
+| `CapabilityTenantMismatchError` | `AuthenticationError` | The Capability was issued for a different organization than this verifier is authenticated as. |
+| `CapabilityAudienceMismatchError` | `AuthenticationError` | Wrong `audience`. |
+| `CapabilityNotFoundError` | `ApiError` | No issued Capability matches this token's hash at all. |
+| `CapabilityConstraintMismatchError` | `ApiError` | Wrong `action`, `resource`, `constraints`, or `principal` (PayReality doesn't report which one specifically). |
+| `CapabilityBindingMismatchError` | `ApiError` | Wrong `environment` or `enforcement_binding_id`. |
+| `CapabilityAlreadyConsumedError` | `ApiError` | Single-use enforcement: already consumed, by this call or a concurrent/earlier one. |
+| `CapabilityTrustNotActiveError` | `ApiError` | The Agent, Organization, Trusted Integration identity, or Enforcement Binding this Capability depends on is no longer active (Phase 6.1 freshness recheck). `str(exc)` names which one. |
 
 ## Polling contract: `GET /v1/decisions/{id}`
 
