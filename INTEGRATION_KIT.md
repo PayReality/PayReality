@@ -130,7 +130,7 @@ push through the real `POST /v1/runtime-policies` -> `submit-for-review` -> `app
 {
   "name": "Wire transfer over 10000 requires review",
   "scope": { "principal": "<your principal>", "action": "wire_transfer" },
-  "conditions": [{ "field": "amount", "operator": "gt", "value": 10000 }],
+  "conditions": [{ "field": "amount", "operator": ">", "value": 10000 }],
   "effect": "require_human_review"
 }
 ```
