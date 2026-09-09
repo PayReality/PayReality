@@ -128,6 +128,28 @@ def test_archive_organization_transitions_deactivated_to_archived():
     assert result.archived_by == "bob"
 
 
+# --- Post-audit implementation, Priority 1: the shared active-organization check ---
+
+
+def test_ensure_active_returns_the_organization_unchanged_when_active():
+    org = _FakeOrganization(uuid.uuid4(), status="active")
+    assert svc.ensure_active(org) is org
+
+
+def test_ensure_active_rejects_a_deactivated_organization():
+    org = _FakeOrganization(uuid.uuid4(), status="deactivated")
+    with pytest.raises(svc.OrganizationNotActiveError) as excinfo:
+        svc.ensure_active(org)
+    assert excinfo.value.organization_id == org.id
+    assert excinfo.value.status == "deactivated"
+
+
+def test_ensure_active_rejects_an_archived_organization():
+    org = _FakeOrganization(uuid.uuid4(), status="archived")
+    with pytest.raises(svc.OrganizationNotActiveError):
+        svc.ensure_active(org)
+
+
 def test_get_organization_raises_for_a_missing_organization():
     with pytest.raises(svc.OrganizationNotFoundError):
         svc.get_organization(_FakeSession(), uuid.uuid4())

@@ -26,7 +26,7 @@ from app.domain.decision.scope_vocabulary import is_recognized_scope
 from app.domain.decision.source import normalize_source
 from app.domain.evidence.signing import payload_hash, sign_payload
 from app.opa_client import HttpOpaClient, org_data_path
-from app.services import fact_service, runtime_policy_service, runtime_truth_service
+from app.services import fact_service, organization_lifecycle_service, runtime_policy_service, runtime_truth_service
 from app.services.authority_context_service import classify_risk
 
 
@@ -40,6 +40,18 @@ class AgentRetiredError(Exception):
     """Phase 9 (AGENT_LIFECYCLE.md): Retired is terminal, "cannot submit
     new Intents" -- treated the same as revoked: rejected before an
     Intent row is even inserted, no Decision/Evidence record created."""
+
+
+class OrganizationNotActiveError(Exception):
+    """Post-audit implementation, Priority 1 (the organisation kill-switch
+    gap): mirrors AgentRevokedError/AgentRetiredError's own precedent --
+    rejected before an Intent row is even inserted, no Decision/Evidence
+    record created. An Agent's own identity/certificate can remain
+    perfectly valid while the Organization that owns it is deactivated;
+    verify_agent_signature alone cannot see this (it only ever resolves
+    the Agent's own Certificate, never the Organization), so this is the
+    one place that gap actually closes for the Agent-direct runtime
+    path."""
 
 
 class AgentNotOperationalError(Exception):
@@ -156,6 +168,8 @@ def _build_evidence_payload(
     source_operation: str | None = None,
     external_operation_id: str | None = None,
     canonical_operation_fingerprint: str | None = None,
+    canonical_action_schema_version: int | None = None,
+    canonical_action_digest: str | None = None,
 ) -> dict:
     """spec 17.1's Evidence payload shape, adapted to Phase 1's fields.
 
@@ -316,6 +330,9 @@ def _build_evidence_payload(
         payload["external_operation_id"] = external_operation_id
     if canonical_operation_fingerprint is not None:
         payload["canonical_operation_fingerprint"] = canonical_operation_fingerprint
+    if canonical_action_digest is not None:
+        payload["canonical_action_schema_version"] = canonical_action_schema_version
+        payload["canonical_action_digest"] = canonical_action_digest
     return payload
 
 
@@ -470,6 +487,8 @@ def append_evidence(
     source_operation: str | None = None,
     external_operation_id: str | None = None,
     canonical_operation_fingerprint: str | None = None,
+    canonical_action_schema_version: int | None = None,
+    canonical_action_digest: str | None = None,
 ) -> Evidence:
     organization_id = _resolve_chain_scope(db, agent_id)
     _lock_chain_scope(db, organization_id)
@@ -542,6 +561,8 @@ def append_evidence(
         source_operation=source_operation,
         external_operation_id=external_operation_id,
         canonical_operation_fingerprint=canonical_operation_fingerprint,
+        canonical_action_schema_version=canonical_action_schema_version,
+        canonical_action_digest=canonical_action_digest,
     )
     signature = sign_payload(
         payload, settings.evidence_signing_key_b64, settings.evidence_signing_key_id
@@ -553,6 +574,70 @@ def append_evidence(
         signature=signature.value,
         # spec 8.2 EvidenceRecord.status, distinct from Decision.status
         # (our HUMAN_REVIEW-resolution addition).
+        status=status,
+        organization_id=organization_id,
+        sequence=sequence,
+    )
+    db.add(evidence)
+    db.flush()
+    return evidence
+
+
+def append_generic_evidence_event(
+    db: Session,
+    organization_id: uuid.UUID | None,
+    decision_id: uuid.UUID,
+    event_type: str,
+    event_payload: dict,
+    status: str = "VERIFIED",
+) -> Evidence:
+    """Post-audit implementation, Priority 5/6: the same chain-integrity
+    guarantee append_evidence provides (organization-scoped row lock,
+    monotonic sequence, previous_hash linkage, ED25519 signature) for an
+    Evidence event that is NOT a Decision-outcome record -- an execution
+    receipt's acceptance, or a reconciliation outcome, is a genuinely
+    different shape than _build_evidence_payload's own Decision-specific
+    fields, and forcing it through that payload shape would mean either
+    fabricating Decision-only fields (matched_mandates, approval_outcome,
+    ...) that were never evaluated for this event, or silently leaving
+    them null in a way a reader could mistake for "evaluated, found
+    nothing." This function makes no such claim: its own payload is
+    whatever `event_payload` says, tagged with `event_type` so a reader
+    (or a future verify_chain extension) can immediately tell this apart
+    from a Decision-outcome Evidence record without inspecting field-by-
+    field which keys are present.
+
+    Still binds to `decision_id`: every Evidence row's own schema
+    requires one (Evidence.decision_id is NOT NULL), and every event this
+    function is used for (a receipt, a reconciliation outcome) is
+    intrinsically about one specific, already-decided Decision -- never a
+    new, independent authorization event of its own.
+
+    Shares the exact same organization-scoped hash chain as every other
+    Evidence record (append_evidence's own chain, not a second, parallel
+    one) -- so a reconciliation event, a receipt-acceptance event, and
+    every ordinary Decision Evidence record for the same organization all
+    interleave in one verifiable sequence, exactly as PHASE_5_EVIDENCE.md's
+    own chain-integrity model requires."""
+    _lock_chain_scope(db, organization_id)
+    previous_hash = _previous_chain_hash(db, organization_id)
+    sequence = _next_chain_sequence(db, organization_id)
+    payload = {
+        **event_payload,
+        "payload_version": 2,
+        "event_type": event_type,
+        "decision_id": str(decision_id),
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "previous_hash": previous_hash,
+    }
+    signature = sign_payload(
+        payload, settings.evidence_signing_key_b64, settings.evidence_signing_key_id
+    )
+    evidence = Evidence(
+        decision_id=decision_id,
+        payload=payload,
+        key_id=signature.key_id,
+        signature=signature.value,
         status=status,
         organization_id=organization_id,
         sequence=sequence,
@@ -685,6 +770,8 @@ def _evaluate_and_record(
         source_operation=prov.get("source_operation"),
         external_operation_id=prov.get("external_operation_id"),
         canonical_operation_fingerprint=prov.get("canonical_operation_fingerprint"),
+        canonical_action_schema_version=prov.get("canonical_action_schema_version"),
+        canonical_action_digest=prov.get("canonical_action_digest"),
     )
     db.commit()
     db.refresh(intent)
@@ -718,6 +805,21 @@ def submit_intent(
         raise AgentRetiredError(str(agent.id))
     if agent.status == "registered":
         raise AgentNotOperationalError(str(agent.id))
+
+    # Post-audit implementation, Priority 1 (organisation kill switch):
+    # same "reject before any row exists" precedent as the Agent-status
+    # checks just above, for the Organization that owns this Agent's
+    # Principal. A Principal with no organization_id (organization_id is
+    # itself a valid, consistent scope elsewhere in this module) has
+    # nothing to check here and is left to whatever later checks apply.
+    _principal_for_org_check = db.get(Principal, agent.acting_for_principal_id)
+    if _principal_for_org_check is not None and _principal_for_org_check.organization_id is not None:
+        _organization_for_org_check = db.get(Organization, _principal_for_org_check.organization_id)
+        if _organization_for_org_check is not None:
+            try:
+                organization_lifecycle_service.ensure_active(_organization_for_org_check)
+            except organization_lifecycle_service.OrganizationNotActiveError as e:
+                raise OrganizationNotActiveError(str(e.organization_id)) from e
 
     intent = Intent(
         agent_id=agent.id,

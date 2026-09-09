@@ -18,6 +18,7 @@ from app.routers import (
     enforcement_bindings,
     enterprise_systems,
     evidence,
+    execution_receipts,
     facts,
     integration_contracts,
     integration_identities,
@@ -306,6 +307,7 @@ def create_app() -> FastAPI:
     app.include_router(capability_tokens.router)
     app.include_router(assurance.router)
     app.include_router(sandbox.router)
+    app.include_router(execution_receipts.router)
 
     return app
 

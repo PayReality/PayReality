@@ -48,17 +48,22 @@ def _name_or_none(db: Session, model, entity_id: uuid.UUID | None) -> str | None
     return row.name if row is not None else None
 
 
-def _active_inbound_delegations(db: Session, principal_id: uuid.UUID) -> list[dict]:
+def _active_inbound_delegations(db: Session, principal: Principal) -> list[dict]:
     """Direct (one-hop) delegations granting this Principal authority --
     not a multi-hop chain walk. PHASE_2_RUNTIME_CONTEXT.md's performance
     note: multi-hop resolution is an audit/impact-analysis capability
     (Phase 4), not part of the decision hot path, so this stays a single
-    indexed query."""
+    indexed query.
+
+    Post-audit implementation, Priority 2: takes the full Principal, not
+    just its id, so the cross-organisation check below can compare
+    organizations without a second round-trip for the common (same-org)
+    case."""
     now = datetime.now(timezone.utc)
     rows = list(
         db.scalars(
             select(AuthorityRelationship).where(
-                AuthorityRelationship.to_principal_id == principal_id,
+                AuthorityRelationship.to_principal_id == principal.id,
                 AuthorityRelationship.kind == "delegation",
                 AuthorityRelationship.status == "active",
             )
@@ -66,10 +71,35 @@ def _active_inbound_delegations(db: Session, principal_id: uuid.UUID) -> list[di
     )
     result = []
     for r in rows:
-        if r.valid_from is not None and r.valid_from > now:
+        # Same defensive tzinfo normalization as capability_service.py's
+        # own expires_at comparison: a real Postgres timestamptz column
+        # already round-trips with tzinfo set, so this is a no-op there;
+        # only a naive-datetime backend (e.g. SQLite in tests) would
+        # ever hit the `else` branch.
+        valid_from = r.valid_from
+        if valid_from is not None and valid_from.tzinfo is None:
+            valid_from = valid_from.replace(tzinfo=timezone.utc)
+        valid_to = r.valid_to
+        if valid_to is not None and valid_to.tzinfo is None:
+            valid_to = valid_to.replace(tzinfo=timezone.utc)
+        if valid_from is not None and valid_from > now:
             continue
-        if r.valid_to is not None and r.valid_to < now:
+        if valid_to is not None and valid_to < now:
             continue
+        # AuthorityRelationship.cross_org_approved's own documented
+        # intent (db/models.py: "not honored in traversal unless
+        # explicitly flagged -- fail-closed default") was never actually
+        # enforced here: this function only ever filtered on
+        # to_principal_id/kind/status/validity window, never on whether
+        # the delegating principal belongs to a different organization.
+        # Fail closed: an unapproved cross-org edge is silently excluded
+        # from the runtime authority context, the same as if it didn't
+        # exist, rather than granting effective authority across a
+        # tenant boundary.
+        if r.from_principal_id is not None and not r.cross_org_approved:
+            from_principal = db.get(Principal, r.from_principal_id)
+            if from_principal is not None and from_principal.organization_id != principal.organization_id:
+                continue
         result.append(
             {
                 "id": str(r.id),
@@ -91,8 +121,9 @@ def resolve_runtime_authority_context(
     populated yet gets a context with mostly-null fields, never an error.
     """
     if principal is None:
-        return {"risk_level": classify_risk(amount)}
+        return {"risk_level": classify_risk(amount), "delegations": [], "delegation_count": 0}
 
+    delegations = _active_inbound_delegations(db, principal)
     return {
         "organization": _name_or_none(db, Organization, principal.organization_id),
         "business_unit": _name_or_none(db, BusinessUnit, principal.business_unit_id),
@@ -100,5 +131,18 @@ def resolve_runtime_authority_context(
         "team": _name_or_none(db, Team, principal.team_id),
         "role": principal.role,
         "risk_level": classify_risk(amount),
-        "delegations": _active_inbound_delegations(db, principal.id),
+        "delegations": delegations,
+        # Post-audit implementation, Priority 2: the array itself
+        # (`delegations`) was already resolved and merged into the OPA
+        # input correctly, but a RuntimePolicy Condition had no safe way
+        # to reference it -- Operator.EXISTS compiles to a "!= null"
+        # check (rego_generator.generate_condition_expression), and this
+        # list is never null, only ever empty-or-populated, so an EXISTS
+        # condition against `context.authority.delegations` would always
+        # be true regardless of whether a delegation actually existed.
+        # This scalar count is the smallest correction that makes the
+        # already-resolved data safely conditionable with an existing,
+        # already-correct operator (GT/GTE), without inventing any new
+        # Rego generation case or multi-hop/inheritance semantics.
+        "delegation_count": len(delegations),
     }

@@ -106,7 +106,13 @@ sandbox organization is otherwise a completely normal organization in every othe
 
 **What this is not**: not a new, simplified sandbox authority engine; not the frontend-mocked
 interactive demo; not a promotion path into production (see "Sandbox-to-production boundary" below
--- none exists, deliberately).
+-- none exists, deliberately); and, distinctly (post-audit implementation, Priority 10): not agent
+execution sandboxing. `Organization.environment == "sandbox"` is a tenant label with small resource
+caps, nothing more -- PayReality does not host, execute, or isolate an agent's own code in any
+environment, sandbox or production. An agent runs wherever the customer's own infrastructure runs
+it; PayReality integrates with that runtime (via the Agent SDK or a Trusted Adapter), it does not
+sandbox it. A future Microsoft-toolkit-style execution sandbox, if one is ever needed, belongs to
+the agent runtime layer or the customer's own platform, not to PayReality's core.
 
 ### Starter policy templates
 
@@ -254,6 +260,59 @@ organization's Capability); relevant live state (Agent, Organization, Integratio
 Enforcement Binding) rechecked immediately before consumption, failing closed if any is no longer
 active; wrong action, resource, environment, binding, or audience each independently rejected; an
 already-consumed or expired Capability rejected. `downstream` is never called on any of these.
+
+## Execution Receipts and Reconciliation (post-audit implementation, Priorities 5-6)
+
+After a trusted Adapter's action is authorized (and, for a `CAPABILITY_REQUIRED` Binding, its
+Capability consumed), it can report what actually happened downstream and have that report checked
+for internal consistency against what was authorized -- the generic bridge from "this was authorized"
+to "this is what our own records say happened," described honestly rather than as independent proof.
+
+**Implemented now:**
+
+- `POST /v1/execution-receipts` (`app/services/execution_receipt_service.py`) -- the same
+  Adapter-signature authentication as `POST /v1/integration-runtime/intents`. A receipt names an
+  `enforcement_binding_id`, `decision_id`, `canonical_action_digest`, `external_operation_id`,
+  `destination`, and a `status` (`ACCEPTED` / `SUCCEEDED` / `FAILED` / `PARTIALLY_SUCCEEDED` /
+  `UNKNOWN`), optionally a `capability_id`. Every field is cross-checked against the Decision's own
+  Intent before anything is persisted -- the submitting identity and binding must be the exact ones
+  actually used for this Decision, the canonical action digest and external operation id must match,
+  and a `CAPABILITY_REQUIRED` Binding's Capability must actually have been consumed. A retry with
+  identical content is a no-op (idempotent); a retry with different content for the same
+  (operation, status) is rejected as a conflict; a legitimate state transition (`ACCEPTED` ->
+  `SUCCEEDED`) is a new, separate, immutable record -- history here is append-only, never rewritten.
+- `app/services/execution_reconciliation_service.py` (`reconcile_decision`) -- reconciles an
+  authorized Decision's own trusted records (its Capability consumption, its ingested execution
+  receipts) against each other, producing one of `MATCHED` / `MISMATCHED` / `EXECUTION_FAILED` /
+  `PARTIAL` / `RECEIPT_MISSING` / `INDETERMINATE`. Every run appends a signed, hash-chained Evidence
+  event; re-running with no new information is a true no-op, never a duplicate. Reconciliation only
+  applies to a Decision that was actually authorized (`ALLOW`, or an approved `HUMAN_REVIEW`) through
+  the Adapter-mediated path -- an Agent-direct Intent has no Adapter and no receipt channel, so
+  reconciling one is explicitly out of scope, not silently approximated.
+- Both are additive: no existing endpoint, table, or column changed behaviour to ship this.
+
+**Reference mechanism, not independent proof:** a receipt is an authenticated Adapter's own claim.
+PayReality verifies WHO is making WHICH claim about WHICH already-decided action; it has no channel
+of its own to the external system and does not claim to independently verify that a receipt's status
+is true. Reconciliation compares PayReality's own trusted records against each other, never against
+the external system directly -- "reconciled" means "internally consistent with what PayReality was
+told," not "independently verified to have happened." See `DECLARED_VS_OBSERVED_RECONCILIATION.md`
+for the full single-attester limitation and the (proposed, unbuilt) future model that would close it.
+
+**A disclosed simplification, not a timeline reconstruction:** if any execution receipt for a
+Decision ever reports `SUCCEEDED`, reconciliation reports `MATCHED` regardless of submission order or
+any other status also reported for the same operation. A customer whose downstream system can
+genuinely flip a completed operation's outcome after the fact needs a domain-specific reconciliation
+rule this generic bridge does not provide.
+
+**Not built, deliberately:** no workflow-specific reconciliation rules (nothing here knows what
+"supplier bank details" or any other specific action means); no declared-vs-observed reconciliation
+(a second, independently-solicited signal from the Agent itself, compared against the Adapter's own
+attestation -- see `DECLARED_VS_OBSERVED_RECONCILIATION.md`); no dashboard/API surface for browsing
+reconciliation results (the service and its Evidence trail exist; a human-facing view of them is a
+natural, undecided next step, not yet built); no automatic re-reconciliation on a schedule or
+deadline (a caller invokes `reconcile_decision` explicitly; there is no background job that notices a
+receipt never arrived and reconciles `RECEIPT_MISSING` on its own after some deadline).
 
 ## Integration recipe: Supplier bank details change
 

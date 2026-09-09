@@ -59,6 +59,45 @@ class EmailAlreadyRegisteredError(Exception):
     pass
 
 
+class OrganizationNotActiveError(Exception):
+    """Post-audit implementation, Priority 1 (the organisation kill-switch
+    gap): the shared enforcement boundary for the invariant that no new
+    authority-lifecycle activity -- authentication, Intent submission
+    (Agent-direct or IntegrationIdentity-mediated), policy evaluation,
+    Capability issuance/consumption, or human resolution -- may proceed
+    for an Organization that isn't 'active'. Before this fix, a
+    deactivated Organization was already blocked from Capability
+    issuance/consumption (capability_service.TenantNotActiveError, Phase
+    6.1) but nothing stopped it from authenticating, submitting Intents,
+    or receiving real ALLOW/DENY/HUMAN_REVIEW decisions in the meantime --
+    new Decisions are themselves authority-lifecycle activity, not a
+    harmless side effect just because a Capability can't yet be minted
+    from one.
+
+    Deliberately does NOT touch administrative recovery: the
+    deactivate/reactivate/archive/get/update endpoints in
+    routers/organization_lifecycle.py resolve an arbitrary organization
+    directly via get_organization, never through this check, so an
+    operator can always inspect and reactivate a deactivated
+    organization regardless of this invariant."""
+
+    def __init__(self, organization_id: uuid.UUID, status: str):
+        self.organization_id = organization_id
+        self.status = status
+        super().__init__(f"organization {organization_id} is not active (status={status!r})")
+
+
+def ensure_active(organization: Organization) -> Organization:
+    """The one shared check every new enforcement point below calls,
+    rather than each re-implementing its own `status != "active"`
+    comparison. Takes an already-resolved Organization (not an id) so a
+    caller that already has the row in hand never pays a second query
+    just to run this check."""
+    if organization.status != "active":
+        raise OrganizationNotActiveError(organization.id, organization.status)
+    return organization
+
+
 def create_organization(
     db: Session, name: str, owner_email: str, owner_name: str, environment: str = "production"
 ) -> tuple[Organization, User, str]:

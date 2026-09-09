@@ -56,6 +56,7 @@ from app.services.intent_service import (
     AgentNotOperationalError,
     AgentRetiredError,
     AgentRevokedError,
+    OrganizationNotActiveError,
     ReplayDetectedError,
 )
 from app.services.resolution_service import (
@@ -115,6 +116,8 @@ def submit_intent(
         raise HTTPException(status_code=403, detail="agent_retired")
     except AgentNotOperationalError:
         raise HTTPException(status_code=403, detail="agent_not_operational")
+    except OrganizationNotActiveError:
+        raise HTTPException(status_code=403, detail="organization_not_active")
     except ReplayDetectedError:
         raise HTTPException(status_code=409, detail="replay_detected")
 

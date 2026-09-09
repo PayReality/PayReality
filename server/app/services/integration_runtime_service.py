@@ -30,9 +30,19 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import Agent, Decision, Evidence, Intent, IntegrationContractVersion, IntegrationIdentity, Principal
+from app.domain.canonical_action import build_canonical_action
+from app.db.models import (
+    Agent,
+    Decision,
+    Evidence,
+    Intent,
+    IntegrationContractVersion,
+    IntegrationIdentity,
+    Organization,
+    Principal,
+)
 from app.domain.decision.source import normalize_source
-from app.services import enforcement_binding_service, intent_service, operation_identity_service
+from app.services import enforcement_binding_service, intent_service, operation_identity_service, organization_lifecycle_service
 
 logger = logging.getLogger("payreality.integration_runtime")
 
@@ -193,6 +203,20 @@ def submit_attested_intent(
         raise IntegrationRejectionError(f"integration_identity_not_active:{identity.status}")
 
     organization_id = identity.organization_id
+
+    # Post-audit implementation, Priority 1 (organisation kill switch):
+    # an IntegrationIdentity's own status is independent of the
+    # Organization that owns it -- an active identity attached to a
+    # deactivated organization must not be able to keep submitting
+    # attested Intents. Same "reject before any row exists" precedent as
+    # the identity-status check just above.
+    organization = db.get(Organization, organization_id)
+    if organization is not None:
+        try:
+            organization_lifecycle_service.ensure_active(organization)
+        except organization_lifecycle_service.OrganizationNotActiveError as e:
+            raise IntegrationRejectionError(f"organization_not_active:{e.status}")
+
     binding = _resolve_active_binding(db, enforcement_binding_id, organization_id, identity.id)
     agent = _resolve_origin_agent(db, origin_agent_id, organization_id, binding.id)
 
@@ -266,6 +290,32 @@ def submit_attested_intent(
     if existing is not None:
         return _resolve_existing_or_conflict(db, existing, fingerprint, external_operation_id)
 
+    # Post-audit implementation, Priority 3: the canonical action contract
+    # (app/domain/canonical_action.py) -- a single, versioned, hashable
+    # representation of this exact authorized action for a future
+    # Capability/execution-receipt/reconciliation record to bind against.
+    # `principal` is deliberately left unresolved here: Runtime Truth
+    # (intent_service._evaluate_and_record, just below) already resolves
+    # the Agent's Principal for policy evaluation and Evidence, and
+    # agent_id + organization_id + integration_identity_id already
+    # uniquely identify the actor for this digest's own purpose -- a
+    # second Principal lookup here would be pure duplication for no
+    # value the digest actually needs.
+    canonical_action = build_canonical_action(
+        organization_id=organization_id,
+        agent_id=agent.id,
+        action=action,
+        integration_identity_id=identity.id,
+        integration_contract_version_id=contract_version.id,
+        contract_content_hash=contract_version.content_hash,
+        environment=binding.environment,
+        external_operation_id=external_operation_id,
+        observed_at=requested_at,
+        resource=resource,
+        amount=amount,
+        currency=currency,
+    )
+
     intent = Intent(
         agent_id=agent.id,
         correlation_id=correlation_id,
@@ -285,6 +335,8 @@ def submit_attested_intent(
         integration_id=contract_version.integration_id,
         canonical_operation_fingerprint=fingerprint,
         environment=binding.environment,
+        canonical_action_schema_version=canonical_action.schema_version,
+        canonical_action_digest=canonical_action.canonical_digest(),
     )
     db.add(intent)
     try:
@@ -322,6 +374,8 @@ def submit_attested_intent(
             "source_operation": source_operation,
             "external_operation_id": external_operation_id,
             "canonical_operation_fingerprint": fingerprint,
+            "canonical_action_schema_version": canonical_action.schema_version,
+            "canonical_action_digest": canonical_action.canonical_digest(),
         },
     )
     logger.info(

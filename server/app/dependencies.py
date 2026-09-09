@@ -9,7 +9,7 @@ from app.db.models import Agent, IntegrationIdentity, Organization, User
 from app.db.session import get_db
 from app.domain.auth.signature import verify_request_signature
 from app.domain.rbac.permissions import Permission, has_permission
-from app.services import agent_service, auth_service, integration_identity_service
+from app.services import agent_service, auth_service, integration_identity_service, organization_lifecycle_service
 
 
 async def verify_agent_signature(
@@ -165,6 +165,26 @@ def get_current_user(
     return user
 
 
+def _ensure_active_or_403(organization: Organization) -> Organization:
+    """Post-audit implementation, Priority 1: the shared enforcement
+    boundary. get_current_organization is the one dependency nearly
+    every organisation-scoped route already resolves its Organization
+    through, so this is the narrowest point that closes the kill-switch
+    gap for authentication, ordinary business mutations, RuntimePolicy
+    evaluation triggered via a session/API-key route, and human
+    resolution, all at once -- without scattering an inconsistent
+    "status != active" check through each individual router or service.
+    Administrative recovery (routers/organization_lifecycle.py) never
+    calls get_current_organization at all -- it resolves an arbitrary
+    organization directly via organization_lifecycle_service.
+    get_organization, so this check never blocks an operator from
+    inspecting or reactivating a deactivated organization."""
+    try:
+        return organization_lifecycle_service.ensure_active(organization)
+    except organization_lifecycle_service.OrganizationNotActiveError:
+        raise HTTPException(status_code=403, detail="organization_not_active")
+
+
 def get_current_organization(
     x_payreality_operator_key: str | None = Header(None),
     x_payreality_organization_id: str | None = Header(None),
@@ -209,7 +229,7 @@ def get_current_organization(
         organization = db.get(Organization, organization_id)
         if organization is None:
             raise HTTPException(status_code=404, detail="organization_not_found")
-        return organization
+        return _ensure_active_or_403(organization)
 
     token = _bearer_token(authorization)
     if token is None:
@@ -222,4 +242,4 @@ def get_current_organization(
     organization = db.get(Organization, organization_id)
     if organization is None:
         raise HTTPException(status_code=404, detail="organization_not_found")
-    return organization
+    return _ensure_active_or_403(organization)

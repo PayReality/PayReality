@@ -912,6 +912,18 @@ class Intent(Base):
         UUID(as_uuid=True), ForeignKey("integrations.id")
     )
     canonical_operation_fingerprint: Mapped[str | None] = mapped_column(Text)
+    # Post-audit implementation, Priority 3 (app/domain/canonical_action.py):
+    # additive, nullable, present only for the Adapter-mediated path --
+    # every Agent-direct Intent, and every Adapter-mediated one created
+    # before this column existed, leaves both NULL. Deliberately a
+    # DIFFERENT value from canonical_operation_fingerprint above (a
+    # broader digest, over more fields, for a different purpose --
+    # binding a future Capability/execution-receipt/reconciliation record
+    # to the exact canonical action, not detecting a same-meaning replay)
+    # -- adding it never changes, and can never invalidate,
+    # canonical_operation_fingerprint's own already-persisted values.
+    canonical_action_schema_version: Mapped[int | None] = mapped_column()
+    canonical_action_digest: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         Index("idx_intents_agent", "agent_id"),
@@ -2146,4 +2158,134 @@ class EnforcementBindingAgent(Base):
             "enforcement_binding_id", "agent_id", name="uq_enforcement_binding_agents_membership",
         ),
         Index("idx_enforcement_binding_agents_binding", "enforcement_binding_id"),
+    )
+
+
+class ExecutionReceiptRecord(Base):
+    """Post-audit implementation, Priority 5: the persisted row for one
+    app/domain/execution_receipt.py ExecutionReceipt claim. Named
+    ...Record, distinct from the domain module's own ExecutionReceipt
+    dataclass, purely to avoid a same-name import collision between the
+    two -- they are not the same object (this is the ORM row; that is the
+    pure, DB-free material-fields/digest model it was built from).
+
+    Append-only by construction, matching this whole codebase's Evidence-
+    chain discipline: a state transition (ACCEPTED -> SUCCEEDED) is a NEW
+    row, never an UPDATE of an existing one. `uq_execution_receipts_
+    operation_status` below is what actually enforces "one row per
+    (operation, status)" -- services/execution_receipt_service.py's own
+    pre-check is a convenience, not the guarantee, exactly the same
+    discipline capability_service.py/integration_runtime_service.py
+    already apply to their own idempotency constraints.
+
+    `integration_id`/`environment` are denormalized, immutable copies of
+    the pinned EnforcementBinding's own scope at receipt-creation time --
+    mirrors EnforcementBinding's own denormalization of integration_id/
+    source_operation from its pinned Contract version, for the identical
+    reason: it makes the natural dedup/conflict scope below a real,
+    DB-enforced index, matching idx_intents_external_operation_scope's
+    own (integration_id, environment, external_operation_id) scope
+    exactly, rather than a narrower (and, for a multi-Integration
+    organization, wrong) organization_id-only scope."""
+
+    __tablename__ = "execution_receipts"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    integration_identity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_identities.id"), nullable=False
+    )
+    enforcement_binding_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("enforcement_bindings.id"), nullable=False
+    )
+    integration_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integrations.id"), nullable=False
+    )
+    environment: Mapped[str] = mapped_column(Text, nullable=False)
+    decision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("decisions.id"), nullable=False
+    )
+    capability_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("capability_tokens.id")
+    )
+    canonical_action_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    external_operation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    destination: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    receipt_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    occurred_at: Mapped[datetime | None] = mapped_column()
+    detail: Mapped[str | None] = mapped_column(Text)
+    submitted_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    evidence_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("evidence.id")
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('ACCEPTED','SUCCEEDED','FAILED','PARTIALLY_SUCCEEDED','UNKNOWN')",
+            name="ck_execution_receipts_status",
+        ),
+        UniqueConstraint(
+            "integration_id", "environment", "external_operation_id", "status",
+            name="uq_execution_receipts_operation_status",
+        ),
+        Index("idx_execution_receipts_organization", "organization_id"),
+        Index("idx_execution_receipts_decision", "decision_id"),
+    )
+
+
+class ReconciliationResultRecord(Base):
+    """Post-audit implementation, Priority 6: the minimal authorised-vs-
+    executed reconciliation result for one Decision's Adapter-mediated
+    execution. Append-only, exactly like ExecutionReceiptRecord: re-
+    running reconciliation for the same Decision after new information
+    arrives (e.g. a SUCCEEDED receipt following an earlier ACCEPTED-only
+    state) appends a NEW row rather than rewriting a previous one -- the
+    current reconciliation state for a Decision is simply its most recent
+    row, ordered by computed_at. `result_digest` (over organization_id,
+    decision_id, outcome, capability_id, latest_execution_receipt_id) is
+    what makes re-running reconciliation with no new information a true
+    no-op (services/execution_reconciliation_service.py's own
+    idempotency check), never a pointless duplicate row on every call.
+
+    Trust statement, unchanged from execution_receipt_service.py's own:
+    this reconciles PayReality's own already-trusted records (the
+    Decision, its Capability consumption, and its ingested execution
+    receipts) against each other. It does not independently observe the
+    external system -- see DECLARED_VS_OBSERVED_RECONCILIATION.md for the
+    single-attester limitation this does not close."""
+
+    __tablename__ = "reconciliation_results"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    decision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("decisions.id"), nullable=False
+    )
+    capability_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("capability_tokens.id")
+    )
+    latest_execution_receipt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("execution_receipts.id")
+    )
+    canonical_action_digest: Mapped[str | None] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    result_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+    evidence_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("evidence.id")
+    )
+    computed_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "outcome IN ('MATCHED','MISMATCHED','EXECUTION_FAILED','PARTIAL','RECEIPT_MISSING','INDETERMINATE')",
+            name="ck_reconciliation_results_outcome",
+        ),
+        Index("idx_reconciliation_results_organization", "organization_id"),
+        Index("idx_reconciliation_results_decision", "decision_id"),
     )
