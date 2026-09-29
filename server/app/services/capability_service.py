@@ -694,6 +694,23 @@ def verify_and_consume_capability(
         "capability_consumption_result=CONSUMED capability_id=%s decision_id=%s audience=%s",
         row.id, verified.payload.decision_id, audience,
     )
+
+    # Product lifecycle vertical slice: best-effort, additive only -- an
+    # Operation exists only for callers that explicitly created one via
+    # operation_service.create_operation_for_decision (order-specific
+    # flows; see services/operation_service.py's own docstring for why
+    # that creation is NOT forced onto every capability issuance in this
+    # codebase). Every other, pre-existing caller of this function
+    # (nearly this whole codebase's own test suite) has no Operation row
+    # to find here, and this stays a silent no-op for them -- consumption
+    # itself is entirely unchanged either way.
+    from app.services import operation_service
+
+    try:
+        operation_service.record_dispatch(db, row.organization_id, row.decision_id, row.id)
+    except operation_service.OperationNotFoundError:
+        pass
+
     return ConsumedCapability(
         capability_id=row.id, decision_id=verified.payload.decision_id,
         resource=verified.payload.resource, constraints=verified.payload.constraints,

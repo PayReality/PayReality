@@ -2289,3 +2289,149 @@ class ReconciliationResultRecord(Base):
         Index("idx_reconciliation_results_organization", "organization_id"),
         Index("idx_reconciliation_results_decision", "decision_id"),
     )
+
+
+class Operation(Base):
+    """Product lifecycle vertical slice (EVIDENCEBOUND-PAYREALITY-RECOVERY-
+    V01 follow-up): the durable record of one real-world attempted
+    operation, tracked separately from its Capability -- a Capability is a
+    single-use authorization artifact (it exists to be consumed exactly
+    once, then is spent); an Operation is the persistent record of what
+    was actually attempted and what is known about its outcome, which
+    outlives the Capability's own consumption and must keep being
+    queryable and updatable (via new observation evidence) long after.
+
+    One row per Decision (`uq_operations_decision`), created at Capability
+    issuance time in state AUTHORIZED (see services/operation_service.py's
+    create_operation_for_decision) -- mirrors CapabilityToken's own
+    decision_id uniqueness for the identical reason (Phase 5.1): one
+    authorization lifecycle, one Operation, not a second independently
+    valid one from a racing or repeated call.
+
+    State machine, precise names chosen to fit this codebase's existing
+    domain model (ALLOW/DENY/HUMAN_REVIEW for Decision, ACCEPTED/
+    SUCCEEDED/FAILED/PARTIALLY_SUCCEEDED/UNKNOWN for ExecutionReceipt,
+    MATCHED/MISMATCHED/EXECUTION_FAILED/PARTIAL/RECEIPT_MISSING/
+    INDETERMINATE for ReconciliationResultRecord -- this table's own state
+    is a fourth, coarser vocabulary, deliberately not a repeat of any of
+    the three above, because it answers a different, narrower question
+    ("is this specific real-world attempt still open, and if not, how did
+    it close") than any of them do alone):
+
+        AUTHORIZED               -- a Capability exists; nothing has been
+                                     attempted yet.
+        DISPATCHED               -- the Capability was consumed (single-
+                                     use, atomic) -- an attempt was made.
+                                     Set by operation_service.record_
+                                     dispatch, in the SAME transaction as
+                                     the atomic consume.
+        COMMITTED                -- reconciliation evidence establishes
+                                     the attempt succeeded (maps from
+                                     ReconciliationResultRecord.outcome ==
+                                     MATCHED).
+        TERMINALLY_NOT_COMMITTED -- reconciliation evidence establishes the
+                                     attempt did not, and will not, commit
+                                     (maps from outcome == EXECUTION_FAILED,
+                                     the one outcome this codebase already
+                                     treats as a destination-reported
+                                     terminal negative -- never inferred
+                                     from a missing or ambiguous receipt).
+        OUTCOME_UNKNOWN           -- every other case: no receipt yet
+                                     (RECEIPT_MISSING), a non-terminal
+                                     status only (INDETERMINATE), or
+                                     evidence that doesn't cleanly resolve
+                                     either way (MISMATCHED, PARTIAL). The
+                                     honest default -- reachable from
+                                     DISPATCHED and, per section 9's own
+                                     instruction, CAN later still resolve
+                                     to COMMITTED or TERMINALLY_NOT_COMMITTED
+                                     if better evidence arrives (this is why
+                                     OUTCOME_UNKNOWN is not itself listed as
+                                     terminal in ck_operations_state's own
+                                     transition discipline below).
+
+    No column here enforces the transition graph (a CHECK constraint can
+    only validate one row's current value, not its history) -- that
+    discipline lives entirely in operation_service.py, which never issues
+    a raw UPDATE against `state` from anywhere else in this codebase.
+    AUTHORIZED and DISPATCHED are never re-entered once left, and a
+    Capability revoked (via its origin Agent) after DISPATCHED does not,
+    and structurally cannot, move an Operation backward -- there is no
+    function anywhere that does that.
+
+    `material_action_digest` binds this Operation to the exact
+    domain.order_action_contract.OrderAction (or, for a non-order action,
+    whatever canonical-action digest applies) it was authorized against --
+    the same "what, exactly, was decided" binding CapabilityToken.constraints
+    already gives capability consumption, extended to survive past the
+    Capability's own single-use lifetime."""
+
+    __tablename__ = "operations"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    decision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("decisions.id"), nullable=False
+    )
+    capability_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("capability_tokens.id")
+    )
+    material_action_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    destination: Mapped[str | None] = mapped_column(Text)
+    destination_operation_id: Mapped[str | None] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(Text, nullable=False, server_default="AUTHORIZED")
+    attempt_count: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('AUTHORIZED','DISPATCHED','COMMITTED','TERMINALLY_NOT_COMMITTED','OUTCOME_UNKNOWN')",
+            name="ck_operations_state",
+        ),
+        UniqueConstraint("decision_id", name="uq_operations_decision"),
+        Index("idx_operations_organization", "organization_id"),
+        Index("idx_operations_destination_operation", "destination_operation_id"),
+    )
+
+
+class DestinationDuplicatePreventionGuarantee(Base):
+    """Product lifecycle vertical slice: the ONE other way (besides
+    Operation.state == TERMINALLY_NOT_COMMITTED) a replacement attempt is
+    ever reported safe by services/operation_service.py's
+    evaluate_replacement_safety -- and deliberately a HUMAN-DOCUMENTED
+    fact, never auto-inferred from anything a destination merely claims in
+    passing (e.g. a generic "idempotent" flag on an adapter contract).
+    Section 8's own instruction: "Do not treat a generic idempotency claim
+    as sufficient without defining its scope and retention" -- `scope_
+    description` and `retention_until` are both required, non-optional
+    columns for exactly that reason; a guarantee with no stated scope or
+    expiry is not representable in this table at all, by construction.
+
+    One row per Operation (`uq_duplicate_prevention_operation`) -- a
+    guarantee is specific to the exact operation_id it covers, never a
+    blanket property of a destination or integration."""
+
+    __tablename__ = "destination_duplicate_prevention_guarantees"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    operation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("operations.id"), nullable=False
+    )
+    destination: Mapped[str] = mapped_column(Text, nullable=False)
+    scope_description: Mapped[str] = mapped_column(Text, nullable=False)
+    retention_until: Mapped[datetime] = mapped_column(nullable=False)
+    documented_by: Mapped[str] = mapped_column(Text, nullable=False)
+    documented_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("operation_id", name="uq_duplicate_prevention_operation"),
+        Index("idx_duplicate_prevention_organization", "organization_id"),
+    )
+
+

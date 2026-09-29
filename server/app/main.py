@@ -24,6 +24,7 @@ from app.routers import (
     integration_identities,
     integration_runtime,
     intents,
+    operations,
     organization as organization_router,
     organization_lifecycle,
     organization_structure,
@@ -308,6 +309,7 @@ def create_app() -> FastAPI:
     app.include_router(assurance.router)
     app.include_router(sandbox.router)
     app.include_router(execution_receipts.router)
+    app.include_router(operations.router)
 
     return app
 

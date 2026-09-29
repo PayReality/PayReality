@@ -130,6 +130,22 @@ class Permission(str, Enum):
     # lifecycle without holding RUNTIME_POLICY_PUBLISH.
     INTEGRATION_IDENTITY_MANAGE = "integration_identity.manage"
 
+    # Product lifecycle vertical slice (EVIDENCEBOUND-PAYREALITY-RECOVERY-
+    # V01 follow-up): deliberately NOT reusing CAPABILITY_ISSUE,
+    # CAPABILITY_VERIFY, DECISIONS_VIEW, or EVIDENCE_VIEW. This is the
+    # narrowly scoped "recovery credential" the brief's own section 7
+    # requires: read an Operation's state, record a late observation
+    # (append evidence, request reconciliation), and check replacement
+    # safety, for an operation that ALREADY EXISTS -- and structurally
+    # nothing else. Holding this permission alone grants no path to
+    # issue_capability_for_decision, verify_and_consume_capability, or any
+    # Intent-submission endpoint; the Auditor role below holds this
+    # permission and holds neither CAPABILITY_ISSUE nor CAPABILITY_VERIFY,
+    # which is the real, testable proof (test_operation_observe_
+    # permission_cannot_execute) that observation and execution are
+    # genuinely separate credentials here, not the same one renamed.
+    OPERATION_OBSERVE = "operation.observe"
+
 
 # The full permission set, used to grant Owner "full platform control"
 # without hand-maintaining a second, parallel list that would drift
@@ -156,6 +172,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.CAPABILITY_VERIFY,
             Permission.INTEGRATION_CONTRACT_MANAGE,
             Permission.INTEGRATION_CONTRACT_PUBLISH,
+            Permission.OPERATION_OBSERVE,
         }
     ),
     Role.AGENT_ADMIN: frozenset(
@@ -186,6 +203,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.RUNTIME_POLICY_VIEW,
             Permission.AGENT_VIEW,
             Permission.ASSURANCE_VIEW,
+            Permission.OPERATION_OBSERVE,
         }
     ),
     Role.EXECUTIVE: frozenset({Permission.ASSURANCE_VIEW}),
