@@ -51,7 +51,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Agent, CapabilityToken, Decision, DecisionResolution, EnforcementBinding, Evidence, Intent, IntegrationIdentity, Organization
+from app.db.models import Agent, CapabilityToken, Decision, DecisionResolution, EnforcementBinding, Evidence, Intent, IntegrationIdentity, Operation, Organization
 from app.domain.capability import token as capability_token
 from app.services import intent_service, signing_key_service
 from app.services.intent_service import CrossOrganizationAccessError, DecisionNotFoundError
@@ -230,6 +230,7 @@ def issue_capability_for_decision(
     audience: str,
     issued_by: str | None = None,
     ttl_seconds: int = DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS,
+    replaces_operation_id: uuid.UUID | None = None,
 ) -> IssuedCapability:
     """Issues a Capability for a Decision Runtime Authority itself
     already, directly, decided ALLOW. See issue_capability_for_reviewed_decision
@@ -237,7 +238,23 @@ def issue_capability_for_decision(
     intentionally distinct functions with distinct preconditions
     (section 11: a resolution is never treated as an unrelated new ALLOW
     decision), converging only on the shared, idempotency-safe
-    _issue_and_persist tail."""
+    _issue_and_persist tail.
+
+    `replaces_operation_id` (hardening pass, section 3): optional, and
+    additive -- every existing caller that omits it gets exactly the
+    prior behaviour. When a caller EXPLICITLY declares this new
+    Capability is meant to replace an existing, named Operation, this is
+    the real ENFORCEMENT point (not merely the advisory GET /v1/
+    operations/{id}/replacement-safety endpoint): operation_service.
+    evaluate_replacement_safety is called with this new Decision's own
+    identity/binding, and issuance is refused (ReplacementNotSafeError)
+    unless the result is one of the SAFE_* categories, with the
+    attempting identity/binding matching whatever a covering guarantee
+    actually restricts it to. An unlinked new Intent -- the ordinary
+    case, no replaces_operation_id supplied -- is NOT detected or
+    blocked by anything here; this system claims no ability to notice on
+    its own that two independent Intents happen to describe the same
+    real-world action."""
     # Reuses intent_service's own org-scoped decision lookup unchanged
     # (the exact function GET /v1/decisions/{id} is built on) rather
     # than re-deriving organization scoping here a second way.
@@ -246,7 +263,22 @@ def issue_capability_for_decision(
         raise DecisionNotAllowError(f"decision {decision_id} outcome={decision.outcome!r}")
 
     intent = db.get(Intent, decision.intent_id)
+    _enforce_replacement_safety_if_linked(db, organization_id, replaces_operation_id, intent)
     return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds)
+
+
+def _enforce_replacement_safety_if_linked(db: Session, organization_id: uuid.UUID, replaces_operation_id: uuid.UUID | None, intent) -> None:
+    if replaces_operation_id is None:
+        return
+    from app.services import operation_service
+
+    result = operation_service.evaluate_replacement_safety(
+        db, organization_id, replaces_operation_id,
+        attempting_integration_identity_id=intent.integration_identity_id,
+        attempting_enforcement_binding_id=intent.enforcement_binding_id,
+    )
+    if not result.safety.startswith("SAFE_"):
+        raise operation_service.ReplacementNotSafeError(replaces_operation_id, result.safety, result.reason)
 
 
 def issue_capability_for_reviewed_decision(
@@ -256,6 +288,7 @@ def issue_capability_for_reviewed_decision(
     audience: str,
     issued_by: str | None = None,
     ttl_seconds: int = DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS,
+    replaces_operation_id: uuid.UUID | None = None,
 ) -> IssuedCapability:
     """Trusted Integration Architecture, Phase 5.1, Part B: issues a
     Capability for a HUMAN_REVIEW decision an authorized reviewer has
@@ -291,6 +324,7 @@ def issue_capability_for_reviewed_decision(
         "capability_issuance_basis=POST_REVIEW decision_id=%s resolved_by=%s resolved_by_user_id=%s",
         decision_id, resolution_row.resolved_by, resolution_row.resolved_by_user_id,
     )
+    _enforce_replacement_safety_if_linked(db, organization_id, replaces_operation_id, intent)
     return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds)
 
 
@@ -679,7 +713,6 @@ def verify_and_consume_capability(
         .where(CapabilityToken.id == row.id, CapabilityToken.consumed_at.is_(None))
         .values(consumed_at=datetime.now(timezone.utc))
     )
-    db.commit()
     if result.rowcount == 0:
         # A second (or racing) presentation of an already-consumed
         # token -- exactly the replay/double-consumption signal
@@ -687,29 +720,58 @@ def verify_and_consume_capability(
         # verification. Never logs the token itself, only its
         # capability_id, which is not secret (the token_hash it's
         # looked up by is a one-way hash, never the bearer artifact).
+        db.rollback()
         logger.warning("capability_consumption_result=ALREADY_CONSUMED capability_id=%s", row.id)
         raise CapabilityTokenAlreadyConsumedError(str(row.id))
 
-    logger.info(
-        "capability_consumption_result=CONSUMED capability_id=%s decision_id=%s audience=%s",
-        row.id, verified.payload.decision_id, audience,
-    )
-
-    # Product lifecycle vertical slice: best-effort, additive only -- an
-    # Operation exists only for callers that explicitly created one via
+    # Product lifecycle vertical slice, hardening pass: an Operation
+    # exists only for callers that explicitly created one via
     # operation_service.create_operation_for_decision (order-specific
-    # flows; see services/operation_service.py's own docstring for why
-    # that creation is NOT forced onto every capability issuance in this
-    # codebase). Every other, pre-existing caller of this function
-    # (nearly this whole codebase's own test suite) has no Operation row
-    # to find here, and this stays a silent no-op for them -- consumption
-    # itself is entirely unchanged either way.
+    # flows; see that service's own module docstring for why creation is
+    # NOT forced onto every capability issuance in this codebase).
+    # Legacy callers with no Operation are explicitly distinguished
+    # below (lifecycle_covered=False) and get EXACTLY the original,
+    # unwrapped commit -- no new failure mode is introduced for them.
+    #
+    # For a lifecycle-covered decision, the CLAIMED transition is
+    # recorded in memory here and committed in the SAME db.commit() as
+    # the capability UPDATE above (still uncommitted at this point) --
+    # one atomic transaction, not two independent best-effort writes.
+    # If recording it raises for any reason, the whole transaction
+    # (including the capability consume) rolls back: a lifecycle-covered
+    # operation whose transition cannot be durably recorded must not
+    # silently leave a capability marked consumed with no matching
+    # Operation state, which is what "fail closed... requiring
+    # reconciliation" means applied here -- the caller gets a clear,
+    # typed OperationRecordingFailedError, and the capability remains
+    # exactly as unconsumed as it was before this call, so a legitimate
+    # retry (once the underlying issue is fixed) is not permanently
+    # blocked by state this call itself already burned.
     from app.services import operation_service
 
-    try:
-        operation_service.record_dispatch(db, row.organization_id, row.decision_id, row.id)
-    except operation_service.OperationNotFoundError:
-        pass
+    operation = db.scalar(select(Operation).where(Operation.decision_id == row.decision_id))
+    lifecycle_covered = operation is not None
+    if lifecycle_covered:
+        try:
+            operation_service.record_claim(db, row.organization_id, operation, row.id)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error(
+                "capability_consumption_result=ROLLED_BACK_LIFECYCLE_RECORDING_FAILED capability_id=%s decision_id=%s operation_id=%s error=%s",
+                row.id, row.decision_id, operation.id, e,
+            )
+            raise operation_service.OperationRecordingFailedError(
+                operation_id=operation.id,
+                reason=f"capability consumption rolled back: could not durably record CLAIMED state ({e})",
+            ) from e
+    else:
+        db.commit()
+
+    logger.info(
+        "capability_consumption_result=CONSUMED capability_id=%s decision_id=%s audience=%s lifecycle_covered=%s",
+        row.id, verified.payload.decision_id, audience, lifecycle_covered,
+    )
 
     return ConsumedCapability(
         capability_id=row.id, decision_id=verified.payload.decision_id,

@@ -156,6 +156,21 @@ class Permission(str, Enum):
     # this milestone reached for first.
     OPERATION_OBSERVE = "operation.observe"
 
+    # Hardening pass, section 4: deliberately NOT covered by
+    # OPERATION_OBSERVE. Documenting a Destination Duplicate Prevention
+    # Guarantee is not "recording what happened" -- it is a governance
+    # decision that unlocks a specific future replacement attempt as
+    # safe, the same category of decision as publishing a Runtime Policy
+    # or approving an Integration Contract, not as viewing evidence. An
+    # observer must never be able to grant themselves replacement
+    # safety by documenting their own guarantee -- holding OPERATION_
+    # OBSERVE (Reviewer) grants no path to this permission; it is
+    # granted to Governance Administrator alone, the same role that
+    # already holds every other governance-approval permission in this
+    # file (RUNTIME_POLICY_PUBLISH, INTEGRATION_CONTRACT_PUBLISH,
+    # CAPABILITY_ISSUE).
+    OPERATION_SAFETY_APPROVE = "operation.safety_approve"
+
 
 # The full permission set, used to grant Owner "full platform control"
 # without hand-maintaining a second, parallel list that would drift
@@ -183,6 +198,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.INTEGRATION_CONTRACT_MANAGE,
             Permission.INTEGRATION_CONTRACT_PUBLISH,
             Permission.OPERATION_OBSERVE,
+            Permission.OPERATION_SAFETY_APPROVE,
         }
     ),
     Role.AGENT_ADMIN: frozenset(

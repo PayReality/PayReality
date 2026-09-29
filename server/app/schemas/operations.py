@@ -17,6 +17,15 @@ class OperationResponse(BaseModel):
     updated_at: datetime
 
 
+class RecordDispatchEvidenceRequest(BaseModel):
+    """The executor's own report that it sent the destination request --
+    distinct from an observation (what the destination said back)."""
+
+    integration_identity_id: UUID | None = None
+    destination: str | None = None
+    destination_operation_id: str | None = None
+
+
 class RecordObservationRequest(BaseModel):
     """The narrowly scoped observation path's own request shape.
     `integration_identity_id` names which already-registered Trusted
@@ -48,6 +57,7 @@ class RecordObservationResponse(BaseModel):
 class ReplacementSafetyResponse(BaseModel):
     safety: str
     reason: str
+    requires_current_authorization: bool
 
 
 class RecordDuplicatePreventionGuaranteeRequest(BaseModel):
@@ -55,6 +65,8 @@ class RecordDuplicatePreventionGuaranteeRequest(BaseModel):
     scope_description: str
     retention_until: datetime
     documented_by: str
+    restricted_to_integration_identity_id: UUID | None = None
+    restricted_to_enforcement_binding_id: UUID | None = None
 
 
 class DuplicatePreventionGuaranteeResponse(BaseModel):
@@ -64,3 +76,5 @@ class DuplicatePreventionGuaranteeResponse(BaseModel):
     retention_until: datetime
     documented_by: str
     documented_at: datetime
+    restricted_to_integration_identity_id: UUID | None
+    restricted_to_enforcement_binding_id: UUID | None
