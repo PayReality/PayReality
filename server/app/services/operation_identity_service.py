@@ -169,7 +169,8 @@ class ConcurrentBusinessOperationAttemptError(Exception):
 
 
 def resolve_or_create_business_operation_identity(
-    db: Session, organization_id: uuid.UUID, integration_id: uuid.UUID, destination: str, business_operation_id: str,
+    db: Session, organization_id: uuid.UUID, integration_id: uuid.UUID, action: str,
+    destination: str, business_operation_id: str,
 ) -> BusinessOperationIdentity:
     """The read-then-insert-then-catch-IntegrityError-then-requery shape
     Phase 3 already established for Intent's own idempotency scope
@@ -180,11 +181,18 @@ def resolve_or_create_business_operation_identity(
     (uq_business_operation_identity) is the actual guarantee; this
     function's own read-first and except-IntegrityError-then-requery are
     the fast path and the correctness fallback, not the guarantee
-    itself."""
+    itself.
+
+    `action` (contract-enforcement pass): the canonical action type --
+    part of the identity's own namespace alongside integration_id and
+    destination, so two unrelated action types under the same
+    integration/destination can never collide merely for reusing the
+    same business_operation_id string."""
     existing = db.scalar(
         select(BusinessOperationIdentity).where(
             BusinessOperationIdentity.organization_id == organization_id,
             BusinessOperationIdentity.integration_id == integration_id,
+            BusinessOperationIdentity.action == action,
             BusinessOperationIdentity.destination == destination,
             BusinessOperationIdentity.business_operation_id == business_operation_id,
         )
@@ -193,7 +201,7 @@ def resolve_or_create_business_operation_identity(
         return existing
 
     identity = BusinessOperationIdentity(
-        organization_id=organization_id, integration_id=integration_id,
+        organization_id=organization_id, integration_id=integration_id, action=action,
         destination=destination, business_operation_id=business_operation_id,
     )
     db.add(identity)
@@ -205,6 +213,7 @@ def resolve_or_create_business_operation_identity(
             select(BusinessOperationIdentity).where(
                 BusinessOperationIdentity.organization_id == organization_id,
                 BusinessOperationIdentity.integration_id == integration_id,
+                BusinessOperationIdentity.action == action,
                 BusinessOperationIdentity.destination == destination,
                 BusinessOperationIdentity.business_operation_id == business_operation_id,
             )

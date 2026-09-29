@@ -255,6 +255,20 @@ def submit_attested_intent(
     if action != contract_version.canonical_action:
         raise IntegrationRejectionError("canonical_action_mismatch")
 
+    # Contract-enforcement pass, section 1: reads the SERVER-RESOLVED
+    # contract_version.lifecycle_requirement -- never anything the
+    # request body itself claims -- so a caller cannot omit or
+    # "downgrade" past a configured requirement by simply leaving the
+    # fields out. Checked here, before authorization/evaluation ever
+    # runs (intent_service._evaluate_and_record below), matching every
+    # other pre-evaluation trust failure in this module.
+    if contract_version.lifecycle_requirement == "LIFECYCLE_REQUIRED" and (
+        business_operation_id is None or intended_destination is None
+    ):
+        raise IntegrationRejectionError(
+            "lifecycle_required_but_business_operation_id_or_intended_destination_missing"
+        )
+
     _check_structural_field("resource", contract_version.resource_path, resource)
     _check_structural_field("amount", contract_version.amount_path, amount)
     _check_structural_field("currency", contract_version.currency_path, currency)

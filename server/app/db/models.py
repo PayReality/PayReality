@@ -1961,6 +1961,38 @@ class IntegrationContractVersion(Base):
     approved_at: Mapped[datetime | None]
     retired_at: Mapped[datetime | None]
 
+    # Contract-enforcement pass, section 1: a versioned, semantic term of
+    # the contract itself (part of content_hash, below) -- not a runtime
+    # toggle a caller can flip per request. 'LEGACY' (the default: every
+    # pre-existing approved version, and every new one unless explicitly
+    # set otherwise) means business_operation_id/intended_destination
+    # remain OPTIONAL for this mapping, exactly today's behaviour.
+    # 'LIFECYCLE_REQUIRED' means integration_runtime_service.submit_
+    # attested_intent must reject a submission missing EITHER field,
+    # before authorization ever runs -- a caller cannot omit or
+    # "downgrade" past this, because the check reads this SERVER-
+    # RESOLVED column, never anything the request body supplies.
+    # Changing it requires the same governance authority as any other
+    # semantic change to the mapping: settable only while DRAFT
+    # (Permission.INTEGRATION_CONTRACT_MANAGE), frozen at validate, and
+    # only takes real effect once approved (Permission.
+    # INTEGRATION_CONTRACT_PUBLISH) -- no separate, weaker toggle
+    # endpoint exists.
+    lifecycle_requirement: Mapped[str] = mapped_column(Text, nullable=False, server_default="LEGACY")
+
+    # Contract-enforcement pass, section 2: the evidence-acceptance
+    # policy term for this mapping. 'ADAPTER_OWN_OBSERVATION' is the
+    # ONLY legal value today, and is meant literally: a signed report
+    # under this contract proves what the reporting IntegrationIdentity
+    # itself observed and attests to, never independently-verified
+    # destination truth. A stronger, independently-verified tier is NOT
+    # implemented anywhere in this codebase (disclosed here, not
+    # fabricated as a selectable-but-inert option) -- the CHECK
+    # constraint below only permits this one value on purpose, so this
+    # column cannot silently start claiming a guarantee the platform
+    # does not provide.
+    destination_evidence_kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="ADAPTER_OWN_OBSERVATION")
+
     __table_args__ = (
         UniqueConstraint(
             "integration_id", "source_operation", "version",
@@ -1969,6 +2001,14 @@ class IntegrationContractVersion(Base):
         CheckConstraint(
             "status IN ('draft','validated','approved','retired')",
             name="ck_integration_contract_versions_status",
+        ),
+        CheckConstraint(
+            "lifecycle_requirement IN ('LEGACY','LIFECYCLE_REQUIRED')",
+            name="ck_integration_contract_versions_lifecycle_requirement",
+        ),
+        CheckConstraint(
+            "destination_evidence_kind IN ('ADAPTER_OWN_OBSERVATION')",
+            name="ck_integration_contract_versions_destination_evidence_kind",
         ),
         Index("idx_integration_contract_versions_org", "organization_id"),
         Index("idx_integration_contract_versions_lookup", "integration_id", "source_operation"),
@@ -2333,6 +2373,17 @@ class BusinessOperationIdentity(Base):
                       as Phase 3 -- not a redundant column there, but
                       explicit here since this table is looked up
                       directly, not only through Integration).
+      action type  = `action` (Intent.action, the canonical action string
+                      -- e.g. "purchase_order_create" vs.
+                      "purchase_order_cancel"), server-resolved and
+                      validated against the Integration Contract exactly
+                      like every other authority-relevant field
+                      (contract_version.canonical_action must match).
+                      Contract-enforcement pass, section 1's own
+                      addition: without this, a caller could collide two
+                      semantically unrelated action types that happen to
+                      reuse the same business_operation_id string under
+                      the same integration/destination.
       destination  = the caller-DECLARED intended destination, required
                       at submission time (Intent.intended_destination) --
                       this table does not wait for dispatch evidence to
@@ -2342,6 +2393,15 @@ class BusinessOperationIdentity(Base):
                       compared byte for byte, never normalized (same
                       discipline as Phase 3's own
                       validate_external_operation_id, reused directly).
+
+    Every one of these five fields is SERVER-VALIDATED, never trusted as
+    an unqualified caller string: organization_id and integration_id are
+    resolved from the authenticated IntegrationIdentity/EnforcementBinding,
+    never accepted as request fields at all; `action` is the same value
+    already checked against the approved Contract's own canonical_action;
+    only `destination` and `business_operation_id` are caller-supplied,
+    and both are validated for shape (non-empty, bounded length) before
+    ever reaching this table.
 
     Deliberately NOT keyed by material_action_digest or any other
     field-equality check: two legitimate, independent real-world orders
@@ -2371,6 +2431,7 @@ class BusinessOperationIdentity(Base):
     integration_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("integrations.id"), nullable=False
     )
+    action: Mapped[str] = mapped_column(Text, nullable=False)
     destination: Mapped[str] = mapped_column(Text, nullable=False)
     business_operation_id: Mapped[str] = mapped_column(Text, nullable=False)
     current_operation_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -2381,7 +2442,7 @@ class BusinessOperationIdentity(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "organization_id", "integration_id", "destination", "business_operation_id",
+            "organization_id", "integration_id", "action", "destination", "business_operation_id",
             name="uq_business_operation_identity",
         ),
         Index("idx_business_operation_identities_organization", "organization_id"),
@@ -2631,7 +2692,17 @@ class OperationEvidenceEvent(Base):
     `receipt_id` links to the real ExecutionReceiptRecord this event
     corresponds to, when there is one (every OBSERVATION event does; a
     DISPATCH_REPORTED, OBSERVATION_CONFLICT_REJECTED, or MANUAL_
-    ADJUDICATION event does not)."""
+    ADJUDICATION event does not).
+
+    `execution_stage_at_event` (contract-enforcement pass, section 2):
+    a permanent snapshot of Operation.execution_stage at the moment THIS
+    event was recorded -- never recomputed later, never inferred from
+    the Operation's current (possibly since-changed) stage. Answers,
+    explicitly and permanently, "did dispatch evidence exist before this
+    outcome arrived?" -- a late OBSERVATION recorded while execution_
+    stage was still CLAIMED (no DISPATCH_REPORTED event ever happened)
+    is NOT silently treated as if dispatch had been evidenced; the gap
+    is recorded here, not papered over by inventing dispatch history."""
 
     __tablename__ = "operation_evidence_events"
 
@@ -2659,6 +2730,7 @@ class OperationEvidenceEvent(Base):
     receipt_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("execution_receipts.id")
     )
+    execution_stage_at_event: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     __table_args__ = (
@@ -2669,6 +2741,10 @@ class OperationEvidenceEvent(Base):
         CheckConstraint(
             "reporter_kind IN ('SIGNED_ADAPTER_IDENTITY','RBAC_HUMAN','MANUAL_ADJUDICATION')",
             name="ck_operation_evidence_events_reporter_kind",
+        ),
+        CheckConstraint(
+            "execution_stage_at_event IN ('AUTHORIZED','CLAIMED','DISPATCHED')",
+            name="ck_operation_evidence_events_execution_stage_at_event",
         ),
         Index("idx_operation_evidence_events_organization", "organization_id"),
         Index("idx_operation_evidence_events_operation", "operation_id"),

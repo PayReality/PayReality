@@ -15,7 +15,7 @@ from app.schemas.capability import (
     VerifyCapabilityRequest,
     VerifyCapabilityResponse,
 )
-from app.services import capability_service, intent_service
+from app.services import capability_service, intent_service, operation_identity_service, operation_service
 
 router = APIRouter(prefix="/v1", tags=["capabilities"])
 logger = logging.getLogger("payreality.capability")
@@ -59,6 +59,12 @@ def issue_capability(
         raise HTTPException(status_code=409, detail=f"capability_already_consumed_for_decision: {e}")
     except capability_service.CapabilityExpiredNotRenewedError as e:
         raise HTTPException(status_code=409, detail=f"capability_expired_not_renewed: {e}")
+    except operation_service.ReplacementNotSafeError as e:
+        raise HTTPException(status_code=409, detail=f"replacement_not_safe: safety={e.safety} reason={e.reason}")
+    except operation_service.LifecycleRequirementNotSatisfiedError as e:
+        raise HTTPException(status_code=422, detail=f"lifecycle_requirement_not_satisfied: {e}")
+    except operation_identity_service.ConcurrentBusinessOperationAttemptError as e:
+        raise HTTPException(status_code=409, detail=f"concurrent_business_operation_attempt: {e}")
     return IssueCapabilityResponse(
         token=issued.token, capability_id=issued.capability_id, expires_at=issued.expires_at
     )
@@ -119,6 +125,12 @@ def issue_capability_from_review(
         raise HTTPException(status_code=409, detail=f"capability_already_consumed_for_decision: {e}")
     except capability_service.CapabilityExpiredNotRenewedError as e:
         raise HTTPException(status_code=409, detail=f"capability_expired_not_renewed: {e}")
+    except operation_service.ReplacementNotSafeError as e:
+        raise HTTPException(status_code=409, detail=f"replacement_not_safe: safety={e.safety} reason={e.reason}")
+    except operation_service.LifecycleRequirementNotSatisfiedError as e:
+        raise HTTPException(status_code=422, detail=f"lifecycle_requirement_not_satisfied: {e}")
+    except operation_identity_service.ConcurrentBusinessOperationAttemptError as e:
+        raise HTTPException(status_code=409, detail=f"concurrent_business_operation_attempt: {e}")
     return IssueCapabilityResponse(
         token=issued.token, capability_id=issued.capability_id, expires_at=issued.expires_at
     )
@@ -196,6 +208,12 @@ def verify_capability(
         raise HTTPException(status_code=409, detail=f"enforcement_binding_not_active: {e}")
     except capability_service.TenantNotActiveError as e:
         raise HTTPException(status_code=409, detail=f"tenant_not_active: {e}")
+    except operation_service.OperationSupersededError as e:
+        raise HTTPException(status_code=409, detail=f"operation_superseded: current_operation_id={e.current_operation_id}")
+    except operation_service.ReplacementSafetyWithdrawnError as e:
+        raise HTTPException(status_code=409, detail=f"replacement_safety_withdrawn: safety={e.safety} reason={e.reason}")
+    except operation_service.OperationRecordingFailedError as e:
+        raise HTTPException(status_code=500, detail=f"operation_recording_failed: {e.reason}")
     return VerifyCapabilityResponse(
         capability_id=consumed.capability_id, decision_id=consumed.decision_id,
         resource=consumed.resource, constraints=consumed.constraints,

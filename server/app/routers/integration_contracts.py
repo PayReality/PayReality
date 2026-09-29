@@ -54,7 +54,9 @@ def _version_to_response(row) -> ContractVersionResponse:
         resource_path=row.resource_path, fact_subject_path=row.fact_subject_path,
         amount_path=row.amount_path, currency_path=row.currency_path,
         context_bindings=row.context_bindings, content_hash=row.content_hash,
-        source_schema_fingerprint=row.source_schema_fingerprint, status=row.status,
+        source_schema_fingerprint=row.source_schema_fingerprint,
+        lifecycle_requirement=row.lifecycle_requirement, destination_evidence_kind=row.destination_evidence_kind,
+        status=row.status,
         created_by=row.created_by, created_at=row.created_at, validated_at=row.validated_at,
         approved_by=row.approved_by, approved_at=row.approved_at, retired_at=row.retired_at,
     )
@@ -114,6 +116,7 @@ def create_contract_version(
             resource_path=body.resource_path, fact_subject_path=body.fact_subject_path,
             amount_path=body.amount_path, currency_path=body.currency_path,
             context_bindings=body.context_bindings, source_schema_fingerprint=body.source_schema_fingerprint,
+            lifecycle_requirement=body.lifecycle_requirement, destination_evidence_kind=body.destination_evidence_kind,
         )
     except IntegrationNotFoundError:
         raise HTTPException(status_code=404, detail="integration_not_found")

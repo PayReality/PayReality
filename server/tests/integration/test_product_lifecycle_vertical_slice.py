@@ -15,6 +15,23 @@ report's own expectations):
   section 3 -- execution_stage and outcome_status as independent axes,
     never a single collapsed `state` string.
 
+Contract-enforcement pass, additionally verifies:
+  - lifecycle_requirement (IntegrationContractVersion): a LIFECYCLE_
+    REQUIRED contract rejects a submission missing either field before
+    authorization, and a caller cannot omit or "downgrade" past it --
+    the check reads the server-resolved contract, never the request.
+  - the business-operation identity's namespace is validated, not
+    trusted: cross-tenant, cross-destination, and cross-action-type
+    identical business_operation_id strings never collide.
+  - a mutable safety fact (a duplicate-prevention guarantee) that is
+    withdrawn or expires AFTER a replacement was issued blocks that
+    replacement's own consumption, not only a change in which attempt
+    is current.
+  - destination_evidence_kind (IntegrationContractVersion): the one
+    real, implemented evidence-acceptance-policy term, and execution_
+    stage_at_event: a permanent snapshot proving a late outcome did or
+    did not have prior dispatch evidence.
+
 Reuses the frozen EVIDENCEBOUND-PAYREALITY-RECOVERY-V01 scenario (120
 units, supplier A, buyer account B, delivery location X, fixed unit
 price) for the section-5 schedule reruns at the bottom of this file.
@@ -188,14 +205,19 @@ def _deploy_policy(db, org_id, opa_url, *, effect=Effect.ALLOW, resource=SUPPLIE
     return row
 
 
-def _scenario(db, org_id, *, principal_name="OrderingAgent01", integration_name="Order Fulfillment (reference)"):
+def _scenario(
+    db, org_id, *, principal_name="OrderingAgent01", integration_name="Order Fulfillment (reference)",
+    lifecycle_requirement="LEGACY", integration=None, source_operation=None, action=None,
+):
     identity, _cert = identity_svc.register_integration_identity(db, org_id, "Reference Order Adapter", "ed25519:base64:AAAA")
     identity = identity_svc.activate_integration_identity(db, identity.id, org_id)
-    integration = contract_svc.create_integration(db, org_id, integration_name)
+    if integration is None:
+        integration = contract_svc.create_integration(db, org_id, integration_name)
     contract_version = contract_svc.create_contract_version(
-        db, integration.id, org_id, SOURCE_OPERATION, ACTION,
+        db, integration.id, org_id, source_operation or SOURCE_OPERATION, action or ACTION,
         resource_path="order.supplier", amount_path=None, currency_path=None,
         fact_subject_path=None, context_bindings=ORDER_CONTEXT_BINDINGS,
+        lifecycle_requirement=lifecycle_requirement,
     )
     contract_version = contract_svc.validate_contract_version(db, contract_version.id, org_id)
     contract_version = contract_svc.approve_contract_version(db, contract_version.id, org_id, approver="governance-admin@example.com")
@@ -696,6 +718,230 @@ def test_concurrent_first_attempts_at_new_business_operation_identity(tmp_path, 
     verify_session.close()
 
 
+# === Contract-enforcement pass, section 1: mandatory lifecycle enrollment ======
+
+
+def test_lifecycle_required_contract_rejects_missing_business_operation_id(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id, lifecycle_requirement="LIFECYCLE_REQUIRED")
+    _deploy_policy(db, org.id, opa_url)
+    with pytest.raises(runtime_svc.IntegrationRejectionError, match="lifecycle_required_but"):
+        runtime_svc.submit_attested_intent(
+            db, identity, enforcement_binding_id=binding.id, origin_agent_id=agent.id,
+            source_operation=SOURCE_OPERATION, action=ACTION, resource=SUPPLIER_RESOURCE,
+            amount=None, currency=None, counterparty=None, context=dict(ORDER_CONTEXT),
+            requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
+            external_operation_id=f"{OPERATION_ID}-LIFECYCLE-REQUIRED-MISSING-BOTH",
+        )
+
+
+def test_lifecycle_required_contract_rejects_only_destination_supplied(db, opa_url):
+    """"Only one paired field supplied" -- the partial-declaration
+    check fires BEFORE the lifecycle-required check ever gets a chance
+    to run, but the net effect is identical: rejected, before
+    authorization."""
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id, lifecycle_requirement="LIFECYCLE_REQUIRED")
+    _deploy_policy(db, org.id, opa_url)
+    with pytest.raises(runtime_svc.IntegrationRejectionError, match="must_be_supplied_together"):
+        runtime_svc.submit_attested_intent(
+            db, identity, enforcement_binding_id=binding.id, origin_agent_id=agent.id,
+            source_operation=SOURCE_OPERATION, action=ACTION, resource=SUPPLIER_RESOURCE,
+            amount=None, currency=None, counterparty=None, context=dict(ORDER_CONTEXT),
+            requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
+            external_operation_id=f"{OPERATION_ID}-LIFECYCLE-REQUIRED-ONLY-DEST",
+            intended_destination=DESTINATION,
+        )
+
+
+def test_caller_cannot_disable_lifecycle_requirement_from_the_request(db, opa_url):
+    """The requirement is read from the SERVER-RESOLVED contract_
+    version, never anything the request body claims -- there is no
+    request field that could even attempt a "downgrade," and this test
+    proves that omitting the fields entirely (the only lever a caller
+    has) is rejected exactly like any other missing-field case, never
+    silently treated as LEGACY for this one submission."""
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id, lifecycle_requirement="LIFECYCLE_REQUIRED")
+    _deploy_policy(db, org.id, opa_url)
+    assert _cv.lifecycle_requirement == "LIFECYCLE_REQUIRED"
+    with pytest.raises(runtime_svc.IntegrationRejectionError, match="lifecycle_required_but"):
+        runtime_svc.submit_attested_intent(
+            db, identity, enforcement_binding_id=binding.id, origin_agent_id=agent.id,
+            source_operation=SOURCE_OPERATION, action=ACTION, resource=SUPPLIER_RESOURCE,
+            amount=None, currency=None, counterparty=None, context=dict(ORDER_CONTEXT),
+            requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
+            external_operation_id=f"{OPERATION_ID}-DOWNGRADE-ATTEMPT",
+            business_operation_id=None, intended_destination=None,
+        )
+
+
+def test_lifecycle_required_contract_accepts_full_identity(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id, lifecycle_requirement="LIFECYCLE_REQUIRED")
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-LIFECYCLE-REQUIRED-OK"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-LIFECYCLE-REQUIRED-OK", intended_destination=DESTINATION,
+    )
+    assert issued is not None
+    assert operation is not None
+    assert operation.business_operation_identity_id is not None
+
+
+def test_legacy_contract_unaffected_by_lifecycle_requirement_field(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)  # LEGACY, the default
+    assert _cv.lifecycle_requirement == "LEGACY"
+    _deploy_policy(db, org.id, opa_url)
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=f"{OPERATION_ID}-LEGACY-UNAFFECTED",
+    )
+    assert issued is not None
+    assert operation is None, "LEGACY leaves the fields optional -- omitting them still gets no coverage, exactly today's default"
+
+
+def test_defense_in_depth_check_at_issuance_for_lifecycle_required_contract(db, opa_url):
+    """Section 1's own "reject ... before authorization or capability
+    issuance": submit_attested_intent already rejects this before a
+    Decision exists (proven by the tests above), so THIS test proves
+    the SEPARATE, second gate at issuance. A real Intent/Decision is
+    submitted with no business_operation_id -- legitimately allowed,
+    since its contract is LEGACY at submission time -- and the
+    contract's own lifecycle_requirement is then changed to LIFECYCLE_
+    REQUIRED before issuance is attempted (simulating a real sequencing
+    where the contract's requirement was strengthened between
+    submission and issuance): capability_service must still refuse to
+    issue, independent of submit_attested_intent's own earlier check."""
+    org = _org(db)
+    identity, contract_version, binding, agent = _scenario(db, org.id)  # LEGACY at submission time
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-DEFENSE-IN-DEPTH"
+    intent, decision, _e = runtime_svc.submit_attested_intent(
+        db, identity, enforcement_binding_id=binding.id, origin_agent_id=agent.id,
+        source_operation=SOURCE_OPERATION, action=ACTION, resource=SUPPLIER_RESOURCE,
+        amount=None, currency=None, counterparty=None, context=dict(ORDER_CONTEXT),
+        requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
+        external_operation_id=op_id,
+        # business_operation_id / intended_destination deliberately omitted -- legal under LEGACY.
+    )
+    assert intent.business_operation_id is None
+
+    contract_version.lifecycle_requirement = "LIFECYCLE_REQUIRED"
+    db.commit()
+
+    with pytest.raises(operation_service.LifecycleRequirementNotSatisfiedError):
+        capability_service.issue_capability_for_decision(db, org.id, decision.id, audience="reference-pep")
+
+
+def test_cross_tenant_identity_collision_does_not_occur(db, opa_url):
+    org_a = _org(db, "Org Cross Tenant A")
+    org_b = _org(db, "Org Cross Tenant B")
+    identity_a, _cv_a, binding_a, agent_a = _scenario(db, org_a.id, integration_name="Integration A")
+    identity_b, _cv_b, binding_b, agent_b = _scenario(db, org_b.id, principal_name="OrderingAgent01", integration_name="Integration B")
+    _deploy_policy(db, org_a.id, opa_url)
+    _deploy_policy(db, org_b.id, opa_url)
+    boid = "ORDER-SAME-STRING-ACROSS-TENANTS"
+
+    _intent_a, _decision_a, issued_a, operation_a = _submit_and_authorize(
+        db, org_a.id, identity_a, binding_a, agent_a, external_operation_id=f"{OPERATION_ID}-CROSS-TENANT-A",
+        business_operation_id=boid, intended_destination=DESTINATION,
+    )
+    _intent_b, _decision_b, issued_b, operation_b = _submit_and_authorize(
+        db, org_b.id, identity_b, binding_b, agent_b, external_operation_id=f"{OPERATION_ID}-CROSS-TENANT-B",
+        business_operation_id=boid, intended_destination=DESTINATION,
+    )
+    assert issued_a is not None and issued_b is not None, "identical business_operation_id under different tenants must never collide"
+    assert operation_a.business_operation_identity_id != operation_b.business_operation_identity_id
+
+
+def test_cross_destination_identity_collision_does_not_occur(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    boid = "ORDER-SAME-STRING-ACROSS-DESTINATIONS"
+
+    _intent_1, _decision_1, issued_1, operation_1 = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=f"{OPERATION_ID}-CROSS-DEST-1",
+        business_operation_id=boid, intended_destination="synthetic:destination-one",
+    )
+    _intent_2, _decision_2, issued_2, operation_2 = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=f"{OPERATION_ID}-CROSS-DEST-2",
+        business_operation_id=boid, intended_destination="synthetic:destination-two",
+    )
+    assert issued_1 is not None and issued_2 is not None, "identical business_operation_id under different destinations must never collide"
+    assert operation_1.business_operation_identity_id != operation_2.business_operation_identity_id
+
+
+def test_cross_action_type_identity_collision_does_not_occur(db, opa_url):
+    """The `action` component of the identity's own namespace (this
+    pass's own addition): two unrelated action types reusing the same
+    business_operation_id under the same organization/integration/
+    destination must not collide."""
+    org = _org(db)
+    integration = contract_svc.create_integration(db, org.id, "Shared Integration")
+    identity_1 = operation_identity_service.resolve_or_create_business_operation_identity(
+        db, org.id, integration.id, ACTION, DESTINATION, "SAME-BUSINESS-OPERATION-ID-STRING",
+    )
+    identity_2 = operation_identity_service.resolve_or_create_business_operation_identity(
+        db, org.id, integration.id, "purchase_order_cancel", DESTINATION, "SAME-BUSINESS-OPERATION-ID-STRING",
+    )
+    assert identity_1.id != identity_2.id, "different action types must never collide merely for reusing the same business_operation_id string"
+
+
+def test_replacement_safety_withdrawn_after_issuance_blocks_consumption(db, opa_url):
+    """Section 1's own "safety guarantee expires or is withdrawn after
+    issuance" scenario: attempt #1's guarantee justified issuing
+    attempt #2 as a replacement; the guarantee is then withdrawn
+    (edited to a destination that no longer matches, the simplest real
+    way to invalidate it without deleting audit history) BEFORE attempt
+    #2's own capability is ever consumed -- consumption must be
+    blocked, not merely "is this attempt still current" (it still is)."""
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    boid = "ORDER-GUARANTEE-WITHDRAWN"
+    op_id_1 = f"{OPERATION_ID}-GUARANTEE-WITHDRAWN-1"
+    intent1, decision1, issued1, operation1 = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id_1,
+        business_operation_id=boid, intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id_1).digest(),
+    )
+    guarantee = operation_service.record_destination_duplicate_prevention_guarantee(
+        db, org.id, operation1.id, destination=DESTINATION,
+        scope_description="Destination-confirmed idempotency key, believed to cover this attempt",
+        retention_until=datetime.now(timezone.utc) + timedelta(days=30), documented_by="governance-admin@example.com",
+    )
+
+    op_id_2 = f"{OPERATION_ID}-GUARANTEE-WITHDRAWN-2"
+    intent2, decision2, issued2, operation2 = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id_2,
+        business_operation_id=boid, intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id_2).digest(),
+    )
+    assert issued2 is not None
+    assert operation2.previous_attempt_operation_id == operation1.id
+
+    # The guarantee expires -- its own retention_until lapses before
+    # attempt #2's capability is ever consumed. evaluate_replacement_
+    # safety's own read-time expiry check (already exercised in
+    # isolation by test_expired_guarantee_does_not_make_replacement_
+    # safe) is what this test proves actually gates CONSUMPTION too,
+    # not merely a fresh evaluate_replacement_safety() call.
+    guarantee.retention_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+
+    with pytest.raises(operation_service.ReplacementSafetyWithdrawnError) as excinfo:
+        _consume(db, org.id, issued2, binding)
+    assert excinfo.value.previous_attempt_operation_id == operation1.id
+    db.expire_all()
+    stale_capability_row = db.get(CapabilityToken, issued2.capability_id)
+    assert stale_capability_row.consumed_at is None, "consumption must roll back entirely, not partially apply"
+    db.refresh(operation2)
+    assert operation2.execution_stage == "AUTHORIZED", "the blocked replacement's own stage must not silently advance"
+
+
 # === Section 2: evidence acceptance rules =======================================
 
 
@@ -942,6 +1188,112 @@ def test_forged_integration_identity_reference_rejected(db, opa_url):
             enforcement_binding_id=binding.id, material_action_digest=order.digest(),
             canonical_action_digest=intent.canonical_action_digest, destination=DESTINATION, status="SUCCEEDED",
         )
+
+
+# === Contract-enforcement pass, section 2: evidence-acceptance policy per contract ==
+
+
+def test_destination_evidence_kind_defaults_to_the_only_implemented_tier(db, opa_url):
+    """"Define the evidence acceptance policy per integration contract"
+    -- a real, versioned, per-contract field, not merely documentation.
+    Only one value is legal, on purpose: no independently-verified
+    destination-evidence tier exists in this codebase, and this column
+    says so structurally rather than offering a selectable option that
+    would do nothing."""
+    org = _org(db)
+    _identity, contract_version, _binding, _agent = _scenario(db, org.id)
+    assert contract_version.destination_evidence_kind == "ADAPTER_OWN_OBSERVATION"
+
+
+def test_destination_evidence_kind_rejects_any_other_value(db):
+    org = _org(db)
+    integration = contract_svc.create_integration(db, org.id, "Rejects Bad Evidence Kind")
+    with pytest.raises(contract_svc.ContractValidationError, match="destination_evidence_kind"):
+        contract_svc.create_contract_version(
+            db, integration.id, org.id, SOURCE_OPERATION, ACTION,
+            resource_path="order.supplier", context_bindings=ORDER_CONTEXT_BINDINGS,
+            destination_evidence_kind="INDEPENDENTLY_VERIFIED",
+        )
+
+
+def test_lifecycle_requirement_rejects_any_other_value(db):
+    org = _org(db)
+    integration = contract_svc.create_integration(db, org.id, "Rejects Bad Lifecycle Requirement")
+    with pytest.raises(contract_svc.ContractValidationError, match="lifecycle_requirement"):
+        contract_svc.create_contract_version(
+            db, integration.id, org.id, SOURCE_OPERATION, ACTION,
+            resource_path="order.supplier", context_bindings=ORDER_CONTEXT_BINDINGS,
+            lifecycle_requirement="SOMETIMES_REQUIRED",
+        )
+
+
+def test_contract_settings_are_part_of_content_hash(db):
+    """Both new fields are semantic, not incidental provenance -- two
+    contract versions that differ ONLY in lifecycle_requirement must
+    hash differently, exactly like differing in canonical_action would."""
+    org = _org(db)
+    integration = contract_svc.create_integration(db, org.id, "Content Hash Sensitivity")
+    cv_legacy = contract_svc.create_contract_version(
+        db, integration.id, org.id, SOURCE_OPERATION, ACTION,
+        resource_path="order.supplier", context_bindings=ORDER_CONTEXT_BINDINGS,
+        lifecycle_requirement="LEGACY",
+    )
+    cv_legacy = contract_svc.validate_contract_version(db, cv_legacy.id, org.id)
+    cv_required = contract_svc.create_contract_version(
+        db, integration.id, org.id, SOURCE_OPERATION, ACTION,
+        resource_path="order.supplier", context_bindings=ORDER_CONTEXT_BINDINGS,
+        lifecycle_requirement="LIFECYCLE_REQUIRED",
+    )
+    cv_required = contract_svc.validate_contract_version(db, cv_required.id, org.id)
+    assert cv_legacy.content_hash != cv_required.content_hash
+
+
+def test_execution_stage_at_event_records_the_dispatch_evidence_gap(db, opa_url):
+    """"A late outcome may arrive without prior dispatch evidence;
+    record that evidence gap explicitly rather than inventing dispatch
+    history." A signed Adapter observation arrives while execution_
+    stage is still CLAIMED (no DISPATCH_REPORTED event was ever
+    recorded) -- the event's own execution_stage_at_event must say
+    CLAIMED, permanently, regardless of whatever execution_stage the
+    Operation itself reaches afterward."""
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-DISPATCH-GAP"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-DISPATCH-GAP", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    consumed = _consume(db, org.id, issued, binding)
+    assert operation.execution_stage == "CLAIMED"  # no dispatch evidence ever recorded
+
+    updated, _r, _res = _adapter_observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id, order=_order_action(op_id))
+    assert updated.outcome_status == "COMMITTED"
+
+    event = db.scalar(select(OperationEvidenceEvent).where(OperationEvidenceEvent.operation_id == operation.id, OperationEvidenceEvent.event_type == "OBSERVATION"))
+    assert event.execution_stage_at_event == "CLAIMED", "the gap (no prior dispatch evidence) is recorded explicitly, not papered over"
+
+
+def test_execution_stage_at_event_recorded_for_dispatch_report_too(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-DISPATCH-STAGE-SNAPSHOT"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-DISPATCH-STAGE-SNAPSHOT", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    _consume(db, org.id, issued, binding)
+    operation_service.record_dispatch_evidence(
+        db, org.id, operation.id, reporter_kind=operation_service.REPORTER_RBAC_HUMAN,
+        signature_verified=False, reported_by="user:ops@example.com", destination=DESTINATION,
+    )
+    event = db.scalar(select(OperationEvidenceEvent).where(OperationEvidenceEvent.operation_id == operation.id, OperationEvidenceEvent.event_type == "DISPATCH_REPORTED"))
+    assert event.execution_stage_at_event == "CLAIMED", "the stage BEFORE this event's own CLAIMED->DISPATCHED transition, never the stage it produced"
+    db.refresh(operation)
+    assert operation.execution_stage == "DISPATCHED"
 
 
 # === Section 3: execution stage vs. outcome certainty ============================

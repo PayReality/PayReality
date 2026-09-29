@@ -51,7 +51,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Agent, CapabilityToken, Decision, DecisionResolution, EnforcementBinding, Evidence, Intent, IntegrationIdentity, Operation, Organization
+from app.db.models import Agent, CapabilityToken, Decision, DecisionResolution, EnforcementBinding, Evidence, Intent, IntegrationContractVersion, IntegrationIdentity, Operation, Organization
 from app.domain.capability import token as capability_token
 from app.services import intent_service, signing_key_service
 from app.services.intent_service import CrossOrganizationAccessError, DecisionNotFoundError
@@ -307,9 +307,24 @@ def _link_business_operation_attempt_if_covered(
     as the material fields, a stricter set than the generic canonical
     action digest alone would enforce) can override it explicitly --
     this is what this codebase's own order-domain tests do."""
-    if intent.business_operation_id is None:
-        return
     from app.services import operation_service
+
+    if intent.business_operation_id is None:
+        # Contract-enforcement pass, section 1: a defense-in-depth
+        # re-check at the OTHER point section 1 explicitly names
+        # ("before authorization or capability issuance") -- submit_
+        # attested_intent already rejects a LIFECYCLE_REQUIRED
+        # submission missing either field before a Decision is ever
+        # made, so this branch is not expected to be reachable for a
+        # lifecycle-required contract in ordinary operation. It is
+        # checked again here anyway, fail-closed, in case any other
+        # future code path ever constructs an Intent without going
+        # through that gate.
+        if intent.integration_contract_version_id is not None:
+            contract_version = db.get(IntegrationContractVersion, intent.integration_contract_version_id)
+            if contract_version is not None and contract_version.lifecycle_requirement == "LIFECYCLE_REQUIRED":
+                raise operation_service.LifecycleRequirementNotSatisfiedError(intent.id, contract_version.id)
+        return
 
     existing_operation = db.scalar(select(Operation).where(Operation.decision_id == decision.id))
     if existing_operation is not None:
@@ -813,6 +828,21 @@ def verify_and_consume_capability(
             db.rollback()
             logger.warning(
                 "capability_consumption_result=ROLLED_BACK_OPERATION_SUPERSEDED capability_id=%s decision_id=%s operation_id=%s",
+                row.id, row.decision_id, operation.id,
+            )
+            raise
+        except operation_service.ReplacementSafetyWithdrawnError:
+            # Contract-enforcement pass, section 1: distinct from both of
+            # the above -- this operation IS still current, but the
+            # safety justification that let it replace a prior attempt
+            # (a guarantee, or a terminal-non-commit conclusion) no
+            # longer holds. Rolled back the same way, re-raised as-is so
+            # a caller can tell "the replacement itself was never safe,
+            # do not retry this capability" apart from either of the
+            # other two failure modes.
+            db.rollback()
+            logger.warning(
+                "capability_consumption_result=ROLLED_BACK_REPLACEMENT_SAFETY_WITHDRAWN capability_id=%s decision_id=%s operation_id=%s",
                 row.id, row.decision_id, operation.id,
             )
             raise

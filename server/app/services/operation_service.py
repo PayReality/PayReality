@@ -57,6 +57,30 @@ Closeout pass, three real fixes over the hardening pass:
      for why the single-column design was a real bug (an observation
      resolving to "unknown" silently erased whether the operation had
      been CLAIMED or DISPATCHED), not merely under-documented.
+
+Contract-enforcement pass, two further fixes:
+
+  4. Lifecycle enrollment is now a versioned, per-contract SETTING
+     (IntegrationContractVersion.lifecycle_requirement), not merely an
+     optional pair of request fields -- a LIFECYCLE_REQUIRED contract's
+     submissions are rejected before authorization if either field is
+     missing (integration_runtime_service.submit_attested_intent), with
+     a defense-in-depth recheck at capability issuance too
+     (capability_service._link_business_operation_attempt_if_covered).
+     BusinessOperationIdentity's own namespace gained `action` (the
+     canonical action type), closing a real collision risk: two
+     unrelated action types under the same integration/destination
+     could otherwise share a business_operation_id string.
+
+  5. verify_still_current_attempt now rechecks a SECOND, independent
+     mutable safety fact at consumption time, not only "is this attempt
+     still current": if this operation is itself a replacement
+     (previous_attempt_operation_id is set), the safety justification
+     that permitted issuing it over the prior attempt is re-evaluated
+     right now -- a guarantee withdrawn, expired, or overtaken by new
+     evidence between issuance and consumption blocks consumption too
+     (ReplacementSafetyWithdrawnError), not only a change in which
+     attempt is current (OperationSupersededError).
 """
 
 from __future__ import annotations
@@ -198,6 +222,44 @@ class InvalidManualAdjudicationError(Exception):
     is enforced here, not merely documented."""
 
 
+class LifecycleRequirementNotSatisfiedError(Exception):
+    """Contract-enforcement pass, section 1: the defense-in-depth
+    recheck in capability_service._link_business_operation_attempt_if_
+    covered -- reached only if some caller somehow constructed an Intent
+    without going through integration_runtime_service.submit_attested_
+    intent's own, earlier gate (which rejects this same condition before
+    a Decision is ever made)."""
+
+    def __init__(self, intent_id: uuid.UUID, contract_version_id: uuid.UUID):
+        self.intent_id, self.contract_version_id = intent_id, contract_version_id
+        super().__init__(
+            f"intent {intent_id} is bound to LIFECYCLE_REQUIRED contract version {contract_version_id} "
+            f"but is missing business_operation_id/intended_destination"
+        )
+
+
+class ReplacementSafetyWithdrawnError(Exception):
+    """Contract-enforcement pass, section 1: raised at capability
+    CONSUMPTION time (verify_still_current_attempt) when THIS operation
+    itself is a replacement (previous_attempt_operation_id is set) and
+    re-evaluating replacement safety against that prior attempt, right
+    now, no longer returns a SAFE_* outcome -- the guarantee (or
+    terminal-non-commit conclusion) that justified issuing THIS
+    replacement over the prior attempt has since been withdrawn,
+    expired, or overtaken by new evidence. Consumption must not proceed
+    on a safety justification that no longer holds, even though this
+    operation is still, correctly, its identity's current attempt."""
+
+    def __init__(self, operation_id: uuid.UUID, previous_attempt_operation_id: uuid.UUID, safety: str, reason: str):
+        self.operation_id = operation_id
+        self.previous_attempt_operation_id = previous_attempt_operation_id
+        self.safety, self.reason = safety, reason
+        super().__init__(
+            f"operation {operation_id}: the replacement-safety justification for superseding "
+            f"{previous_attempt_operation_id} no longer holds ({safety}): {reason}"
+        )
+
+
 @dataclass(frozen=True)
 class ReplacementSafety:
     # BLOCKED_ALREADY_COMMITTED | UNSAFE_UNRESOLVED |
@@ -310,7 +372,8 @@ def link_business_operation_attempt(
     subsequent attempts separately" is not merely a phrase here, it is
     the actual row structure."""
     identity = operation_identity_service.resolve_or_create_business_operation_identity(
-        db, organization_id, intent.integration_id, intent.intended_destination, intent.business_operation_id,
+        db, organization_id, intent.integration_id, intent.action,
+        intent.intended_destination, intent.business_operation_id,
     )
     db.commit()
     db.refresh(identity)
@@ -363,23 +426,53 @@ def link_business_operation_attempt(
 
 
 def verify_still_current_attempt(db: Session, organization_id: uuid.UUID, operation: Operation) -> None:
-    """Closeout pass, section 1: the CONSUMPTION-time half of "enforce
-    this at issuance and consumption, including when safety facts change
-    between them." Called from record_claim, inside capability_service.
-    verify_and_consume_capability's own transaction -- a no-op for a
-    non-identity-covered operation (business_operation_identity_id is
-    None). For an identity-covered one, re-confirms this operation is
-    STILL its identity's current_operation_id; if a later attempt has
-    since become current (issued after this one, in between this
-    operation's own issuance and this consumption attempt), raises
-    OperationSupersededError, which capability_service propagates as a
-    rolled-back consumption -- stale authority is never allowed to
-    proceed merely because it was valid when issued."""
+    """Contract-enforcement pass, section 1: the CONSUMPTION-time half of
+    "enforce this at issuance and consumption, including when safety
+    facts change between them." Called from record_claim, inside
+    capability_service.verify_and_consume_capability's own transaction
+    -- a no-op for a non-identity-covered operation (business_operation_
+    identity_id is None). Two independent, both real, checks for an
+    identity-covered one:
+
+      1. Still current -- re-confirms this operation is STILL its
+         identity's current_operation_id; if a later attempt has since
+         become current (issued after this one, in between this
+         operation's own issuance and this consumption attempt), raises
+         OperationSupersededError.
+      2. Replacement safety not withdrawn -- if THIS operation is
+         itself a replacement (previous_attempt_operation_id is set),
+         re-runs evaluate_replacement_safety against the prior attempt
+         it replaced, using the SAME attempting identity/binding used
+         at issuance (resolved from this Operation's own Decision/
+         Intent, never re-derived from anything the consuming caller
+         supplies). The guarantee or terminal-non-commit conclusion
+         that justified issuing this replacement can itself be
+         withdrawn, corrected, or superseded between issuance and
+         consumption -- "recheck mutable safety facts at consumption,
+         not just whether an attempt is still current" is this check,
+         not merely check 1 above.
+
+    Either failure rolls back the whole consumption -- stale authority,
+    or authority whose safety justification has since evaporated, is
+    never allowed to proceed merely because it was valid when issued."""
     if operation.business_operation_identity_id is None:
         return
     identity = db.get(BusinessOperationIdentity, operation.business_operation_identity_id)
     if identity is None or identity.current_operation_id != operation.id:
         raise OperationSupersededError(operation.id, identity.current_operation_id if identity else None)
+
+    if operation.previous_attempt_operation_id is not None:
+        from app.db.models import Decision, Intent
+
+        decision = db.get(Decision, operation.decision_id)
+        intent = db.get(Intent, decision.intent_id)
+        safety = evaluate_replacement_safety(
+            db, organization_id, operation.previous_attempt_operation_id,
+            attempting_integration_identity_id=intent.integration_identity_id,
+            attempting_enforcement_binding_id=intent.enforcement_binding_id,
+        )
+        if not safety.safety.startswith("SAFE_"):
+            raise ReplacementSafetyWithdrawnError(operation.id, operation.previous_attempt_operation_id, safety.safety, safety.reason)
 
 
 def record_claim(db: Session, organization_id: uuid.UUID, operation: Operation, capability_id: uuid.UUID) -> None:
@@ -434,7 +527,7 @@ def record_dispatch_evidence(
         organization_id=organization_id, operation_id=operation.id, event_type="DISPATCH_REPORTED",
         reporter_kind=reporter_kind, integration_identity_id=integration_identity_id, reported_by=reported_by,
         signature_verified=signature_verified, destination=destination, destination_operation_id=destination_operation_id,
-        claimed_status="SENT", evidence_strength=strength,
+        claimed_status="SENT", evidence_strength=strength, execution_stage_at_event=operation.execution_stage,
     )
     db.add(event)
     operation.execution_stage = "DISPATCHED"
@@ -520,6 +613,7 @@ def record_observation(
             reporter_kind=reporter_kind, integration_identity_id=identity.id, reported_by=reported_by,
             signature_verified=signature_verified, destination=destination, claimed_status=status,
             evidence_strength=_evidence_strength(reporter_kind, signature_verified),
+            execution_stage_at_event=operation.execution_stage,
         )
         db.add(conflict_event)
         db.commit()
@@ -600,6 +694,13 @@ def _finalize_observation_event(
         signature_verified=signature_verified, destination=destination,
         destination_operation_id=operation.destination_operation_id, claimed_status=status,
         reconciliation_outcome=result.outcome, evidence_strength=strength, receipt_id=receipt.id,
+        # Section 2: a permanent snapshot of what execution_stage WAS
+        # at the moment this observation arrived -- if this is still
+        # CLAIMED (no DISPATCH_REPORTED event ever happened for this
+        # operation), that gap is recorded here explicitly, not
+        # papered over by this observation itself ever touching
+        # execution_stage (it never does, see below).
+        execution_stage_at_event=operation.execution_stage,
     )
     db.add(event)
 
@@ -672,6 +773,7 @@ def record_manual_adjudication(
         reporter_kind=REPORTER_MANUAL_ADJUDICATION, reported_by=adjudicated_by, signature_verified=False,
         claimed_status=outcome_status, evidence_strength=strength, rationale=rationale,
         evidence_reference_ids=[str(i) for i in evidence_reference_ids],
+        execution_stage_at_event=operation.execution_stage,
     )
     db.add(event)
 
