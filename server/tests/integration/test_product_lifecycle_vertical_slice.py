@@ -1,21 +1,27 @@
-"""Product lifecycle vertical slice, hardening pass: verifies the
-corrected Operation state machine (AUTHORIZED -> CLAIMED -> DISPATCHED ->
-{COMMITTED | TERMINALLY_NOT_COMMITTED | OUTCOME_UNKNOWN}), atomic
-claim-recording, the four-category replacement-safety evaluation with
-real enforcement at capability issuance, the OPERATION_OBSERVE /
-OPERATION_SAFETY_APPROVE permission split, and evidence provenance --
-against real code, not a reimplementation of any prior report's own
-expectations. Reuses the frozen EVIDENCEBOUND-PAYREALITY-RECOVERY-V01
-scenario (120 units, supplier A, buyer account B, delivery location X,
-fixed unit price).
+"""Product lifecycle vertical slice: hardening pass + closeout pass.
 
-Supersedes the pre-hardening version of this file (same filename,
-same branch lineage) -- the prior version asserted DISPATCHED at
-consumption and OPERATION_OBSERVE-gates-everything, both since found
-incorrect by direct review and corrected here.
+Verifies, against real code (not a reimplementation of any prior
+report's own expectations):
+  section 1 -- business-operation identity: automatic resolution and
+    replacement-safety enforcement at issuance AND consumption, with no
+    dependence on a caller ever declaring replaces_operation_id;
+    concurrent-attempt handling; material-field equality is never the
+    dedup key.
+  section 2 -- evidence acceptance rules: only signature-verified
+    Adapter evidence (or an explicit, separately-permissioned manual
+    adjudication) can move outcome_status into a terminal value; an
+    unsigned RBAC_HUMAN relay's own claim is preserved but never
+    promoted to verified destination truth.
+  section 3 -- execution_stage and outcome_status as independent axes,
+    never a single collapsed `state` string.
+
+Reuses the frozen EVIDENCEBOUND-PAYREALITY-RECOVERY-V01 scenario (120
+units, supplier A, buyer account B, delivery location X, fixed unit
+price) for the section-5 schedule reruns at the bottom of this file.
 """
 
 import json
+import multiprocessing
 import os
 import uuid
 from dataclasses import dataclass, field
@@ -30,11 +36,11 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
 from app.db.models import (
-    Agent, Base, CapabilityToken, DestinationDuplicatePreventionGuarantee,
-    Operation, OperationEvidenceEvent, Organization, Principal,
+    Agent, BusinessOperationIdentity, Base, CapabilityToken,
+    DestinationDuplicatePreventionGuarantee, Operation, OperationEvidenceEvent,
+    Organization, Principal,
 )
 from app.domain import order_action_contract as order_action
-from app.domain.capability import token as capability_token
 from app.domain.decision import engine as decision_engine
 from app.domain.evidence.signing import public_key_b64_from_signing_key_b64
 from app.domain.rbac.permissions import Permission, Role, has_permission
@@ -47,10 +53,10 @@ from app.services import (
     capability_service,
     enforcement_binding_service as binding_svc,
     execution_receipt_service as receipt_svc,
-    execution_reconciliation_service as reconciliation_svc,
     integration_contract_service as contract_svc,
     integration_identity_service as identity_svc,
     integration_runtime_service as runtime_svc,
+    operation_identity_service,
     operation_service,
     runtime_policy_service as policy_svc,
     signing_key_service,
@@ -85,9 +91,13 @@ def _uuid_as_char_on_sqlite(element, compiler, **kw):
     return "CHAR(36)"
 
 
+def _make_engine(url, **kw):
+    return create_engine(url, **kw)
+
+
 @pytest.fixture()
 def db():
-    engine = create_engine("sqlite:///:memory:")
+    engine = _make_engine("sqlite:///:memory:")
     policies_table = Base.metadata.tables["policies"]
     partial_index = next(i for i in policies_table.indexes if i.name == "idx_policies_single_active_per_org")
     policies_table.indexes.discard(partial_index)
@@ -178,10 +188,10 @@ def _deploy_policy(db, org_id, opa_url, *, effect=Effect.ALLOW, resource=SUPPLIE
     return row
 
 
-def _scenario(db, org_id, *, principal_name="OrderingAgent01"):
+def _scenario(db, org_id, *, principal_name="OrderingAgent01", integration_name="Order Fulfillment (reference)"):
     identity, _cert = identity_svc.register_integration_identity(db, org_id, "Reference Order Adapter", "ed25519:base64:AAAA")
     identity = identity_svc.activate_integration_identity(db, identity.id, org_id)
-    integration = contract_svc.create_integration(db, org_id, "Order Fulfillment (reference)")
+    integration = contract_svc.create_integration(db, org_id, integration_name)
     contract_version = contract_svc.create_contract_version(
         db, integration.id, org_id, SOURCE_OPERATION, ACTION,
         resource_path="order.supplier", amount_path=None, currency_path=None,
@@ -209,23 +219,34 @@ def _order_action(external_operation_id, **overrides):
     return order_action.build_order_action(**fields)
 
 
-def _submit_and_authorize(db, org_id, identity, binding, agent, *, external_operation_id, resource=SUPPLIER_RESOURCE, context=None):
-    """Real path: submit the order Intent, issue the Capability, then
-    create the Operation record bound to this order's real, computed
-    OrderAction digest -- operation_service.create_operation_for_decision
-    is deliberately NOT auto-wired into generic capability issuance."""
+def _submit_and_authorize(
+    db, org_id, identity, binding, agent, *, external_operation_id, resource=SUPPLIER_RESOURCE, context=None,
+    business_operation_id=None, intended_destination=None, material_action_digest=None,
+):
+    """Real path, end to end: submit the order Intent (optionally
+    declaring business_operation_id + intended_destination -- section
+    1's own "require the supported integration to supply it before
+    authorization"), then issue the Capability. For an identity-covered
+    submission, the Operation is created AUTOMATICALLY inside
+    issue_capability_for_decision (capability_service._link_business_
+    operation_attempt_if_covered) -- never by this test calling a
+    lower-level constructor directly, which is the real, previously-
+    undemonstrated production path (create_operation_for_decision had
+    zero real router call sites before this pass)."""
     intent, decision, _ev = runtime_svc.submit_attested_intent(
         db, identity, enforcement_binding_id=binding.id, origin_agent_id=agent.id,
         source_operation=SOURCE_OPERATION, action=ACTION, resource=resource,
         amount=None, currency=None, counterparty=None, context=context if context is not None else dict(ORDER_CONTEXT),
         requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
         external_operation_id=external_operation_id,
+        business_operation_id=business_operation_id, intended_destination=intended_destination,
     )
     if decision.outcome != "ALLOW":
         return intent, decision, None, None
-    issued = capability_service.issue_capability_for_decision(db, org_id, decision.id, audience="reference-pep")
-    order = _order_action(external_operation_id)
-    operation = operation_service.create_operation_for_decision(db, org_id, decision.id, order.digest())
+    issued = capability_service.issue_capability_for_decision(
+        db, org_id, decision.id, audience="reference-pep", material_action_digest=material_action_digest,
+    )
+    operation = db.scalar(select(Operation).where(Operation.decision_id == decision.id))
     return intent, decision, issued, operation
 
 
@@ -243,18 +264,29 @@ def _consume(db, org_id, issued, binding):
     )
 
 
-def _observe(db, org_id, operation, identity, binding, intent, *, status, capability_id=None, order=None):
+def _observe(db, org_id, operation, identity, binding, intent, *, status, capability_id=None, order=None, reporter_kind=None, signature_verified=False, reported_by="user:test@example.com"):
     order = order or _order_action(operation.destination_operation_id or intent.external_operation_id)
     return operation_service.record_observation(
         db, org_id, operation.id, identity,
-        reporter_kind=operation_service.REPORTER_RBAC_HUMAN, signature_verified=False, reported_by="user:test@example.com",
+        reporter_kind=reporter_kind or operation_service.REPORTER_RBAC_HUMAN, signature_verified=signature_verified, reported_by=reported_by,
         enforcement_binding_id=binding.id, material_action_digest=order.digest(),
-        canonical_action_digest=intent.canonical_action_digest, destination=DESTINATION, status=status,
+        canonical_action_digest=intent.canonical_action_digest, destination=operation.destination or DESTINATION, status=status,
         capability_id=capability_id,
     )
 
 
-# === Order action contract: required fields =====================================
+def _adapter_observe(db, org_id, operation, identity, binding, intent, *, status, capability_id=None, order=None):
+    """A genuine, signature-verified Adapter observation -- the ONLY
+    ordinary path (besides manual adjudication) that can move
+    outcome_status into a terminal value (section 2)."""
+    return _observe(
+        db, org_id, operation, identity, binding, intent, status=status, capability_id=capability_id, order=order,
+        reporter_kind=operation_service.REPORTER_SIGNED_ADAPTER_IDENTITY, signature_verified=True,
+        reported_by=f"integration_identity:{identity.name}",
+    )
+
+
+# === Order action contract: required fields (unaffected by this pass) =========
 
 
 @pytest.mark.parametrize("field_name", order_action.REQUIRED_MATERIAL_FIELDS)
@@ -269,295 +301,765 @@ def test_order_action_rejects_missing_required_field(field_name):
     assert excinfo.value.field_name == field_name
 
 
-@pytest.mark.parametrize("field_name,changed_value", [
-    ("supplier", "B"), ("quantity", 121), ("buyer_account", "ACCT-B-PRIME"),
-    ("delivery_location", "location:Y"), ("unit_price", "99.99"),
-])
-def test_order_action_digest_changes_on_any_material_field_substitution(field_name, changed_value):
-    original = _order_action("op-1")
-    changed = _order_action("op-1", **{field_name: changed_value})
-    assert original.digest() != changed.digest(), f"{field_name} substitution did not change the digest"
+# === Section 1: business-operation identity =====================================
 
 
-# === Corrected state machine: claim != dispatch =================================
-
-
-def test_operation_authorized_then_claimed_on_consumption_not_dispatched(db, opa_url):
-    """The core correction: capability consumption proves a CLAIM, not a
-    DISPATCH. An executor can claim and then crash before ever calling
-    the destination."""
+def test_omitted_business_operation_id_gets_no_automatic_protection(db, opa_url):
+    """"Test omission" -- a caller that never supplies business_
+    operation_id/intended_destination gets exactly today's default: no
+    Operation, no automatic resolution, nothing to enforce. Proves the
+    NEW mechanism is additive, not a behaviour change for every existing
+    caller."""
     org = _org(db)
     identity, _cv, binding, agent = _scenario(db, org.id)
     _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-CLAIM-NOT-DISPATCH"
+    op_id = f"{OPERATION_ID}-OMITTED-IDENTITY"
     intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    assert operation.state == "AUTHORIZED"
-    assert operation.attempt_count == 0
-
+    assert intent.business_operation_id is None
+    assert operation is None, "no business_operation_id was supplied -- no Operation should be auto-created"
+    # The capability itself still works completely normally.
     consumed = _consume(db, org.id, issued, binding)
-    db.refresh(operation)
-    assert operation.state == "CLAIMED", "consumption alone must never be recorded as DISPATCHED"
-    assert operation.attempt_count == 1
-    assert operation.capability_id == consumed.capability_id
-
-
-def test_dispatch_evidence_advances_claimed_to_dispatched(db, opa_url):
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-DISPATCH-EVIDENCE"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    _consume(db, org.id, issued, binding)
-
-    updated = operation_service.record_dispatch_evidence(
-        db, org.id, operation.id, reporter_kind=operation_service.REPORTER_RBAC_HUMAN,
-        signature_verified=False, reported_by="user:ops@example.com",
-        integration_identity_id=identity.id, destination=DESTINATION, destination_operation_id=op_id,
-    )
-    assert updated.state == "DISPATCHED"
-    events = db.scalars(select(OperationEvidenceEvent).where(OperationEvidenceEvent.operation_id == operation.id)).all()
-    assert len(events) == 1
-    assert events[0].event_type == "DISPATCH_REPORTED"
-    assert events[0].evidence_strength == "UNSIGNED_HUMAN_RELAY"
-
-
-def test_dispatch_evidence_requires_claimed_state(db, opa_url):
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-DISPATCH-EVIDENCE-TOO-EARLY"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    # Never consumed -- still AUTHORIZED.
-    with pytest.raises(operation_service.OperationNotClaimedError):
-        operation_service.record_dispatch_evidence(
-            db, org.id, operation.id, reporter_kind=operation_service.REPORTER_RBAC_HUMAN,
-            signature_verified=False, reported_by="user:ops@example.com",
-        )
-
-
-def test_observation_accepted_from_claimed_state_even_without_dispatch_evidence(db, opa_url):
-    """Conservative handling: a crash after claim with no dispatch
-    evidence must not block a later observation -- absence of dispatch
-    evidence does not establish absence of an external effect."""
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-OBSERVE-FROM-CLAIMED"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    consumed = _consume(db, org.id, issued, binding)
-    assert operation.state == "CLAIMED"
-
-    updated_operation, receipt, result = _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id)
-    assert result.outcome == "MATCHED"
-    assert updated_operation.state == "COMMITTED"
-
-
-# === Durability: claim recording is atomic with capability consumption =========
-
-
-def test_recording_failure_rolls_back_capability_consumption_too(db, opa_url, monkeypatch):
-    """Section 2's own explicit ask: test recording failure and its
-    effect on capability consumption. Simulates a durability failure by
-    making the FIRST db.commit() after the atomic UPDATE raise -- the
-    capability's own consumed_at must roll back to None, not be left
-    consumed with no matching Operation transition."""
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-RECORDING-FAILURE"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-
-    real_commit = db.commit
-    call_count = {"n": 0}
-
-    def _failing_commit():
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            raise RuntimeError("simulated durability failure")
-        return real_commit()
-
-    monkeypatch.setattr(db, "commit", _failing_commit)
-
-    with pytest.raises(operation_service.OperationRecordingFailedError):
-        _consume(db, org.id, issued, binding)
-
-    monkeypatch.setattr(db, "commit", real_commit)
-    db.expire_all()
-    row = db.get(CapabilityToken, issued.capability_id)
-    assert row.consumed_at is None, "capability consumption must roll back when lifecycle recording fails"
-    db.refresh(operation)
-    assert operation.state == "AUTHORIZED", "operation must not silently advance either"
-
-    # A legitimate retry (durability restored) succeeds normally.
-    consumed = _consume(db, org.id, issued, binding)
-    db.refresh(operation)
-    assert operation.state == "CLAIMED"
     assert consumed.capability_id == issued.capability_id
 
 
-def test_legacy_caller_with_no_operation_is_unaffected_by_lifecycle_recording(db, opa_url):
-    """Distinguishes legacy callers explicitly: a decision with no
-    Operation at all gets exactly the original, unwrapped commit
-    behaviour -- no new failure mode."""
+def test_business_operation_id_requires_intended_destination_together(db, opa_url):
     org = _org(db)
     identity, _cv, binding, agent = _scenario(db, org.id)
     _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-LEGACY-NO-OPERATION"
-    intent, decision, _ev = runtime_svc.submit_attested_intent(
+    with pytest.raises(runtime_svc.IntegrationRejectionError, match="must_be_supplied_together"):
+        runtime_svc.submit_attested_intent(
+            db, identity, enforcement_binding_id=binding.id, origin_agent_id=agent.id,
+            source_operation=SOURCE_OPERATION, action=ACTION, resource=SUPPLIER_RESOURCE,
+            amount=None, currency=None, counterparty=None, context=dict(ORDER_CONTEXT),
+            requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
+            external_operation_id=f"{OPERATION_ID}-PARTIAL-IDENTITY",
+            business_operation_id="ORDER-PARTIAL", intended_destination=None,
+        )
+
+
+def test_first_attempt_is_authorized_stage_and_unknown_outcome(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-FIRST-ATTEMPT"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-FIRST-ATTEMPT", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    assert operation is not None
+    assert operation.execution_stage == "AUTHORIZED"
+    assert operation.outcome_status == "UNKNOWN"
+    assert operation.evidence_assurance == "NONE"
+    assert operation.business_operation_identity_id is not None
+    assert operation.previous_attempt_operation_id is None
+    identity_row = db.get(BusinessOperationIdentity, operation.business_operation_identity_id)
+    assert identity_row.current_operation_id == operation.id
+    assert identity_row.destination == DESTINATION
+    assert identity_row.business_operation_id == "ORDER-FIRST-ATTEMPT"
+
+
+def test_repeated_identity_resolved_automatically_without_replaces_operation_id(db, opa_url):
+    """The core fix: NO caller ever passes replaces_operation_id. A
+    second Intent for the SAME business_operation_id must still be
+    safety-checked automatically."""
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    boid = "ORDER-REPEATED-AUTO"
+    op_id_1 = f"{OPERATION_ID}-REPEAT-AUTO-1"
+    intent1, decision1, issued1, operation1 = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id_1,
+        business_operation_id=boid, intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id_1).digest(),
+    )
+    assert operation1.outcome_status == "UNKNOWN"  # unresolved -- unsafe to replace
+
+    op_id_2 = f"{OPERATION_ID}-REPEAT-AUTO-2"
+    intent2, decision2, _e2 = runtime_svc.submit_attested_intent(
         db, identity, enforcement_binding_id=binding.id, origin_agent_id=agent.id,
         source_operation=SOURCE_OPERATION, action=ACTION, resource=SUPPLIER_RESOURCE,
         amount=None, currency=None, counterparty=None, context=dict(ORDER_CONTEXT),
         requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
-        external_operation_id=op_id,
+        external_operation_id=op_id_2, business_operation_id=boid, intended_destination=DESTINATION,
     )
-    issued = capability_service.issue_capability_for_decision(db, org.id, decision.id, audience="reference-pep")
-    # No create_operation_for_decision call -- deliberately legacy.
-    consumed = capability_service.verify_and_consume_capability(
-        db, issued.token, "reference-pep", ACTION, SUPPLIER_RESOURCE,
-        _expected_constraints(), environment=binding.environment,
-        enforcement_binding_id=binding.id, expected_organization_id=org.id,
-    )
-    assert consumed.capability_id == issued.capability_id
-    assert db.scalar(select(Operation).where(Operation.decision_id == decision.id)) is None
+    assert decision2.outcome == "ALLOW", "fresh AUTHORITY is still independently grantable"
+    with pytest.raises(operation_service.ReplacementNotSafeError) as excinfo:
+        capability_service.issue_capability_for_decision(
+            db, org.id, decision2.id, audience="reference-pep", material_action_digest=_order_action(op_id_2).digest(),
+        )
+    assert excinfo.value.safety == "UNSAFE_UNRESOLVED"
+    assert excinfo.value.operation_id == operation1.id, "resolved the PRIOR operation with no replaces_operation_id ever supplied"
 
 
-# === Revocation before / after claim; late committed evidence after ============
-
-
-def test_revocation_before_consumption_leaves_operation_authorized(db, opa_url):
+def test_repeated_identity_blocked_when_original_already_committed(db, opa_url):
     org = _org(db)
     identity, _cv, binding, agent = _scenario(db, org.id)
     _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-REVOKE-BEFORE-CLAIM"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    assert operation.state == "AUTHORIZED"
+    boid = "ORDER-REPEAT-COMMITTED"
+    op_id_1 = f"{OPERATION_ID}-REPEAT-COMMITTED-1"
+    intent1, decision1, issued1, operation1 = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id_1,
+        business_operation_id=boid, intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id_1).digest(),
+    )
+    consumed1 = _consume(db, org.id, issued1, binding)
+    updated1, _r, _res = _adapter_observe(db, org.id, operation1, identity, binding, intent1, status="SUCCEEDED", capability_id=consumed1.capability_id, order=_order_action(op_id_1))
+    assert updated1.outcome_status == "COMMITTED"
 
-    agent_service.revoke_agent(db, agent.id, reason="revoked before any consumption attempt")
-    with pytest.raises(capability_service.OriginAgentNotActiveError):
-        _consume(db, org.id, issued, binding)
-    db.refresh(operation)
-    assert operation.state == "AUTHORIZED"
-    assert operation.attempt_count == 0
+    op_id_2 = f"{OPERATION_ID}-REPEAT-COMMITTED-2"
+    intent2, decision2, _e2 = runtime_svc.submit_attested_intent(
+        db, identity, enforcement_binding_id=binding.id, origin_agent_id=agent.id,
+        source_operation=SOURCE_OPERATION, action=ACTION, resource=SUPPLIER_RESOURCE,
+        amount=None, currency=None, counterparty=None, context=dict(ORDER_CONTEXT),
+        requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
+        external_operation_id=op_id_2, business_operation_id=boid, intended_destination=DESTINATION,
+    )
+    assert decision2.outcome == "ALLOW"
+    with pytest.raises(operation_service.ReplacementNotSafeError) as excinfo:
+        capability_service.issue_capability_for_decision(db, org.id, decision2.id, audience="reference-pep", material_action_digest=_order_action(op_id_2).digest())
+    assert excinfo.value.safety == "BLOCKED_ALREADY_COMMITTED"
 
 
-def test_revocation_after_claim_then_late_committed_evidence(db, opa_url):
+def test_repeated_identity_safe_after_terminal_non_commit_but_needs_fresh_authority(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    policy_row = _deploy_policy(db, org.id, opa_url)
+    boid = "ORDER-REPEAT-TERMINAL"
+    op_id_1 = f"{OPERATION_ID}-REPEAT-TERMINAL-1"
+    intent1, decision1, issued1, operation1 = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id_1,
+        business_operation_id=boid, intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id_1).digest(),
+    )
+    consumed1 = _consume(db, org.id, issued1, binding)
+    updated1, _r, _res = _adapter_observe(db, org.id, operation1, identity, binding, intent1, status="FAILED", capability_id=consumed1.capability_id, order=_order_action(op_id_1))
+    assert updated1.outcome_status == "TERMINALLY_NOT_COMMITTED"
+
+    op_id_2 = f"{OPERATION_ID}-REPEAT-TERMINAL-2"
+    intent2, decision2, issued2, operation2 = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id_2,
+        business_operation_id=boid, intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id_2).digest(),
+    )
+    assert issued2 is not None, "SAFE_TERMINAL_NON_COMMIT_PROVEN + fresh ALLOW must succeed"
+    assert operation2.previous_attempt_operation_id == operation1.id
+    identity_row = db.get(BusinessOperationIdentity, operation2.business_operation_identity_id)
+    assert identity_row.current_operation_id == operation2.id, "the identity's current attempt has advanced to attempt #2"
+
+    # And authority is genuinely still required -- DENY still blocks a
+    # third attempt even though safety alone would now allow it (SAFE_
+    # TERMINAL_NON_COMMIT_PROVEN never substitutes for authority).
+    _deploy_policy(db, org.id, opa_url, effect=Effect.DENY, policy_key=policy_row.policy_key)
+    op_id_3 = f"{OPERATION_ID}-REPEAT-TERMINAL-3"
+    intent3, decision3, _e3 = runtime_svc.submit_attested_intent(
+        db, identity, enforcement_binding_id=binding.id, origin_agent_id=agent.id,
+        source_operation=SOURCE_OPERATION, action=ACTION, resource=SUPPLIER_RESOURCE,
+        amount=None, currency=None, counterparty=None, context=dict(ORDER_CONTEXT),
+        requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
+        external_operation_id=op_id_3, business_operation_id=boid, intended_destination=DESTINATION,
+    )
+    assert decision3.outcome == "DENY", "safety being SAFE_* never substitutes for a fresh authority decision"
+
+
+def test_consumption_time_recheck_blocks_stale_capability_after_supersession(db, opa_url):
+    """Section 1: "enforce this at issuance and consumption, including
+    when safety facts change between them." Attempt #1's Capability is
+    issued but never consumed; a documented duplicate-prevention
+    guarantee then lets attempt #2 legitimately become current; THEN
+    attempt #1's original (still-valid-looking) Capability is presented
+    for consumption -- it must be rejected, and the whole consumption
+    must roll back."""
     org = _org(db)
     identity, _cv, binding, agent = _scenario(db, org.id)
     _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-LATE-COMMIT"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
+    boid = "ORDER-STALE-CONSUME"
+    op_id_1 = f"{OPERATION_ID}-STALE-CONSUME-1"
+    intent1, decision1, issued1, operation1 = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id_1,
+        business_operation_id=boid, intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id_1).digest(),
+    )
+    assert operation1.execution_stage == "AUTHORIZED"  # never consumed
+
+    operation_service.record_destination_duplicate_prevention_guarantee(
+        db, org.id, operation1.id, destination=DESTINATION,
+        scope_description="Destination-confirmed idempotency key covers this exact attempt, documented before any replacement",
+        retention_until=datetime.now(timezone.utc) + timedelta(days=30), documented_by="governance-admin@example.com",
+    )
+
+    op_id_2 = f"{OPERATION_ID}-STALE-CONSUME-2"
+    intent2, decision2, issued2, operation2 = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id_2,
+        business_operation_id=boid, intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id_2).digest(),
+    )
+    assert issued2 is not None
+    identity_row = db.get(BusinessOperationIdentity, operation1.business_operation_identity_id)
+    assert identity_row.current_operation_id == operation2.id, "attempt #2 is now current -- attempt #1 is superseded"
+
+    with pytest.raises(operation_service.OperationSupersededError) as excinfo:
+        _consume(db, org.id, issued1, binding)
+    assert excinfo.value.operation_id == operation1.id
+    assert excinfo.value.current_operation_id == operation2.id
+
+    db.expire_all()
+    stale_capability_row = db.get(CapabilityToken, issued1.capability_id)
+    assert stale_capability_row.consumed_at is None, "the whole consumption must roll back, not just fail after marking it consumed"
+    db.refresh(operation1)
+    assert operation1.execution_stage == "AUTHORIZED", "the superseded operation's own stage must not silently advance"
+
+
+def test_two_materially_identical_orders_with_different_business_operation_identities_do_not_collide(db, opa_url):
+    """Section 1's own explicit warning: material-field equality is
+    never the dedup key. Two orders with byte-identical supplier/
+    quantity/buyer_account/delivery_location/unit_price, but different
+    business_operation_id values, must not be treated as repeats of
+    each other."""
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id_a = f"{OPERATION_ID}-IDENTICAL-FIELDS-A"
+    op_id_b = f"{OPERATION_ID}-IDENTICAL-FIELDS-B"
+    intent_a, decision_a, issued_a, operation_a = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id_a,
+        business_operation_id="ORDER-IDENTICAL-A", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id_a).digest(),
+    )
+    intent_b, decision_b, issued_b, operation_b = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id_b,
+        business_operation_id="ORDER-IDENTICAL-B", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id_b).digest(),
+    )
+    assert issued_a is not None and issued_b is not None, "neither issuance was blocked by the other"
+    assert operation_a.id != operation_b.id
+    assert operation_a.business_operation_identity_id != operation_b.business_operation_identity_id
+    # Same real-world material CONTENT (supplier/quantity/buyer_account/
+    # delivery_location/unit_price) -- order_action_contract.py's own
+    # digest() deliberately ALSO folds in external_operation_id (by
+    # design: it binds a Capability to one specific operation, not just
+    # its field content), so the two full digests are expected to
+    # differ here; what matters is that the shared MATERIAL fields
+    # (everything the domain contract calls material) are identical.
+    assert _order_action(op_id_a).material_fields() == {**_order_action(op_id_b).material_fields(), "external_operation_id": op_id_a}
+    # ...but each consumes and claims completely independently.
+    consumed_a = _consume(db, org.id, issued_a, binding)
+    consumed_b = _consume(db, org.id, issued_b, binding)
+    assert consumed_a.capability_id != consumed_b.capability_id
+    db.refresh(operation_a)
+    db.refresh(operation_b)
+    assert operation_a.execution_stage == "CLAIMED"
+    assert operation_b.execution_stage == "CLAIMED"
+
+
+def _concurrent_first_attempt_worker(db_path: str, org_id: str, identity_id: str, binding_id: str, agent_id: str, external_operation_id: str, business_operation_id: str, opa_url: str, barrier, result_queue, worker_id: str):
+    """Runs in its own OS process (multiprocessing, spawn context --
+    mirrors test_interop_evidencebound_recovery_v01.py's own
+    _race_worker exactly). Each worker submits ITS OWN Intent (its own
+    external_operation_id, Phase 3's own scope) for the SAME
+    business_operation_id, then races to become that identity's first
+    current_operation_id at capability issuance."""
+    import uuid as _uuid
+    from datetime import datetime as _datetime, timezone as _timezone
+    from sqlalchemy import create_engine as _create_engine
+    from sqlalchemy.orm import sessionmaker as _sessionmaker
+    from app.config import settings as _settings
+    from app.db.models import Agent as _Agent, IntegrationIdentity as _IntegrationIdentity, EnforcementBinding as _EnforcementBinding
+    from app.domain.decision import engine as _decision_engine
+    from app.services import capability_service as _capability_service
+    from app.services import integration_runtime_service as _runtime_svc
+    from app.services import operation_service as _operation_service
+
+    # A spawned child re-imports the whole process fresh -- neither this
+    # test module's own top-level `decision_engine.evaluate.__defaults__
+    # = (5000,)` override, nor the autouse `_point_settings_at_ephemeral_
+    # opa` fixture's `settings.opa_url` assignment, ever runs in the
+    # child process. Both are re-applied here explicitly -- without the
+    # second one, the child's OPA client would silently point at
+    # whatever settings.opa_url defaults to (not this test's real
+    # ephemeral OPA server), producing a connection failure that this
+    # decision engine resolves as an ambiguous HUMAN_REVIEW rather than
+    # a clean ALLOW/DENY -- confirmed as the real, direct cause of this
+    # test's first failed run, not assumed.
+    _decision_engine.evaluate.__defaults__ = (5000,)
+    _settings.opa_url = opa_url
+
+    engine = _create_engine(f"sqlite:///{db_path}", connect_args={"timeout": 30})
+    session = _sessionmaker(bind=engine)()
+    try:
+        identity = session.get(_IntegrationIdentity, _uuid.UUID(identity_id))
+        binding = session.get(_EnforcementBinding, _uuid.UUID(binding_id))
+        agent = session.get(_Agent, _uuid.UUID(agent_id))
+        barrier.wait(timeout=30)
+        intent, decision, _ev = _runtime_svc.submit_attested_intent(
+            session, identity, enforcement_binding_id=binding.id, origin_agent_id=agent.id,
+            source_operation=SOURCE_OPERATION, action=ACTION, resource=SUPPLIER_RESOURCE,
+            amount=None, currency=None, counterparty=None, context=dict(ORDER_CONTEXT),
+            requested_at=_datetime.now(_timezone.utc), nonce=_uuid.uuid4().hex, correlation_id=None,
+            external_operation_id=external_operation_id,
+            business_operation_id=business_operation_id, intended_destination=DESTINATION,
+        )
+        if decision.outcome != "ALLOW":
+            result_queue.put((worker_id, "DECISION_NOT_ALLOW", None, decision.outcome))
+            return
+        issued = _capability_service.issue_capability_for_decision(session, _uuid.UUID(org_id), decision.id, audience="reference-pep")
+        result_queue.put((worker_id, "ISSUED", str(issued.capability_id), None))
+    except _operation_service.ReplacementNotSafeError as e:
+        result_queue.put((worker_id, "REPLACEMENT_NOT_SAFE", None, f"{e.safety}: {e.reason}"))
+    except Exception as e:  # pragma: no cover -- surfaced via the assertions below, never swallowed
+        result_queue.put((worker_id, "ERROR", None, f"{type(e).__name__}: {e}"))
+    finally:
+        session.close()
+
+
+def test_concurrent_first_attempts_at_new_business_operation_identity(tmp_path, opa_url):
+    """Genuine two-PROCESS race (multiprocessing, not threading, same
+    real discipline as test_interop_evidencebound_recovery_v01.py's own
+    test_two_connection_consumption_race): two independent OS processes
+    submit separate Intents for the SAME, brand-new business_operation_id
+    at the same moment. Exactly one may become the identity's first
+    current_operation_id; the other must be safely blocked (not silently
+    allowed to also "win"), because as soon as it loses the race it
+    re-resolves against the actual winner, who is still UNSAFE_UNRESOLVED
+    (freshly authorized, nothing executed yet)."""
+    db_path = str(tmp_path / "business_operation_identity_race.sqlite3")
+    engine = create_engine(f"sqlite:///{db_path}", connect_args={"timeout": 30})
+    policies_table = Base.metadata.tables["policies"]
+    partial_index = next(i for i in policies_table.indexes if i.name == "idx_policies_single_active_per_org")
+    policies_table.indexes.discard(partial_index)
+    try:
+        Base.metadata.create_all(engine)
+    finally:
+        policies_table.indexes.add(partial_index)
+    session = sessionmaker(bind=engine)()
+    signing_key_service.ensure_current_key_registered(
+        session, settings.evidence_signing_key_id,
+        public_key_b64_from_signing_key_b64(settings.evidence_signing_key_b64),
+    )
+
+    org = _org(session)
+    identity, _cv, binding, agent = _scenario(session, org.id)
+    _deploy_policy(session, org.id, opa_url)
+    org_id_str, identity_id_str, binding_id_str, agent_id_str = str(org.id), str(identity.id), str(binding.id), str(agent.id)
+    session.close()
+
+    boid = "ORDER-CONCURRENT-FIRST-ATTEMPT"
+    ctx = multiprocessing.get_context("spawn")
+    barrier = ctx.Barrier(2)
+    result_queue = ctx.Queue()
+    p1 = ctx.Process(
+        target=_concurrent_first_attempt_worker,
+        args=(db_path, org_id_str, identity_id_str, binding_id_str, agent_id_str, f"{OPERATION_ID}-CONCURRENT-1", boid, opa_url, barrier, result_queue, "worker-1"),
+    )
+    p2 = ctx.Process(
+        target=_concurrent_first_attempt_worker,
+        args=(db_path, org_id_str, identity_id_str, binding_id_str, agent_id_str, f"{OPERATION_ID}-CONCURRENT-2", boid, opa_url, barrier, result_queue, "worker-2"),
+    )
+    p1.start()
+    p2.start()
+    p1.join(timeout=60)
+    p2.join(timeout=60)
+
+    results = [result_queue.get(timeout=5) for _ in range(2)]
+    for worker_id, outcome, capability_id, detail in results:
+        _trace("concurrency", "business_operation_identity_first_attempt_result", worker_id=worker_id, result=outcome, capability_id=capability_id, detail=detail)
+
+    issued = [r for r in results if r[1] == "ISSUED"]
+    blocked = [r for r in results if r[1] == "REPLACEMENT_NOT_SAFE"]
+    assert len(issued) == 1, f"expected exactly one winning issuance, got {len(issued)}: {results}"
+    assert len(blocked) == 1, f"expected exactly one blocked attempt, got {len(blocked)}: {results}"
+    assert "UNSAFE_UNRESOLVED" in blocked[0][3]
+
+    verify_engine = create_engine(f"sqlite:///{db_path}")
+    verify_session = sessionmaker(bind=verify_engine)()
+    identity_row = verify_session.scalar(
+        select(BusinessOperationIdentity).where(BusinessOperationIdentity.business_operation_id == boid)
+    )
+    assert identity_row is not None
+    assert identity_row.current_operation_id is not None
+    operations = verify_session.scalars(select(Operation).where(Operation.business_operation_identity_id == identity_row.id)).all()
+    # Exactly how many Operation rows exist depends on real, uncontrolled
+    # interleaving (whether the loser reads current_operation_id before
+    # or after the winner has already advanced it) -- see
+    # link_business_operation_attempt's own two documented paths. Either
+    # way, the winner's own row is real and correctly current; a second,
+    # preserved row for the loser is possible but not guaranteed by this
+    # race's own timing, so this assertion checks what IS a genuine,
+    # timing-independent invariant rather than a specific count.
+    assert 1 <= len(operations) <= 2
+    current_operation = verify_session.get(Operation, identity_row.current_operation_id)
+    assert current_operation.business_operation_identity_id == identity_row.id
+    if len(operations) == 2:
+        loser_operation = next(o for o in operations if o.id != identity_row.current_operation_id)
+        assert loser_operation.capability_id is None, "the blocked loser must never reach a claimed capability"
+        assert loser_operation.execution_stage == "AUTHORIZED"
+    verify_session.close()
+
+
+# === Section 2: evidence acceptance rules =======================================
+
+
+def test_unsigned_relay_cannot_move_outcome_to_committed(db, opa_url):
+    """The report's own core finding: an unsigned RBAC_HUMAN relay must
+    never automatically become verified destination truth."""
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-UNSIGNED-CANNOT-COMMIT"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-UNSIGNED-COMMIT", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
     consumed = _consume(db, org.id, issued, binding)
-    db.refresh(operation)
-    assert operation.state == "CLAIMED"
+    updated, receipt, result = _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id, order=_order_action(op_id))
+    assert result.outcome == "MATCHED", "reconciliation itself is computed normally"
+    assert updated.outcome_status == "UNKNOWN", "but an unsigned relay alone cannot promote it to COMMITTED"
+    assert updated.evidence_assurance == "REPORTED_UNVERIFIED"
 
-    destination = FakeDestination(DestinationBehaviour.COMMIT_NO_RECEIPT)
-    destination.attempt(op_id)
-    agent_service.revoke_agent(db, agent.id, reason="pending investigation")
-
-    late = destination.late_authoritative_observation()
-    assert late == "COMMITTED"
-    updated_operation, receipt, result = _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id)
-    assert result.outcome == "MATCHED"
-    assert updated_operation.state == "COMMITTED"
-
-    with pytest.raises(capability_service.OriginAgentNotActiveError):
-        _consume(db, org.id, issued, binding)
-    db.refresh(updated_operation)
-    assert updated_operation.state == "COMMITTED", "the late observation updates historical knowledge; execution authority is not restored"
+    events = db.scalars(select(OperationEvidenceEvent).where(OperationEvidenceEvent.operation_id == operation.id, OperationEvidenceEvent.event_type == "OBSERVATION")).all()
+    assert len(events) == 1
+    assert events[0].reconciliation_outcome == "MATCHED", "the raw reconciliation result is preserved even though it wasn't trusted"
+    assert events[0].evidence_strength == "UNSIGNED_HUMAN_RELAY"
 
 
-# === Claim, then a crash with no receipt; NOT_FOUND_NOW stays non-terminal =====
-
-
-def test_claim_then_crash_no_receipt_leaves_outcome_unknown(db, opa_url):
+def test_unsigned_relay_cannot_declare_terminal_non_commit_either(db, opa_url):
+    """The same evidentiary bar applies symmetrically -- an unsigned
+    relay reporting failure must not unilaterally produce TERMINALLY_
+    NOT_COMMITTED (which would make a replacement "safe") any more than
+    it can produce COMMITTED."""
     org = _org(db)
     identity, _cv, binding, agent = _scenario(db, org.id)
     _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-CRASH-NO-RECEIPT"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    _consume(db, org.id, issued, binding)
-    result = reconciliation_svc.reconcile_decision(db, org.id, decision.id)
-    assert result.outcome == "RECEIPT_MISSING"
-    db.refresh(operation)
-    assert operation.state == "CLAIMED", "no observation was ever recorded, so state stays at CLAIMED"
-
-
-def test_not_found_now_is_not_recorded_as_terminal(db, opa_url):
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-NOT-FOUND-NOW"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    _consume(db, org.id, issued, binding)
-    destination = FakeDestination(DestinationBehaviour.NOT_FOUND_NOW)
-    assert destination.attempt(op_id) == "NOT_FOUND_NOW"
-    # No receipt submitted for an ambiguous, non-authoritative response.
-    db.refresh(operation)
-    assert operation.state == "CLAIMED"
+    op_id = f"{OPERATION_ID}-UNSIGNED-CANNOT-TERMINAL-FAIL"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-UNSIGNED-FAIL", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    consumed = _consume(db, org.id, issued, binding)
+    updated, receipt, result = _observe(db, org.id, operation, identity, binding, intent, status="FAILED", capability_id=consumed.capability_id, order=_order_action(op_id))
+    assert result.outcome == "EXECUTION_FAILED"
+    assert updated.outcome_status == "UNKNOWN"
     safety = operation_service.evaluate_replacement_safety(db, org.id, operation.id)
-    assert safety.safety == "UNSAFE_UNRESOLVED", "NOT_FOUND_NOW must never be treated as terminal non-commit proof"
+    assert safety.safety == "UNSAFE_UNRESOLVED", "an unsigned relay's claimed failure must not unlock a replacement as safe"
 
 
-# === Observation while execution revoked; observation itself revoked ===========
-
-
-def test_observation_permitted_while_execution_revoked(db, opa_url):
+def test_signed_adapter_report_can_commit(db, opa_url):
     org = _org(db)
     identity, _cv, binding, agent = _scenario(db, org.id)
     _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-OBS-WHILE-EXEC-REVOKED"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
+    op_id = f"{OPERATION_ID}-ADAPTER-COMMIT"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-ADAPTER-COMMIT", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
     consumed = _consume(db, org.id, issued, binding)
-    agent_service.revoke_agent(db, agent.id, reason="execution authority revoked")
-    updated_operation, receipt, result = _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id)
-    assert updated_operation.state == "COMMITTED"
+    updated, receipt, result = _adapter_observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id, order=_order_action(op_id))
+    assert updated.outcome_status == "COMMITTED"
+    assert updated.evidence_assurance == "ADAPTER_REPORTED"
 
 
-def test_observation_itself_revoked_blocks_the_observation(db, opa_url):
+def test_real_signed_execution_receipt_endpoint_also_commits(db, opa_url):
+    """The REAL /v1/execution-receipts path (routers/execution_receipts.py
+    -> record_observation_for_existing_receipt), not the test-only
+    _observe helper -- proves the stronger, genuinely signature-verified
+    channel actually reaches outcome_status=COMMITTED end to end."""
     org = _org(db)
     identity, _cv, binding, agent = _scenario(db, org.id)
     _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-OBS-ITSELF-REVOKED"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
+    op_id = f"{OPERATION_ID}-REAL-RECEIPT-ENDPOINT"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-REAL-RECEIPT", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
     consumed = _consume(db, org.id, issued, binding)
-    identity_svc.suspend_integration_identity(db, identity.id, org.id)
+    receipt = receipt_svc.submit_execution_receipt(
+        db, identity, enforcement_binding_id=binding.id, decision_id=decision.id,
+        canonical_action_digest=intent.canonical_action_digest, external_operation_id=op_id,
+        destination=DESTINATION, status="SUCCEEDED", capability_id=consumed.capability_id,
+    )
+    updated, _r, _result = operation_service.record_observation_for_existing_receipt(
+        db, org.id, receipt, reporter_kind=operation_service.REPORTER_SIGNED_ADAPTER_IDENTITY,
+        signature_verified=True, reported_by=f"integration_identity:{identity.name}",
+    )
+    assert updated.outcome_status == "COMMITTED"
+    assert updated.evidence_assurance == "ADAPTER_REPORTED"
+
+
+def test_manual_adjudication_requires_permission_rationale_and_evidence_references(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-MANUAL-ADJUDICATION"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-MANUAL-ADJUDICATION", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    consumed = _consume(db, org.id, issued, binding)
+    updated, receipt, result = _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id, order=_order_action(op_id))
+    assert updated.outcome_status == "UNKNOWN"
+    unsigned_event = db.scalar(select(OperationEvidenceEvent).where(OperationEvidenceEvent.operation_id == operation.id, OperationEvidenceEvent.event_type == "OBSERVATION"))
+
+    with pytest.raises(operation_service.InvalidManualAdjudicationError, match="rationale"):
+        operation_service.record_manual_adjudication(
+            db, org.id, operation.id, adjudicated_by="user:governance@example.com",
+            outcome_status="COMMITTED", rationale="", evidence_reference_ids=[unsigned_event.id],
+        )
+    with pytest.raises(operation_service.InvalidManualAdjudicationError, match="evidence_reference_id"):
+        operation_service.record_manual_adjudication(
+            db, org.id, operation.id, adjudicated_by="user:governance@example.com",
+            outcome_status="COMMITTED", rationale="Confirmed via a phone call with the supplier's own order desk", evidence_reference_ids=[],
+        )
+    with pytest.raises(operation_service.InvalidManualAdjudicationError, match="not found"):
+        operation_service.record_manual_adjudication(
+            db, org.id, operation.id, adjudicated_by="user:governance@example.com",
+            outcome_status="COMMITTED", rationale="Confirmed via a phone call", evidence_reference_ids=[uuid.uuid4()],
+        )
+
+    adjudicated = operation_service.record_manual_adjudication(
+        db, org.id, operation.id, adjudicated_by="user:governance@example.com",
+        outcome_status="COMMITTED", rationale="Confirmed via a phone call with the supplier's own order desk, referencing their own order confirmation number",
+        evidence_reference_ids=[unsigned_event.id],
+    )
+    assert adjudicated.outcome_status == "COMMITTED"
+    assert adjudicated.evidence_assurance == "MANUAL_ADJUDICATED"
+    event = db.scalars(select(OperationEvidenceEvent).where(OperationEvidenceEvent.operation_id == operation.id, OperationEvidenceEvent.event_type == "MANUAL_ADJUDICATION")).all()
+    assert len(event) == 1
+    assert event[0].reporter_kind == operation_service.REPORTER_MANUAL_ADJUDICATION
+    assert event[0].signature_verified is False
+    assert event[0].rationale
+    assert event[0].evidence_reference_ids == [str(unsigned_event.id)]
+
+
+def test_manual_adjudicate_permission_is_separate_from_observe():
+    assert has_permission(Role.REVIEWER, Permission.OPERATION_OBSERVE) is True
+    assert has_permission(Role.REVIEWER, Permission.OPERATION_MANUAL_ADJUDICATE) is False
+    assert has_permission(Role.AUDITOR, Permission.OPERATION_MANUAL_ADJUDICATE) is False
+    assert has_permission(Role.GOVERNANCE_ADMIN, Permission.OPERATION_MANUAL_ADJUDICATE) is True
+    assert has_permission(Role.OWNER, Permission.OPERATION_MANUAL_ADJUDICATE) is True
+
+
+def test_contradictory_evidence_is_retained_and_does_not_overwrite_terminal_conclusion(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-CONTRADICTORY-RETAINED"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-CONTRADICTORY", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    consumed = _consume(db, org.id, issued, binding)
+    _adapter_observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id, order=_order_action(op_id))
+
+    from app.services.execution_receipt_service import ExecutionReceiptConflictError
+
+    with pytest.raises(ExecutionReceiptConflictError):
+        _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=None, order=_order_action(op_id))
+    db.refresh(operation)
+    assert operation.outcome_status == "COMMITTED", "the terminal conclusion is never silently overwritten"
+
+    conflict_events = db.scalars(select(OperationEvidenceEvent).where(OperationEvidenceEvent.operation_id == operation.id, OperationEvidenceEvent.event_type == "OBSERVATION_CONFLICT_REJECTED")).all()
+    assert len(conflict_events) == 1, "the conflicting attempt itself is retained, not silently discarded"
+
+    safety = operation_service.evaluate_replacement_safety(db, org.id, operation.id)
+    assert safety.safety == "BLOCKED_ALREADY_COMMITTED", "an unresolved conflict must not weaken an otherwise-correct block"
+
+
+def test_mismatched_material_action_rejected(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-MISMATCHED-MATERIAL"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-MISMATCHED-MATERIAL", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    _consume(db, org.id, issued, binding)
+    wrong_order = _order_action(op_id, buyer_account="ACCT-DIFFERENT")
+    with pytest.raises(operation_service.MaterialActionMismatchError):
+        _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", order=wrong_order)
+
+
+def test_mismatched_destination_rejected(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-MISMATCHED-DESTINATION"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-MISMATCHED-DEST", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    consumed = _consume(db, org.id, issued, binding)
+    order = _order_action(op_id)
+
+    from app.services.execution_receipt_service import ExecutionReceiptRejectionError
+
+    # execution_receipt_service's own destination-consistency check
+    # compares against the FIRST receipt ever submitted for this
+    # external_operation_id, not against Operation.destination directly
+    # -- the first accepted observation establishes ground truth; only a
+    # LATER, disagreeing one is a mismatch.
+    _observe(db, org.id, operation, identity, binding, intent, status="ACCEPTED", capability_id=consumed.capability_id, order=order)
+
+    with pytest.raises(ExecutionReceiptRejectionError, match="destination_mismatch"):
+        operation_service.record_observation(
+            db, org.id, operation.id, identity,
+            reporter_kind=operation_service.REPORTER_RBAC_HUMAN, signature_verified=False, reported_by="user:test@example.com",
+            enforcement_binding_id=binding.id, material_action_digest=order.digest(),
+            canonical_action_digest=intent.canonical_action_digest,
+            destination="synthetic:a-completely-different-destination", status="SUCCEEDED", capability_id=consumed.capability_id,
+        )
+
+
+def test_forged_integration_identity_reference_rejected(db, opa_url):
+    org_a = _org(db, "Org A")
+    org_b = _org(db, "Org B")
+    identity_a, _cv, binding, agent = _scenario(db, org_a.id, integration_name="Org A Integration")
+    identity_b, _cv_b, _binding_b, _agent_b = _scenario(db, org_b.id, principal_name="OtherOrgAgent", integration_name="Org B Integration")
+    _deploy_policy(db, org_a.id, opa_url)
+    op_id = f"{OPERATION_ID}-FORGED-IDENTITY"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org_a.id, identity_a, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-FORGED-IDENTITY", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    _consume(db, org_a.id, issued, binding)
+    order = _order_action(op_id)
 
     from app.services.execution_receipt_service import ExecutionReceiptRejectionError
 
     with pytest.raises(ExecutionReceiptRejectionError):
-        _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id)
+        operation_service.record_observation(
+            db, org_a.id, operation.id, identity_b,
+            reporter_kind=operation_service.REPORTER_RBAC_HUMAN, signature_verified=False, reported_by="user:attacker@example.com",
+            enforcement_binding_id=binding.id, material_action_digest=order.digest(),
+            canonical_action_digest=intent.canonical_action_digest, destination=DESTINATION, status="SUCCEEDED",
+        )
+
+
+# === Section 3: execution stage vs. outcome certainty ============================
+
+
+def test_claimed_stage_coexists_with_unknown_outcome(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-CLAIMED-UNKNOWN"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-CLAIMED-UNKNOWN", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    _consume(db, org.id, issued, binding)
     db.refresh(operation)
-    assert operation.state == "CLAIMED", "state must be left exactly as it was"
+    assert operation.execution_stage == "CLAIMED"
+    assert operation.outcome_status == "UNKNOWN", "unknown BEFORE dispatch evidence"
 
 
-# === Recovery credential cannot initiate or retry execution ====================
+def test_dispatched_stage_coexists_with_unknown_outcome(db, opa_url):
+    """Preserves the distinction between unknown-before-dispatch and
+    unknown-after-dispatch -- both are valid, different combinations."""
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-DISPATCHED-UNKNOWN"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-DISPATCHED-UNKNOWN", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    _consume(db, org.id, issued, binding)
+    operation_service.record_dispatch_evidence(
+        db, org.id, operation.id, reporter_kind=operation_service.REPORTER_RBAC_HUMAN,
+        signature_verified=False, reported_by="user:ops@example.com", destination=DESTINATION,
+    )
+    db.refresh(operation)
+    assert operation.execution_stage == "DISPATCHED", "unknown AFTER evidenced dispatch -- a materially different fact from before"
+    assert operation.outcome_status == "UNKNOWN"
 
 
-def test_operation_observe_permission_grants_no_execution_permission():
-    assert has_permission(Role.REVIEWER, Permission.OPERATION_OBSERVE) is True
-    assert has_permission(Role.REVIEWER, Permission.CAPABILITY_ISSUE) is False
-    assert has_permission(Role.REVIEWER, Permission.CAPABILITY_VERIFY) is False
-    assert has_permission(Role.AUDITOR, Permission.OPERATION_OBSERVE) is False, "Auditor must stay strictly read-only"
+def test_dispatch_evidence_never_infers_from_missing_receipt(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-NO-INFERENCE"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-NO-INFERENCE", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    _consume(db, org.id, issued, binding)
+    db.refresh(operation)
+    # No dispatch evidence, no observation -- both axes stay exactly at
+    # their honest defaults; nothing is inferred from the absence.
+    assert operation.execution_stage == "CLAIMED"
+    assert operation.outcome_status == "UNKNOWN"
+    assert operation.evidence_assurance == "NONE"
 
 
-def test_operation_safety_approve_is_separate_from_observe():
-    """Section 4: an observer cannot grant themselves replacement
-    safety. Explicit checks for Reviewer, Auditor, execution-capable
-    roles, and Governance Admin."""
-    assert has_permission(Role.REVIEWER, Permission.OPERATION_OBSERVE) is True
-    assert has_permission(Role.REVIEWER, Permission.OPERATION_SAFETY_APPROVE) is False
-    assert has_permission(Role.AUDITOR, Permission.OPERATION_SAFETY_APPROVE) is False
-    assert has_permission(Role.AGENT_ADMIN, Permission.OPERATION_OBSERVE) is False
-    assert has_permission(Role.AGENT_ADMIN, Permission.OPERATION_SAFETY_APPROVE) is False
-    assert has_permission(Role.GOVERNANCE_ADMIN, Permission.OPERATION_SAFETY_APPROVE) is True
-    assert has_permission(Role.GOVERNANCE_ADMIN, Permission.OPERATION_OBSERVE) is True
-    assert has_permission(Role.OWNER, Permission.OPERATION_SAFETY_APPROVE) is True
+def test_late_commit_after_revocation_reaches_committed_via_adapter_evidence(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-LATE-COMMIT-ADAPTER"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-LATE-COMMIT-ADAPTER", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    consumed = _consume(db, org.id, issued, binding)
+    agent_service.revoke_agent(db, agent.id, reason="pending investigation")
+    updated, _r, result = _adapter_observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id, order=_order_action(op_id))
+    assert result.outcome == "MATCHED"
+    assert updated.outcome_status == "COMMITTED"
+    assert updated.evidence_assurance == "ADAPTER_REPORTED"
+
+    with pytest.raises(capability_service.OriginAgentNotActiveError):
+        _consume(db, org.id, issued, binding)
+
+
+def test_terminal_non_commit_via_signed_adapter_evidence(db, opa_url):
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-TERMINAL-NON-COMMIT-ADAPTER"
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-TERMINAL-NON-COMMIT", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
+    consumed = _consume(db, org.id, issued, binding)
+    updated, _r, result = _adapter_observe(db, org.id, operation, identity, binding, intent, status="FAILED", capability_id=consumed.capability_id, order=_order_action(op_id))
+    assert result.outcome == "EXECUTION_FAILED"
+    assert updated.outcome_status == "TERMINALLY_NOT_COMMITTED"
+    safety = operation_service.evaluate_replacement_safety(db, org.id, operation.id)
+    assert safety.safety == "SAFE_TERMINAL_NON_COMMIT_PROVEN"
+    assert safety.requires_current_authorization is True
+
+
+def test_operations_route_response_exposes_both_axes():
+    """Structural proof the API response shape actually carries both
+    facts separately -- not merely the service layer internally."""
+    from app.schemas.operations import OperationResponse
+
+    fields = OperationResponse.model_fields
+    assert "execution_stage" in fields
+    assert "outcome_status" in fields
+    assert "evidence_assurance" in fields
+    assert "state" not in fields, "the old collapsed field must not still be exposed"
+
+
+# === Structural: route + permission gating ======================================
 
 
 def test_every_operations_route_is_gated_correctly():
-    """Structural proof: 5 of 6 routes require OPERATION_OBSERVE; the
-    duplicate-prevention-guarantees route requires OPERATION_SAFETY_
-    APPROVE specifically, not OPERATION_OBSERVE."""
     from fastapi.routing import APIRoute
 
     from app.main import app
@@ -570,7 +1072,7 @@ def test_every_operations_route_is_gated_correctly():
                 yield route
 
     operations_routes = {r.path: r for r in _all_routes(app.router.routes) if r.path.startswith("/v1/operations") or r.path == "/v1/decisions/{decision_id}/operation"}
-    assert len(operations_routes) == 6, f"expected 6 operations routes, found {len(operations_routes)}: {sorted(operations_routes)}"
+    assert len(operations_routes) == 7, f"expected 7 operations routes, found {len(operations_routes)}: {sorted(operations_routes)}"
 
     def _gated_by(route):
         names = set()
@@ -585,247 +1087,29 @@ def test_every_operations_route_is_gated_correctly():
 
     guarantee_route = operations_routes.pop("/v1/operations/{operation_id}/duplicate-prevention-guarantees")
     assert Permission.OPERATION_SAFETY_APPROVE in _gated_by(guarantee_route)
-    assert Permission.OPERATION_OBSERVE not in _gated_by(guarantee_route)
+
+    adjudication_route = operations_routes.pop("/v1/operations/{operation_id}/manual-adjudication")
+    assert Permission.OPERATION_MANUAL_ADJUDICATE in _gated_by(adjudication_route)
+    assert Permission.OPERATION_OBSERVE not in _gated_by(adjudication_route)
+
     for path, route in operations_routes.items():
         assert Permission.OPERATION_OBSERVE in _gated_by(route), f"{path} not gated by OPERATION_OBSERVE"
 
 
-def test_record_observation_has_no_code_path_to_issue_or_consume_a_capability():
-    import app.services.operation_service as op_svc_module
-
-    assert "capability_service" not in vars(op_svc_module)
-    assert "issue_capability_for_decision" not in vars(op_svc_module)
-    assert "verify_and_consume_capability" not in vars(op_svc_module)
-
-
-# === Duplicate, delayed, mismatched, and contradictory evidence ================
-
-
-def test_duplicate_observation_is_idempotent(db, opa_url):
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-DUPLICATE"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    consumed = _consume(db, org.id, issued, binding)
-    op1, r1, _ = _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id)
-    op2, r2, _ = _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id)
-    assert r1.id == r2.id, "an identical duplicate report must resolve to the same receipt, not a second row"
-    assert op2.state == "COMMITTED"
-
-
-def test_contradictory_evidence_raises_conflict_not_silent_rewrite(db, opa_url):
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-CONTRADICTORY"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    consumed = _consume(db, org.id, issued, binding)
-    _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id)
-
-    from app.services.execution_receipt_service import ExecutionReceiptConflictError
-
-    # `detail` alone is deliberately NON-material, so a genuine
-    # contradiction varies a MATERIAL field (capability_id) instead.
-    with pytest.raises(ExecutionReceiptConflictError):
-        _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=None)
-    db.refresh(operation)
-    assert operation.state == "COMMITTED", "history is never silently rewritten by a conflicting report"
-
-
-def test_mismatched_material_action_rejected(db, opa_url):
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-MISMATCHED-MATERIAL-ACTION"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    _consume(db, org.id, issued, binding)
-    wrong_order = _order_action(op_id, buyer_account="ACCT-DIFFERENT")
-    with pytest.raises(operation_service.MaterialActionMismatchError):
-        _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", order=wrong_order)
-
-
-def test_mismatched_destination_rejected(db, opa_url):
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-MISMATCHED-DESTINATION"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    consumed = _consume(db, org.id, issued, binding)
-    _observe(db, org.id, operation, identity, binding, intent, status="ACCEPTED", capability_id=consumed.capability_id)
-
-    from app.services.execution_receipt_service import ExecutionReceiptRejectionError
-
-    order = _order_action(op_id)
-    with pytest.raises(ExecutionReceiptRejectionError, match="destination_mismatch"):
-        operation_service.record_observation(
-            db, org.id, operation.id, identity,
-            reporter_kind=operation_service.REPORTER_RBAC_HUMAN, signature_verified=False, reported_by="user:test@example.com",
-            enforcement_binding_id=binding.id, material_action_digest=order.digest(),
-            canonical_action_digest=intent.canonical_action_digest,
-            destination="synthetic:a-completely-different-destination", status="SUCCEEDED", capability_id=consumed.capability_id,
-        )
-
-
-def test_forged_integration_identity_reference_rejected(db, opa_url):
-    """A caller naming an IntegrationIdentity from a DIFFERENT
-    organization must not be usable to relay an observation."""
-    org_a = _org(db, "Org A")
-    org_b = _org(db, "Org B")
-    identity_a, _cv, binding, agent = _scenario(db, org_a.id)
-    identity_b, _cv_b, _binding_b, _agent_b = _scenario(db, org_b.id, principal_name="OtherOrgAgent")
-    _deploy_policy(db, org_a.id, opa_url)
-    op_id = f"{OPERATION_ID}-FORGED-IDENTITY"
-    intent, decision, issued, operation = _submit_and_authorize(db, org_a.id, identity_a, binding, agent, external_operation_id=op_id)
-    _consume(db, org_a.id, issued, binding)
-
-    order = _order_action(op_id)
-    # identity_b belongs to org_b; submit_execution_receipt's own
-    # linkage check (identity not bound to this decision) must reject it.
-    from app.services.execution_receipt_service import ExecutionReceiptRejectionError
-
-    with pytest.raises(ExecutionReceiptRejectionError):
-        operation_service.record_observation(
-            db, org_a.id, operation.id, identity_b,
-            reporter_kind=operation_service.REPORTER_RBAC_HUMAN, signature_verified=False, reported_by="user:attacker@example.com",
-            enforcement_binding_id=binding.id, material_action_digest=order.digest(),
-            canonical_action_digest=intent.canonical_action_digest, destination=DESTINATION, status="SUCCEEDED",
-        )
-
-
-# === Fresh authorization exists, replacement remains unsafe =====================
-
-
-def test_fresh_authorization_exists_but_replacement_remains_unsafe(db, opa_url):
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-FRESH-AUTH-UNSAFE"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    _consume(db, org.id, issued, binding)
-    safety = operation_service.evaluate_replacement_safety(db, org.id, operation.id)
-    assert safety.safety == "UNSAFE_UNRESOLVED"
-    assert safety.requires_current_authorization is True
-
-    identity2, _cv2, binding2, fresh_agent = _scenario(db, org.id, principal_name="OrderingAgent01")
-    replacement_op_id = f"{op_id}-REPLACEMENT"
-    _intent2, replacement_decision, _e2 = runtime_svc.submit_attested_intent(
-        db, identity2, enforcement_binding_id=binding2.id, origin_agent_id=fresh_agent.id,
-        source_operation=SOURCE_OPERATION, action=ACTION, resource=SUPPLIER_RESOURCE,
-        amount=None, currency=None, counterparty=None, context=dict(ORDER_CONTEXT),
-        requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
-        external_operation_id=replacement_op_id,
-    )
-    assert replacement_decision.outcome == "ALLOW", "fresh authority is genuinely grantable"
-    safety_after = operation_service.evaluate_replacement_safety(db, org.id, operation.id)
-    assert safety_after.safety == "UNSAFE_UNRESOLVED", "a fresh authorization existing elsewhere never changes THIS operation's own safety verdict"
-
-    # And the real enforcement hook refuses to issue a capability linked
-    # to this unresolved operation.
-    with pytest.raises(operation_service.ReplacementNotSafeError):
-        capability_service.issue_capability_for_decision(
-            db, org.id, replacement_decision.id, audience="reference-pep", replaces_operation_id=operation.id,
-        )
-    _trace("product", "fresh_authority_unsafe_replacement_enforced", operation_id=operation.id, safety=safety_after.safety)
-
-
-# === Already-committed original: blocked, not "unresolved" =====================
-
-
-def test_already_committed_operation_is_blocked_not_unresolved(db, opa_url):
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-ALREADY-COMMITTED"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    consumed = _consume(db, org.id, issued, binding)
-    updated_operation, _r, result = _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id)
-    assert updated_operation.state == "COMMITTED"
-
-    safety = operation_service.evaluate_replacement_safety(db, org.id, operation.id)
-    assert safety.safety == "BLOCKED_ALREADY_COMMITTED", "a committed operation must not be labeled unresolved"
-
-    with pytest.raises(operation_service.ReplacementNotSafeError):
-        capability_service.issue_capability_for_decision(db, org.id, decision.id, audience="reference-pep", replaces_operation_id=operation.id)
-
-
-# === Terminal non-commit: safe, but still requires current authorization =======
-
-
-def test_terminal_non_commit_makes_replacement_safe_and_still_requires_authority(db, opa_url):
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-TERMINAL-NON-COMMIT"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    consumed = _consume(db, org.id, issued, binding)
-    updated_operation, _r, result = _observe(db, org.id, operation, identity, binding, intent, status="FAILED", capability_id=consumed.capability_id)
-    assert result.outcome == "EXECUTION_FAILED"
-    assert updated_operation.state == "TERMINALLY_NOT_COMMITTED"
-
-    safety = operation_service.evaluate_replacement_safety(db, org.id, operation.id)
-    assert safety.safety == "SAFE_TERMINAL_NON_COMMIT_PROVEN"
-    assert safety.requires_current_authorization is True
-
-    # Safety alone is not authority: a replacement Intent still has to be
-    # independently evaluated and can still be denied by policy -- proven
-    # by the companion test below, which issues a real replacement.
-
-
-def test_replacement_after_terminal_non_commit_succeeds_when_authority_is_current(db, opa_url):
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-TERMINAL-THEN-REPLACE"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    consumed = _consume(db, org.id, issued, binding)
-    _observe(db, org.id, operation, identity, binding, intent, status="FAILED", capability_id=consumed.capability_id)
-
-    replacement_op_id = f"{op_id}-REPLACEMENT"
-    _intent2, replacement_decision, _e2 = runtime_svc.submit_attested_intent(
-        db, identity, enforcement_binding_id=binding.id, origin_agent_id=agent.id,
-        source_operation=SOURCE_OPERATION, action=ACTION, resource=SUPPLIER_RESOURCE,
-        amount=None, currency=None, counterparty=None, context=dict(ORDER_CONTEXT),
-        requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
-        external_operation_id=replacement_op_id,
-    )
-    assert replacement_decision.outcome == "ALLOW"
-    replacement_issued = capability_service.issue_capability_for_decision(
-        db, org.id, replacement_decision.id, audience="reference-pep", replaces_operation_id=operation.id,
-    )
-    assert replacement_issued.capability_id != issued.capability_id
-
-
-# === Duplicate-prevention guarantee: scope, retention, and identity binding ====
-
-
-def test_duplicate_prevention_guarantee_makes_replacement_safe(db, opa_url):
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-DUP-PREVENTION-GUARANTEE"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    _consume(db, org.id, issued, binding)
-
-    operation_service.record_destination_duplicate_prevention_guarantee(
-        db, org.id, operation.id, destination=DESTINATION,
-        scope_description=f"Destination-confirmed idempotency key, scoped to external_operation_id={op_id!r} only",
-        retention_until=datetime.now(timezone.utc) + timedelta(days=30), documented_by="governance-admin@example.com",
-    )
-    safety = operation_service.evaluate_replacement_safety(db, org.id, operation.id)
-    assert safety.safety == "SAFE_DUPLICATE_PREVENTION_GUARANTEED"
+# === Duplicate-prevention guarantee scoping (unaffected by this pass, reconfirmed) ==
 
 
 def test_duplicate_prevention_guarantee_restricted_to_identity_enforced(db, opa_url):
-    """"Any permitted attempt must use the identity and conditions that
-    guarantee actually protects" -- a mismatched attempting identity
-    must not be able to use a guarantee scoped to a different one."""
     org = _org(db)
     identity, _cv, binding, agent = _scenario(db, org.id)
-    other_identity, _cv2, other_binding, other_agent = _scenario(db, org.id, principal_name="OrderingAgent01")
+    other_identity, _cv2, other_binding, other_agent = _scenario(db, org.id, principal_name="OrderingAgent01", integration_name="Other Integration")
     _deploy_policy(db, org.id, opa_url)
     op_id = f"{OPERATION_ID}-DUP-PREVENTION-RESTRICTED"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-DUP-RESTRICTED", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
     _consume(db, org.id, issued, binding)
 
     operation_service.record_destination_duplicate_prevention_guarantee(
@@ -837,66 +1121,21 @@ def test_duplicate_prevention_guarantee_restricted_to_identity_enforced(db, opa_
 
     matching = operation_service.evaluate_replacement_safety(db, org.id, operation.id, attempting_integration_identity_id=identity.id)
     assert matching.safety == "SAFE_DUPLICATE_PREVENTION_GUARANTEED"
-
     mismatched = operation_service.evaluate_replacement_safety(db, org.id, operation.id, attempting_integration_identity_id=other_identity.id)
     assert mismatched.safety == "UNSAFE_UNRESOLVED"
-    assert "restricted to integration_identity_id" in mismatched.reason
-
-
-def test_duplicate_prevention_guarantee_wrong_destination_not_matched_by_construction(db, opa_url):
-    """A guarantee is looked up strictly by operation_id (UNIQUE
-    constraint), so a guarantee documented for a DIFFERENT destination
-    string on the SAME operation is simply the only guarantee that
-    exists -- evaluate_replacement_safety does not cross-check the
-    destination it was invoked with against a DIFFERENT one, which is
-    itself worth proving explicitly rather than assuming."""
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-DUP-PREVENTION-WRONG-DEST"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    _consume(db, org.id, issued, binding)
-    operation_service.record_destination_duplicate_prevention_guarantee(
-        db, org.id, operation.id, destination="synthetic:a-different-destination-entirely",
-        scope_description="documented against a different destination than this operation's own",
-        retention_until=datetime.now(timezone.utc) + timedelta(days=30), documented_by="governance-admin@example.com",
-    )
-    guarantee = db.scalar(select(DestinationDuplicatePreventionGuarantee).where(DestinationDuplicatePreventionGuarantee.operation_id == operation.id))
-    assert guarantee.destination != DESTINATION, "the guarantee's own destination genuinely disagrees with the operation's real one -- a real, disclosed gap: evaluate_replacement_safety does not itself cross-check this"
-
-
-def test_duplicate_prevention_guarantee_requires_scope_and_future_retention(db, opa_url):
-    org = _org(db)
-    identity, _cv, binding, agent = _scenario(db, org.id)
-    _deploy_policy(db, org.id, opa_url)
-    op_id = f"{OPERATION_ID}-DUP-PREVENTION-INVALID"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
-    with pytest.raises(ValueError, match="scope_description"):
-        operation_service.record_destination_duplicate_prevention_guarantee(
-            db, org.id, operation.id, destination=DESTINATION, scope_description="",
-            retention_until=datetime.now(timezone.utc) + timedelta(days=30), documented_by="governance-admin@example.com",
-        )
-    with pytest.raises(ValueError, match="retention_until"):
-        operation_service.record_destination_duplicate_prevention_guarantee(
-            db, org.id, operation.id, destination=DESTINATION, scope_description="a generic idempotency claim with no real scope",
-            retention_until=datetime.now(timezone.utc) - timedelta(days=1), documented_by="governance-admin@example.com",
-        )
 
 
 def test_expired_guarantee_does_not_make_replacement_safe(db, opa_url):
-    """The creation-time check (above) rejects an ALREADY-past
-    retention_until; this proves the READ-time expiry check
-    independently, via a direct row insert (the same "bypass the
-    service, prove the re-check fires" discipline this repo's own
-    test_a_digest_anomaly_on_a_persisted_receipt... test already
-    establishes for reconciliation)."""
     org = _org(db)
     identity, _cv, binding, agent = _scenario(db, org.id)
     _deploy_policy(db, org.id, opa_url)
     op_id = f"{OPERATION_ID}-DUP-PREVENTION-EXPIRED"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="ORDER-DUP-EXPIRED", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
     _consume(db, org.id, issued, binding)
-
     expired = DestinationDuplicatePreventionGuarantee(
         organization_id=org.id, operation_id=operation.id, destination=DESTINATION,
         scope_description="was valid, has since expired", documented_by="governance-admin@example.com",
@@ -904,57 +1143,74 @@ def test_expired_guarantee_does_not_make_replacement_safe(db, opa_url):
     )
     db.add(expired)
     db.commit()
-
     safety = operation_service.evaluate_replacement_safety(db, org.id, operation.id)
-    assert safety.safety == "UNSAFE_UNRESOLVED", "an expired guarantee must not make a replacement safe"
+    assert safety.safety == "UNSAFE_UNRESOLVED"
 
 
-# === Rerun of the two frozen recovery schedules, through the hardened layer ====
+# === Section 5: rerun of the two frozen recovery schedules through the corrected layer ===
 
 
-def test_rerun_schedule_1_late_committed_outcome_through_hardened_layer(db, opa_url):
+def test_rerun_schedule_1_late_committed_outcome_through_corrected_layer(db, opa_url):
     org = _org(db)
     identity, _cv, binding, agent = _scenario(db, org.id)
     _deploy_policy(db, org.id, opa_url)
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=OPERATION_ID)
-    assert operation.state == "AUTHORIZED"
-    _trace("1-rerun", "execution_authority_valid", operation_record_id=operation.id, state=operation.state)
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=OPERATION_ID,
+        business_operation_id="EVIDENCEBOUND-SCHEDULE-1-BUSINESS-OP", intended_destination=DESTINATION,
+        material_action_digest=_order_action(OPERATION_ID).digest(),
+    )
+    assert operation.execution_stage == "AUTHORIZED"
+    assert operation.outcome_status == "UNKNOWN"
+    _trace("1-rerun", "execution_authority_valid", operation_record_id=operation.id, execution_stage=operation.execution_stage, outcome_status=operation.outcome_status)
 
     consumed = _consume(db, org.id, issued, binding)
     db.refresh(operation)
-    assert operation.state == "CLAIMED"
-    _trace("1-rerun", "operation_claimed_not_dispatched", operation_record_id=operation.id, state=operation.state)
+    assert operation.execution_stage == "CLAIMED"
+    _trace("1-rerun", "operation_claimed_not_dispatched", operation_record_id=operation.id, execution_stage=operation.execution_stage, outcome_status=operation.outcome_status)
 
     destination = FakeDestination(DestinationBehaviour.COMMIT_NO_RECEIPT)
     destination.attempt(OPERATION_ID)
-    _trace("1-rerun", "destination_commit_no_receipt", effect_count=1, evidence_source="synthetic_destination_internal_state (test harness ground truth)")
+    _trace("1-rerun", "destination_commit_no_receipt", effect_count=1, evidence_source="synthetic_destination_internal_state (test harness ground truth, not itself platform evidence)")
 
     agent_service.revoke_agent(db, agent.id, reason="pending investigation")
     _trace("1-rerun", "execution_authority_revoked", agent_id=agent.id)
 
     late = destination.late_authoritative_observation()
     assert late == "COMMITTED"
-    updated_operation, receipt, result = _observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id)
+    # Section 2/5: the late observation is reported via the REAL,
+    # signature-verified Adapter channel -- an unsigned RBAC_HUMAN relay
+    # is explicitly NOT used here to manufacture the expected final
+    # state (the closeout task's own explicit prohibition).
+    updated_operation, receipt, result = _adapter_observe(db, org.id, operation, identity, binding, intent, status="SUCCEEDED", capability_id=consumed.capability_id, order=_order_action(OPERATION_ID))
     assert result.outcome == "MATCHED"
-    assert updated_operation.state == "COMMITTED"
+    assert updated_operation.outcome_status == "COMMITTED"
     _trace(
-        "1-rerun", "reconciled_matched_and_operation_committed", operation_record_id=operation.id, state=updated_operation.state,
-        receipt_id=receipt.id, effect_count=1, evidence_source="RBAC_HUMAN relay, signature_verified=False",
+        "1-rerun", "reconciled_matched_and_operation_committed", operation_record_id=operation.id,
+        execution_stage=updated_operation.execution_stage, outcome_status=updated_operation.outcome_status,
+        evidence_assurance=updated_operation.evidence_assurance,
+        receipt_id=receipt.id, effect_count=1, evidence_source="SIGNED_ADAPTER_IDENTITY, signature_verified=True",
     )
 
     with pytest.raises(capability_service.OriginAgentNotActiveError):
         _consume(db, org.id, issued, binding)
     safety = operation_service.evaluate_replacement_safety(db, org.id, operation.id)
     assert safety.safety == "BLOCKED_ALREADY_COMMITTED"
-    _trace("1-rerun", "final_state", operation_state=updated_operation.state, replacement_safety=safety.safety, effect_count=1)
+    _trace(
+        "1-rerun", "final_state", execution_stage=updated_operation.execution_stage, outcome_status=updated_operation.outcome_status,
+        evidence_assurance=updated_operation.evidence_assurance, replacement_safety=safety.safety, effect_count=1,
+    )
 
 
-def test_rerun_schedule_2_outcome_remains_unknown_through_hardened_layer(db, opa_url):
+def test_rerun_schedule_2_outcome_remains_unknown_through_corrected_layer(db, opa_url):
     org = _org(db)
     identity, _cv, binding, agent = _scenario(db, org.id)
     _deploy_policy(db, org.id, opa_url)
     op_id = f"{OPERATION_ID}-SCHEDULE-2-RERUN"
-    intent, decision, issued, operation = _submit_and_authorize(db, org.id, identity, binding, agent, external_operation_id=op_id)
+    intent, decision, issued, operation = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id,
+        business_operation_id="EVIDENCEBOUND-SCHEDULE-2-BUSINESS-OP", intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id).digest(),
+    )
     _consume(db, org.id, issued, binding)
 
     destination = FakeDestination(DestinationBehaviour.NOT_FOUND_NOW)
@@ -964,14 +1220,19 @@ def test_rerun_schedule_2_outcome_remains_unknown_through_hardened_layer(db, opa
 
     agent_service.revoke_agent(db, agent.id, reason="revoked without terminal outcome evidence")
     db.refresh(operation)
-    assert operation.state == "CLAIMED"
+    assert operation.execution_stage == "CLAIMED"
+    assert operation.outcome_status == "UNKNOWN"
     safety = operation_service.evaluate_replacement_safety(db, org.id, operation.id)
     assert safety.safety == "UNSAFE_UNRESOLVED"
-    _trace("2-rerun", "historical_outcome_unresolved", operation_state=operation.state, safety=safety.safety, effect_count="UNKNOWN")
+    _trace(
+        "2-rerun", "historical_outcome_unresolved", execution_stage=operation.execution_stage,
+        outcome_status=operation.outcome_status, evidence_assurance=operation.evidence_assurance,
+        safety=safety.safety, effect_count="UNKNOWN",
+    )
 
     with pytest.raises(capability_service.OriginAgentNotActiveError):
         _consume(db, org.id, issued, binding)
-    _trace("2-rerun", "no_auto_retry_no_release", operation_state=operation.state, safety=safety.safety)
+    _trace("2-rerun", "no_auto_retry_no_release", execution_stage=operation.execution_stage, outcome_status=operation.outcome_status, safety=safety.safety)
     _trace(
         "2-rerun", "replacement_conclusion",
         destination_terminal_non_commit_proof="NOT_OBTAINED", destination_duplicate_prevention_guarantee="NOT_DOCUMENTED",

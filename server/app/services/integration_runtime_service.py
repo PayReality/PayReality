@@ -179,6 +179,8 @@ def submit_attested_intent(
     nonce: str,
     correlation_id: str | None,
     external_operation_id: str,
+    business_operation_id: str | None = None,
+    intended_destination: str | None = None,
 ) -> tuple[Intent, "Decision", "Evidence"]:  # noqa: F821 -- forward refs, real types imported in intent_service
     # Section 29: format validation is stateless and independent of
     # trust -- checked first, before any DB lookup, so a malformed id
@@ -191,6 +193,27 @@ def submit_attested_intent(
         operation_identity_service.validate_external_operation_id(external_operation_id)
     except operation_identity_service.InvalidExternalOperationIdError as e:
         raise IntegrationRejectionError(f"invalid_external_operation_id:{e}")
+
+    # Closeout pass, section 1: business_operation_id and
+    # intended_destination are required TOGETHER or omitted together --
+    # a caller declaring only one has supplied an incomplete identity
+    # (section 1's own required definition: namespace + tenant +
+    # destination + business_operation_id together, not any subset), and
+    # this platform will not guess the missing half. Reuses
+    # validate_external_operation_id's own non-empty/bounded-length rules
+    # for business_operation_id -- the same "opaque, non-empty, bounded"
+    # discipline applies to both identifiers.
+    if (business_operation_id is None) != (intended_destination is None):
+        raise IntegrationRejectionError(
+            "business_operation_id_and_intended_destination_must_be_supplied_together"
+        )
+    if business_operation_id is not None:
+        try:
+            operation_identity_service.validate_external_operation_id(business_operation_id)
+        except operation_identity_service.InvalidExternalOperationIdError as e:
+            raise IntegrationRejectionError(f"invalid_business_operation_id:{e}")
+        if not intended_destination.strip():
+            raise IntegrationRejectionError("intended_destination_must_be_non_empty")
 
     if identity.status != "active":
         # Defense in depth, matching AgentNotOperationalError's own
@@ -337,6 +360,8 @@ def submit_attested_intent(
         environment=binding.environment,
         canonical_action_schema_version=canonical_action.schema_version,
         canonical_action_digest=canonical_action.canonical_digest(),
+        business_operation_id=business_operation_id,
+        intended_destination=intended_destination,
     )
     db.add(intent)
     try:

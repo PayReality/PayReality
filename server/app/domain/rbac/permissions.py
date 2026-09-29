@@ -171,6 +171,21 @@ class Permission(str, Enum):
     # CAPABILITY_ISSUE).
     OPERATION_SAFETY_APPROVE = "operation.safety_approve"
 
+    # Closeout pass, section 2: a THIRD, separate permission -- an
+    # authorized human explicitly overriding/settling what outcome_
+    # status the automated evidence alone does not resolve
+    # (operation_service.record_manual_adjudication) is a governance
+    # decision, not "recording what happened" (OPERATION_OBSERVE) and
+    # not "documenting a duplicate-prevention guarantee"
+    # (OPERATION_SAFETY_APPROVE) -- three genuinely different kinds of
+    # authority over an Operation, three genuinely different
+    # permissions. Granted to Governance Administrator alone, same
+    # rationale as OPERATION_SAFETY_APPROVE just above: an observer
+    # (Reviewer, holding only OPERATION_OBSERVE) must never be able to
+    # manufacture a terminal conclusion an unsigned relay alone cannot
+    # support.
+    OPERATION_MANUAL_ADJUDICATE = "operation.manual_adjudicate"
+
 
 # The full permission set, used to grant Owner "full platform control"
 # without hand-maintaining a second, parallel list that would drift
@@ -199,6 +214,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.INTEGRATION_CONTRACT_PUBLISH,
             Permission.OPERATION_OBSERVE,
             Permission.OPERATION_SAFETY_APPROVE,
+            Permission.OPERATION_MANUAL_ADJUDICATE,
         }
     ),
     Role.AGENT_ADMIN: frozenset(

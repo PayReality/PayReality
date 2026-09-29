@@ -925,6 +925,23 @@ class Intent(Base):
     canonical_action_schema_version: Mapped[int | None] = mapped_column()
     canonical_action_digest: Mapped[str | None] = mapped_column(Text)
 
+    # Closeout pass, section 1: both nullable and additive, present only
+    # when the caller opts into lifecycle protection for this submission
+    # -- every existing Agent-direct Intent and every Adapter-mediated
+    # one that omits them leaves both NULL, exactly today's default
+    # behaviour (no Operation is ever created for it). DELIBERATELY
+    # distinct fields from external_operation_id/integration_id above --
+    # see BusinessOperationIdentity's own docstring (app/db/models.py)
+    # for why a business_operation_id must be allowed to repeat across
+    # several genuinely separate Intents where external_operation_id
+    # cannot. Both are required together or omitted together (validated
+    # in integration_runtime_service.submit_attested_intent, not by a DB
+    # constraint here, matching how amount/currency/resource's own
+    # contract-declared-path requirements are validated in that same
+    # function rather than in the schema).
+    business_operation_id: Mapped[str | None] = mapped_column(Text)
+    intended_destination: Mapped[str | None] = mapped_column(Text)
+
     __table_args__ = (
         Index("idx_intents_agent", "agent_id"),
         UniqueConstraint("agent_id", "nonce", name="uq_intents_agent_nonce"),
@@ -2291,6 +2308,86 @@ class ReconciliationResultRecord(Base):
     )
 
 
+class BusinessOperationIdentity(Base):
+    """Closeout pass, section 1: the stable, trusted identity for a
+    lifecycle-covered real-world business operation -- DISTINCT from
+    Intent.external_operation_id (Trusted Integration Architecture Phase
+    3's own per-SUBMISSION idempotency key, operation_identity_service.py).
+    Those are different questions: external_operation_id dedupes an
+    attempted SUBMISSION, and its own DB constraint
+    (idx_intents_external_operation_scope) forbids ever reusing it for a
+    second Intent -- so it structurally CANNOT identify "the same
+    real-world operation, attempted again with a fresh authorization
+    decision." business_operation_id identifies exactly that: the same
+    real-world operation across genuinely separate attempts, each with
+    its own Intent/Decision/Capability/Operation and necessarily its own,
+    different external_operation_id.
+
+    Composite identity, matching this section's own required definition:
+      namespace    = integration_id (server-derived from the resolved
+                      EnforcementBinding/Contract, never caller-chosen --
+                      same reasoning Phase 3 already established for why
+                      this, and not enforcement_binding_id or
+                      integration_identity_id, is the correct boundary).
+      tenant       = organization_id (implicit via integration_id, same
+                      as Phase 3 -- not a redundant column there, but
+                      explicit here since this table is looked up
+                      directly, not only through Integration).
+      destination  = the caller-DECLARED intended destination, required
+                      at submission time (Intent.intended_destination) --
+                      this table does not wait for dispatch evidence to
+                      learn it, unlike Operation.destination for a
+                      non-identity-covered operation.
+      business_operation_id = the caller-supplied stable value, opaque,
+                      compared byte for byte, never normalized (same
+                      discipline as Phase 3's own
+                      validate_external_operation_id, reused directly).
+
+    Deliberately NOT keyed by material_action_digest or any other
+    field-equality check: two legitimate, independent real-world orders
+    can have byte-identical material fields (same supplier, quantity,
+    buyer account, delivery location, unit price) without being the same
+    operation. Identity here is asserted by the caller, never inferred
+    from content -- and if a caller supplies a genuinely new business_
+    operation_id for what a human would recognize as the same real-world
+    action, that remains undetectable by design: this system claims no
+    semantic duplicate detection across independently-identified intents.
+
+    `current_operation_id` names the GOVERNING attempt -- the one
+    evaluate_replacement_safety and issuance/consumption enforcement
+    actually reason about. Advanced, never replaced, via the atomic
+    conditional UPDATE in operation_identity_service.advance_current_
+    attempt (the same "atomic conditional UPDATE, retry on rowcount==0"
+    shape this codebase already established for CapabilityToken's own
+    consume). Superseded attempts are never deleted -- see Operation.
+    previous_attempt_operation_id for the preserved chain."""
+
+    __tablename__ = "business_operation_identities"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    integration_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integrations.id"), nullable=False
+    )
+    destination: Mapped[str] = mapped_column(Text, nullable=False)
+    business_operation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    current_operation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("operations.id", use_alter=True, name="fk_boi_current_operation")
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "integration_id", "destination", "business_operation_id",
+            name="uq_business_operation_identity",
+        ),
+        Index("idx_business_operation_identities_organization", "organization_id"),
+    )
+
+
 class Operation(Base):
     """Product lifecycle vertical slice (EVIDENCEBOUND-PAYREALITY-RECOVERY-
     V01 follow-up): the durable record of one real-world attempted
@@ -2302,90 +2399,107 @@ class Operation(Base):
     queryable and updatable (via new observation evidence) long after.
 
     One row per Decision (`uq_operations_decision`), created at Capability
-    issuance time in state AUTHORIZED (see services/operation_service.py's
+    issuance time (see services/operation_service.py's
     create_operation_for_decision) -- mirrors CapabilityToken's own
     decision_id uniqueness for the identical reason (Phase 5.1): one
     authorization lifecycle, one Operation, not a second independently
-    valid one from a racing or repeated call.
+    valid one from a racing or repeated call. For a business-operation-
+    identity-covered decision (section 1), a REPEATED identity does not
+    reuse this row -- it creates a NEW Operation, chained via
+    `previous_attempt_operation_id`, and becomes the identity's new
+    `current_operation_id`; the original is preserved, never overwritten.
 
-    State machine, precise names chosen to fit this codebase's existing
-    domain model (ALLOW/DENY/HUMAN_REVIEW for Decision, ACCEPTED/
-    SUCCEEDED/FAILED/PARTIALLY_SUCCEEDED/UNKNOWN for ExecutionReceipt,
-    MATCHED/MISMATCHED/EXECUTION_FAILED/PARTIAL/RECEIPT_MISSING/
-    INDETERMINATE for ReconciliationResultRecord -- this table's own state
-    is a fifth, coarser vocabulary, deliberately not a repeat of any of
-    the three above, because it answers a different, narrower question
-    ("is this specific real-world attempt still open, and if not, how did
-    it close") than any of them do alone.
+    Closeout pass, section 3: execution stage and outcome certainty are
+    two independent axes, not one collapsed `state` string (the
+    hardening pass's own single-column design let an observation that
+    resolved to "outcome unknown" silently clobber whatever stage
+    information -- CLAIMED vs. DISPATCHED -- existed before it; splitting
+    them removes that bug entirely, not just documents around it).
 
-    Hardening pass (post-review): the original single-hop AUTHORIZED ->
-    DISPATCHED transition conflated two genuinely different facts --
-    "the Capability was atomically claimed" and "the executor actually
-    sent the destination request" -- and treated capability CONSUMPTION
-    itself as proof of DISPATCH, which it is not: an executor can claim a
-    Capability and then crash before ever calling the destination.
-    CLAIMED is the fix, inserted between the two:
+    `execution_stage` -- what has been EVIDENCED about the attempt itself.
+    Monotonic; only operation_service.record_claim / record_dispatch_
+    evidence ever write it; observation/reconciliation logic never
+    touches it, by construction:
+        AUTHORIZED  -- a Capability exists; nothing attempted yet.
+        CLAIMED     -- the Capability was atomically consumed -- an
+                       execution attempt was authorized to proceed. Does
+                       NOT establish the executor ever sent the
+                       destination request.
+        DISPATCHED  -- the executor explicitly reported having sent the
+                       destination request (record_dispatch_evidence, a
+                       distinct evidence event, never inferred from
+                       CLAIMED alone).
 
-        AUTHORIZED               -- a Capability exists; nothing has been
-                                     attempted yet.
-        CLAIMED                  -- the Capability was consumed (single-
-                                     use, atomic) -- an EXECUTION ATTEMPT
-                                     was authorized to proceed. Set by
-                                     operation_service.record_claim, in
-                                     the SAME transaction/commit as the
-                                     atomic consume (capability_service.
-                                     verify_and_consume_capability) --
-                                     see that function's own docstring for
-                                     why this is no longer best-effort.
-                                     Does NOT establish that the executor
-                                     ever actually sent the destination
-                                     request.
-        DISPATCHED                -- the executor explicitly reported
-                                     having sent the destination request
-                                     (operation_service.record_dispatch_
-                                     evidence, a distinct evidence event,
-                                     never inferred from CLAIMED alone).
-        COMMITTED                -- reconciliation evidence establishes
-                                     the attempt succeeded (maps from
-                                     ReconciliationResultRecord.outcome ==
-                                     MATCHED).
-        TERMINALLY_NOT_COMMITTED -- reconciliation evidence establishes the
-                                     attempt did not, and will not, commit
-                                     (maps from outcome == EXECUTION_FAILED,
-                                     the one outcome this codebase already
-                                     treats as a destination-reported
-                                     terminal negative -- never inferred
-                                     from a missing or ambiguous receipt).
-        OUTCOME_UNKNOWN           -- every other case: no receipt yet
-                                     (RECEIPT_MISSING), a non-terminal
-                                     status only (INDETERMINATE), or
+    `outcome_status` -- what is known about the DESTINATION OUTCOME,
+    independent of execution_stage (execution_stage=CLAIMED can coexist
+    with outcome_status=UNKNOWN just as validly as execution_stage=
+    DISPATCHED can -- the distinction between "unknown before dispatch
+    evidence" and "unknown after evidenced dispatch" is preserved exactly
+    because these are separate columns). Only operation_service.
+    _finalize_observation_event / record_manual_adjudication ever write
+    it:
+        UNKNOWN                  -- the honest default. No receipt yet,
+                                     a non-terminal receipt status only,
                                      evidence that doesn't cleanly resolve
-                                     either way (MISMATCHED, PARTIAL). The
-                                     honest default -- reachable from
-                                     CLAIMED *or* DISPATCHED (a crash after
-                                     claim with no dispatch evidence must
-                                     still be treated conservatively:
-                                     absence of dispatch evidence does not
-                                     establish absence of an external
-                                     effect, so observation evidence is
-                                     accepted, and can resolve to
-                                     OUTCOME_UNKNOWN, from either state) --
-                                     and, per section 9's own instruction,
-                                     CAN later still resolve to COMMITTED or
-                                     TERMINALLY_NOT_COMMITTED if better
-                                     evidence arrives (this is why
-                                     OUTCOME_UNKNOWN is not itself listed as
-                                     terminal in ck_operations_state's own
-                                     transition discipline below).
+                                     either way, OR (closeout pass,
+                                     section 2) reconciliation evidence
+                                     that WOULD resolve to a terminal
+                                     conclusion but whose only source is
+                                     an unsigned human relay -- see
+                                     `evidence_assurance` below and this
+                                     module's own evidence-acceptance-
+                                     rules docstring. Never inferred as
+                                     DISPATCHED-implies-failed or
+                                     CLAIMED-implies-unknown-forever from
+                                     a merely missing receipt.
+        COMMITTED                -- sufficient evidence (signed Adapter
+                                     report reconciling MATCHED, or an
+                                     explicit manual adjudication)
+                                     establishes the attempt succeeded.
+        TERMINALLY_NOT_COMMITTED -- sufficient evidence establishes the
+                                     attempt did not, and will not, commit.
+
+    `evidence_assurance` -- section 2's own required, separate axis:
+    what KIND of evidence outcome_status currently rests on, mechanically
+    derived, never caller-set:
+        NONE                -- no observation evidence recorded yet.
+        REPORTED_UNVERIFIED -- an unsigned RBAC_HUMAN relay has reported
+                                a claim (preserved in operation_evidence_
+                                events), but alone it can only ever leave
+                                outcome_status at UNKNOWN -- it is
+                                evidence that something was CLAIMED to
+                                have happened, never proof that it did.
+        ADAPTER_REPORTED    -- a signature-verified Adapter reported it.
+                                Proves what that Adapter reported, under
+                                this platform's existing Trusted-Adapter
+                                trust model -- not independent, third-
+                                party destination verification, which no
+                                integration contract in this codebase
+                                currently establishes; if one ever does,
+                                that is a stronger tier this column does
+                                not yet have a value for, and none is
+                                fabricated here.
+        MANUAL_ADJUDICATED  -- an authorized human (Permission.
+                                OPERATION_MANUAL_ADJUDICATE, a separate
+                                permission from ordinary observation)
+                                explicitly overrode/settled the outcome,
+                                with a recorded rationale and evidence
+                                references (operation_service.record_
+                                manual_adjudication) -- a governance
+                                decision, never a report of an external
+                                fact, and never reachable through the
+                                ordinary observation path.
 
     No column here enforces the transition graph (a CHECK constraint can
     only validate one row's current value, not its history) -- that
     discipline lives entirely in operation_service.py, which never issues
-    a raw UPDATE against `state` from anywhere else in this codebase.
-    AUTHORIZED and CLAIMED are never re-entered once left, and a
-    Capability revoked (via its origin Agent) after CLAIMED does not, and
-    structurally cannot, move an Operation backward -- there is no
-    function anywhere that does that.
+    a raw UPDATE against these columns from anywhere else in this
+    codebase. AUTHORIZED and CLAIMED are never re-entered once left, and
+    a Capability revoked (via its origin Agent) after CLAIMED does not,
+    and structurally cannot, move an Operation's execution_stage
+    backward -- there is no function anywhere that does that. Likewise,
+    outcome_status never moves out of a terminal value once reached
+    (Operation's own _TERMINAL_OUTCOMES set in operation_service.py).
 
     `material_action_digest` binds this Operation to the exact
     domain.order_action_contract.OrderAction (or, for a non-order action,
@@ -2409,56 +2523,115 @@ class Operation(Base):
     material_action_digest: Mapped[str] = mapped_column(Text, nullable=False)
     destination: Mapped[str | None] = mapped_column(Text)
     destination_operation_id: Mapped[str | None] = mapped_column(Text)
-    state: Mapped[str] = mapped_column(Text, nullable=False, server_default="AUTHORIZED")
+    execution_stage: Mapped[str] = mapped_column(Text, nullable=False, server_default="AUTHORIZED")
+    outcome_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="UNKNOWN")
+    evidence_assurance: Mapped[str] = mapped_column(Text, nullable=False, server_default="NONE")
     attempt_count: Mapped[int] = mapped_column(nullable=False, server_default="0")
+
+    # Closeout pass, section 1: all four nullable and additive -- an
+    # Operation with business_operation_identity_id NULL is not
+    # identity-covered (the caller omitted business_operation_id/
+    # intended_destination at submission, exactly today's default), and
+    # gets none of this section's automatic resolution/enforcement --
+    # only the pre-existing, explicit `replaces_operation_id` manual path
+    # remains available to it (capability_service.py).
+    business_operation_identity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("business_operation_identities.id")
+    )
+    integration_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integrations.id")
+    )
+    integration_contract_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_contract_versions.id")
+    )
+    # Self-referential: the identity's previously-governing Operation at
+    # the moment THIS one was created (None for a genuine first attempt).
+    # The original is never overwritten or deleted -- this is the
+    # "preserve the original operation and record subsequent attempts
+    # separately" chain, walkable end to end from any attempt.
+    previous_attempt_operation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("operations.id")
+    )
+
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         CheckConstraint(
-            "state IN ('AUTHORIZED','CLAIMED','DISPATCHED','COMMITTED','TERMINALLY_NOT_COMMITTED','OUTCOME_UNKNOWN')",
-            name="ck_operations_state",
+            "execution_stage IN ('AUTHORIZED','CLAIMED','DISPATCHED')",
+            name="ck_operations_execution_stage",
+        ),
+        CheckConstraint(
+            "outcome_status IN ('UNKNOWN','COMMITTED','TERMINALLY_NOT_COMMITTED')",
+            name="ck_operations_outcome_status",
+        ),
+        CheckConstraint(
+            "evidence_assurance IN ('NONE','REPORTED_UNVERIFIED','ADAPTER_REPORTED','MANUAL_ADJUDICATED')",
+            name="ck_operations_evidence_assurance",
         ),
         UniqueConstraint("decision_id", name="uq_operations_decision"),
         Index("idx_operations_organization", "organization_id"),
         Index("idx_operations_destination_operation", "destination_operation_id"),
+        Index("idx_operations_business_identity", "business_operation_identity_id"),
     )
 
 
 class OperationEvidenceEvent(Base):
-    """Hardening pass, section 5 (evidence provenance): every dispatch
-    report or observation ever recorded against an Operation, kept as its
-    own append-only log -- Operation.state is the current, collapsed
-    summary; this table is the full, never-overwritten history of exactly
-    who claimed what, with what assurance, that produced it.
+    """Hardening pass, section 5 (evidence provenance), extended by the
+    closeout pass's section 2 (evidence acceptance rules): every dispatch
+    report, observation, rejected conflicting report, or manual
+    adjudication ever recorded against an Operation, kept as its own
+    append-only log -- Operation.execution_stage/outcome_status are the
+    current, collapsed summary; this table is the full, never-overwritten
+    history of exactly who claimed what, with what assurance, that
+    produced it (or, for OBSERVATION_CONFLICT_REJECTED, that did NOT
+    produce it).
 
-    `reporter_kind` distinguishes the two, and only two, ways a fact can
-    enter this table:
+    `reporter_kind` distinguishes the three ways a fact can enter this
+    table:
       SIGNED_ADAPTER_IDENTITY -- the real, production path (POST
         /v1/execution-receipts, gated by verify_integration_identity_
         signature): `signature_verified` is TRUE, because it genuinely
-        was, by the time this row is written.
+        was, by the time this row is written. Proves what that Adapter
+        reported -- see Operation.evidence_assurance's own docstring for
+        why this is deliberately not claimed as independent destination
+        verification.
       RBAC_HUMAN -- the narrowly scoped recovery path (POST /v1/
         operations/{id}/observations or .../dispatch-evidence): an
         authenticated human's own session identity (app.dependencies.
-        get_current_user_if_session, the same "Authority-as-a-
-        continuous-object" pattern already used elsewhere in this
-        codebase for exactly this purpose), relaying a claim about an
+        get_current_user_if_session), relaying a claim about an
         IntegrationIdentity it does NOT prove possession of.
         `signature_verified` is always FALSE here -- never inferred,
-        never defaulted to true, so a reader can never mistake a human's
-        relayed claim for cryptographic proof.
+        never defaulted to true. Alone, this can never move Operation.
+        outcome_status into a terminal value (section 2's own core
+        finding: an unsigned relay must not automatically become
+        verified destination truth).
+      MANUAL_ADJUDICATION -- closeout pass, section 2: an authorized
+        human's explicit, recorded governance decision to settle an
+        outcome the automated evidence alone does not resolve --
+        fundamentally different from RBAC_HUMAN (which relays a claimed
+        EXTERNAL fact); this is a decision ABOUT the operation, gated by
+        a separate permission (Permission.OPERATION_MANUAL_ADJUDICATE),
+        and always carries `rationale` and `evidence_reference_ids`.
 
     `evidence_strength` is a short, human-readable label derived
     mechanically from reporter_kind + signature_verified (never a free
     string a caller can set to anything), so "the basis for any terminal
-    conclusion" (section 5's own phrase) is always answerable by reading
-    this table, not by trusting a claim.
+    conclusion" is always answerable by reading this table, not by
+    trusting a claim.
+
+    `reconciliation_outcome` preserves the real, computed execution_
+    reconciliation_service result for THIS event even when it was not
+    trusted enough to move outcome_status (section 2: "Reconciliation
+    MATCHED establishes consistency with the authorized action; it does
+    not independently prove destination commitment" -- both facts stay
+    visible and separate, never conflated by only keeping the one that
+    happened to win).
 
     `receipt_id` links to the real ExecutionReceiptRecord this event
-    corresponds to, when there is one (every OBSERVATION event has one;
-    a DISPATCH_REPORTED event does not, since dispatch evidence alone
-    creates no receipt -- it only unlocks the DISPATCHED state)."""
+    corresponds to, when there is one (every OBSERVATION event does; a
+    DISPATCH_REPORTED, OBSERVATION_CONFLICT_REJECTED, or MANUAL_
+    ADJUDICATION event does not)."""
 
     __tablename__ = "operation_evidence_events"
 
@@ -2479,7 +2652,10 @@ class OperationEvidenceEvent(Base):
     destination: Mapped[str | None] = mapped_column(Text)
     destination_operation_id: Mapped[str | None] = mapped_column(Text)
     claimed_status: Mapped[str | None] = mapped_column(Text)
+    reconciliation_outcome: Mapped[str | None] = mapped_column(Text)
     evidence_strength: Mapped[str] = mapped_column(Text, nullable=False)
+    rationale: Mapped[str | None] = mapped_column(Text)
+    evidence_reference_ids: Mapped[list | None] = mapped_column(JSONB)
     receipt_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("execution_receipts.id")
     )
@@ -2487,11 +2663,11 @@ class OperationEvidenceEvent(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "event_type IN ('DISPATCH_REPORTED','OBSERVATION')",
+            "event_type IN ('DISPATCH_REPORTED','OBSERVATION','OBSERVATION_CONFLICT_REJECTED','MANUAL_ADJUDICATION')",
             name="ck_operation_evidence_events_type",
         ),
         CheckConstraint(
-            "reporter_kind IN ('SIGNED_ADAPTER_IDENTITY','RBAC_HUMAN')",
+            "reporter_kind IN ('SIGNED_ADAPTER_IDENTITY','RBAC_HUMAN','MANUAL_ADJUDICATION')",
             name="ck_operation_evidence_events_reporter_kind",
         ),
         Index("idx_operation_evidence_events_organization", "organization_id"),
@@ -2501,8 +2677,8 @@ class OperationEvidenceEvent(Base):
 
 class DestinationDuplicatePreventionGuarantee(Base):
     """Product lifecycle vertical slice: the ONE other way (besides
-    Operation.state == TERMINALLY_NOT_COMMITTED) a replacement attempt is
-    ever reported safe by services/operation_service.py's
+    Operation.outcome_status == TERMINALLY_NOT_COMMITTED) a replacement
+    attempt is ever reported safe by services/operation_service.py's
     evaluate_replacement_safety -- and deliberately a HUMAN-DOCUMENTED
     fact, never auto-inferred from anything a destination merely claims in
     passing (e.g. a generic "idempotent" flag on an adapter contract).

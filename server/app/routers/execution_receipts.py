@@ -58,7 +58,7 @@ def submit_execution_receipt(
             reported_by=f"integration_identity:{identity.name}",
         )
     except operation_service.OperationNotClaimedError as e:
-        raise HTTPException(status_code=409, detail=f"operation_not_claimed: state={e.state}")
+        raise HTTPException(status_code=409, detail=f"operation_not_claimed: execution_stage={e.execution_stage}")
     except operation_service.OperationRecordingFailedError as e:
         raise HTTPException(status_code=500, detail=f"operation_recording_failed: {e.reason}")
 

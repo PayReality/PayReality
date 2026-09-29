@@ -13,6 +13,7 @@ from app.schemas.operations import (
     OperationResponse,
     RecordDispatchEvidenceRequest,
     RecordDuplicatePreventionGuaranteeRequest,
+    RecordManualAdjudicationRequest,
     RecordObservationRequest,
     RecordObservationResponse,
     ReplacementSafetyResponse,
@@ -45,7 +46,11 @@ def _to_response(operation: Operation) -> OperationResponse:
     return OperationResponse(
         operation_id=operation.id, decision_id=operation.decision_id, capability_id=operation.capability_id,
         material_action_digest=operation.material_action_digest, destination=operation.destination,
-        destination_operation_id=operation.destination_operation_id, state=operation.state,
+        destination_operation_id=operation.destination_operation_id,
+        execution_stage=operation.execution_stage, outcome_status=operation.outcome_status,
+        evidence_assurance=operation.evidence_assurance,
+        business_operation_identity_id=operation.business_operation_identity_id,
+        previous_attempt_operation_id=operation.previous_attempt_operation_id,
         attempt_count=operation.attempt_count, created_at=operation.created_at, updated_at=operation.updated_at,
     )
 
@@ -122,7 +127,7 @@ def record_dispatch_evidence(
     except operation_service.OperationNotFoundError:
         raise HTTPException(status_code=404, detail="operation_not_found")
     except operation_service.OperationNotClaimedError as e:
-        raise HTTPException(status_code=409, detail=f"operation_not_claimed: state={e.state}")
+        raise HTTPException(status_code=409, detail=f"operation_not_claimed: execution_stage={e.execution_stage}")
     return _to_response(operation)
 
 
@@ -171,7 +176,7 @@ def record_observation(
     except operation_service.OperationNotFoundError:
         raise HTTPException(status_code=404, detail="operation_not_found")
     except operation_service.OperationNotClaimedError as e:
-        raise HTTPException(status_code=409, detail=f"operation_not_claimed: state={e.state}")
+        raise HTTPException(status_code=409, detail=f"operation_not_claimed: execution_stage={e.execution_stage}")
     except operation_service.MaterialActionMismatchError as e:
         raise HTTPException(status_code=409, detail=f"material_action_mismatch: expected={e.expected} received={e.received}")
     except ExecutionReceiptRejectionError as e:
@@ -246,3 +251,37 @@ def record_duplicate_prevention_guarantee(
         restricted_to_integration_identity_id=guarantee.restricted_to_integration_identity_id,
         restricted_to_enforcement_binding_id=guarantee.restricted_to_enforcement_binding_id,
     )
+
+
+@router.post(
+    "/operations/{operation_id}/manual-adjudication", response_model=OperationResponse,
+    dependencies=[Depends(require_permission(Permission.OPERATION_MANUAL_ADJUDICATE))],
+)
+def record_manual_adjudication(
+    operation_id: UUID,
+    body: RecordManualAdjudicationRequest,
+    organization: Organization = Depends(get_current_organization),
+    user=Depends(get_current_user_if_session),
+    db: Session = Depends(get_db),
+):
+    """Closeout pass, section 2: gated by Permission.OPERATION_MANUAL_
+    ADJUDICATE, a THIRD permission distinct from both OPERATION_OBSERVE
+    (Reviewer) and OPERATION_SAFETY_APPROVE -- granted to Governance
+    Administrator alone. This is the one path by which an unsigned
+    RBAC_HUMAN relay's own claim can ever be turned into a terminal
+    outcome_status -- and it never happens implicitly: it requires this
+    separate credential, a non-empty rationale, and at least one real
+    reference into this operation's own evidence log, all recorded
+    permanently on the resulting event (operation_service.record_manual_
+    adjudication)."""
+    try:
+        operation = operation_service.record_manual_adjudication(
+            db, organization.id, operation_id,
+            adjudicated_by=_reported_by(user, None), outcome_status=body.outcome_status,
+            rationale=body.rationale, evidence_reference_ids=body.evidence_reference_ids,
+        )
+    except operation_service.OperationNotFoundError:
+        raise HTTPException(status_code=404, detail="operation_not_found")
+    except operation_service.InvalidManualAdjudicationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return _to_response(operation)

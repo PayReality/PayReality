@@ -1,5 +1,5 @@
 """Product lifecycle vertical slice (EVIDENCEBOUND-PAYREALITY-RECOVERY-V01
-follow-up), hardening pass included.
+follow-up), hardening pass, closeout pass.
 
 Deliberately a thin orchestration layer, not a parallel implementation:
 every trust decision this module makes (is this identity/organization
@@ -9,10 +9,9 @@ already-tested execution_receipt_service and execution_reconciliation_
 service unchanged -- this module adds exactly what those two don't
 already do: an Operation existing at all (separately from a Capability's
 own single-use lifetime), an append-only evidence-provenance log
-distinguishing a signed Adapter report from an unsigned human relay,
-validating an incoming observation's claimed material_action_digest
-against the Operation's own recorded one, and mapping a reconciliation
-outcome onto this module's own coarser Operation.state vocabulary.
+distinguishing what kind of evidence actually supports a conclusion, and
+mapping a reconciliation outcome onto this module's own vocabulary under
+an explicit evidence-acceptance policy.
 
 Authority vs. safety, kept genuinely separate: AUTHORITY to attempt a
 replacement is answered exactly as it always has been -- by submitting a
@@ -23,26 +22,41 @@ different question entirely: even given fresh authority, would
 attempting it risk a duplicate real-world effect against an operation
 whose outcome is still open, already committed, or conclusively closed.
 
-Hardening pass, three real fixes over the first version:
-  1. record_claim (was record_dispatch): capability CONSUMPTION is not
-     dispatch. Claiming a Capability only proves an execution attempt
-     was AUTHORIZED to proceed; it does not prove the executor ever
-     called the destination. A new, distinct DISPATCHED state, reached
-     only via record_dispatch_evidence's own explicit evidence event,
-     closes that gap.
-  2. record_claim no longer commits itself -- capability_service.
-     verify_and_consume_capability now calls it inside the SAME
-     transaction as the atomic capability-consume UPDATE, so a
-     lifecycle-covered operation's CLAIMED transition cannot be silently
-     lost if it fails: the whole transaction rolls back, and the caller
-     gets a typed OperationRecordingFailedError, not a stale capability
-     with no matching Operation state.
-  3. evaluate_replacement_safety now has four distinct outcomes instead
-     of three, an actual ENFORCEMENT hook (capability_service.
-     issue_capability_for_decision's optional replaces_operation_id
-     parameter), and a documented guarantee can be scoped to a specific
-     identity/binding, checked at enforcement time, not merely at
-     read time.
+Closeout pass, three real fixes over the hardening pass:
+
+  1. Business-operation identity (section 1): the hardening pass's own
+     replacement-safety gate ran only when a caller supplied
+     replaces_operation_id -- an unlinked Intent bypassed it entirely.
+     link_business_operation_attempt is the real fix: for a "supported
+     integration" that declares business_operation_id + intended_
+     destination at submission time (Intent, schemas/integration_
+     runtime.py), the prior operation for a REPEATED identity is
+     resolved and safety-checked AUTOMATICALLY, at both capability
+     issuance (this module) and capability consumption
+     (verify_still_current_attempt, called from capability_service's
+     own record_claim transaction) -- never trusting the caller to
+     declare a replacement. See app/db/models.py's BusinessOperationIdentity
+     docstring for the identity's own definition and why it is
+     deliberately NOT material-action equality.
+
+  2. Evidence acceptance rules (section 2): the hardening pass let an
+     unsigned RBAC_HUMAN relay drive outcome_status straight to
+     COMMITTED merely because reconciliation happened to compute
+     MATCHED -- provenance was recorded, but nothing actually gated on
+     it. Fixed: only SIGNED_ADAPTER_IDENTITY evidence (or an explicit,
+     separately-permissioned manual adjudication) can move outcome_
+     status into a terminal value; an unsigned relay's reconciliation
+     result is still computed and preserved (OperationEvidenceEvent.
+     reconciliation_outcome), but alone leaves outcome_status at
+     UNKNOWN. See Operation.evidence_assurance's own docstring
+     (app/db/models.py) for the three-tier vocabulary this enforces.
+
+  3. Execution stage vs. outcome certainty (section 3): Operation.state
+     (one collapsed string) is replaced by two independent columns,
+     execution_stage and outcome_status -- see Operation's own docstring
+     for why the single-column design was a real bug (an observation
+     resolving to "unknown" silently erased whether the operation had
+     been CLAIMED or DISPATCHED), not merely under-documented.
 """
 
 from __future__ import annotations
@@ -55,6 +69,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
+    BusinessOperationIdentity,
     DestinationDuplicatePreventionGuarantee,
     IntegrationIdentity,
     Operation,
@@ -62,36 +77,36 @@ from app.db.models import (
 )
 from app.services import execution_receipt_service as receipt_svc
 from app.services import execution_reconciliation_service as reconciliation_svc
+from app.services import operation_identity_service
 
-# Reconciliation outcome -> this module's own, coarser Operation.state.
-# See Operation's own docstring (app/db/models.py) for why this mapping
-# exists and why it is a mapping onto reconciliation's real outcomes,
-# never a second, independently-derived state-transition rule.
-_OUTCOME_TO_STATE = {
+# Reconciliation outcome -> this module's own outcome_status vocabulary,
+# BEFORE the evidence-acceptance gate in _finalize_observation_event is
+# applied (see that function for why a RAW mapping to a terminal value
+# here does not, by itself, mean outcome_status actually moves there).
+_RECONCILIATION_OUTCOME_TO_OUTCOME_STATUS = {
     "MATCHED": "COMMITTED",
     "EXECUTION_FAILED": "TERMINALLY_NOT_COMMITTED",
-    "MISMATCHED": "OUTCOME_UNKNOWN",
-    "PARTIAL": "OUTCOME_UNKNOWN",
-    "RECEIPT_MISSING": "OUTCOME_UNKNOWN",
-    "INDETERMINATE": "OUTCOME_UNKNOWN",
+    "MISMATCHED": "UNKNOWN",
+    "PARTIAL": "UNKNOWN",
+    "RECEIPT_MISSING": "UNKNOWN",
+    "INDETERMINATE": "UNKNOWN",
 }
-# States a later OUTCOME_UNKNOWN-mapping report never overwrites (a
-# stray INDETERMINATE/MISMATCHED after a real MATCHED does not erase the
+# outcome_status values a later report never overwrites (a stray
+# unresolved report after a real terminal conclusion does not erase the
 # earlier, stronger evidence). Reconciliation's own fixed precedence
 # rule (a later SUCCEEDED always wins over an earlier FAILED, regardless
 # of order) still applies for terminal-vs-terminal updates.
-_TERMINAL_STATES = frozenset({"COMMITTED", "TERMINALLY_NOT_COMMITTED"})
-# States from which an execution attempt (claim) has actually happened --
-# the only states an observation about "what happened downstream" can
-# ever meaningfully apply to. AUTHORIZED (no claim yet) is deliberately
-# excluded: observation evidence about an action nobody has even
-# attempted yet is not evidence about this operation.
-_STATES_ELIGIBLE_FOR_OBSERVATION = frozenset(
-    {"CLAIMED", "DISPATCHED", "COMMITTED", "TERMINALLY_NOT_COMMITTED", "OUTCOME_UNKNOWN"}
-)
+_TERMINAL_OUTCOMES = frozenset({"COMMITTED", "TERMINALLY_NOT_COMMITTED"})
+# execution_stage values from which an execution attempt has actually
+# happened -- the only stages an observation about "what happened
+# downstream" can ever meaningfully apply to. AUTHORIZED (no claim yet)
+# is deliberately excluded: observation evidence about an action nobody
+# has even attempted yet is not evidence about this operation.
+_STAGES_ELIGIBLE_FOR_OBSERVATION = frozenset({"CLAIMED", "DISPATCHED"})
 
 REPORTER_SIGNED_ADAPTER_IDENTITY = "SIGNED_ADAPTER_IDENTITY"
 REPORTER_RBAC_HUMAN = "RBAC_HUMAN"
+REPORTER_MANUAL_ADJUDICATION = "MANUAL_ADJUDICATION"
 
 
 class OperationNotFoundError(Exception):
@@ -106,14 +121,14 @@ class OperationAlreadyExistsForDecisionError(Exception):
 
 class OperationNotClaimedError(Exception):
     """Raised by record_dispatch_evidence and record_observation when the
-    Operation hasn't reached a state either of them can meaningfully
-    apply to yet (see _STATES_ELIGIBLE_FOR_OBSERVATION / the CLAIMED
+    Operation hasn't reached a stage either of them can meaningfully
+    apply to yet (see _STAGES_ELIGIBLE_FOR_OBSERVATION / the CLAIMED
     precondition below) -- e.g. an Operation still AUTHORIZED, whose
     Capability was never even consumed."""
 
-    def __init__(self, operation_id: uuid.UUID, state: str):
-        self.operation_id, self.state = operation_id, state
-        super().__init__(f"operation {operation_id} is {state!r}, not eligible for this evidence")
+    def __init__(self, operation_id: uuid.UUID, execution_stage: str):
+        self.operation_id, self.execution_stage = operation_id, execution_stage
+        super().__init__(f"operation {operation_id} execution_stage={execution_stage!r}, not eligible for this evidence")
 
 
 class OperationRecordingFailedError(Exception):
@@ -128,6 +143,24 @@ class OperationRecordingFailedError(Exception):
     def __init__(self, operation_id: uuid.UUID, reason: str):
         self.operation_id, self.reason = operation_id, reason
         super().__init__(f"operation {operation_id}: {reason}")
+
+
+class OperationSupersededError(Exception):
+    """Closeout pass, section 1: raised at capability CONSUMPTION time
+    when the operation being claimed is business-operation-identity-
+    covered and is no longer its identity's current_operation_id -- a
+    concurrent, later attempt became current between this operation's
+    own issuance and this consumption attempt. Rolls back the whole
+    consumption transaction (capability_service.verify_and_consume_
+    capability), the same fail-closed shape as OperationRecordingFailedError,
+    but distinct: this is not a durability failure, it is stale
+    authority that must never be allowed to proceed."""
+
+    def __init__(self, operation_id: uuid.UUID, current_operation_id: uuid.UUID | None):
+        self.operation_id, self.current_operation_id = operation_id, current_operation_id
+        super().__init__(
+            f"operation {operation_id} has been superseded; current governing attempt is {current_operation_id}"
+        )
 
 
 class MaterialActionMismatchError(Exception):
@@ -146,14 +179,23 @@ class MaterialActionMismatchError(Exception):
 
 class ReplacementNotSafeError(Exception):
     """Raised by capability_service.issue_capability_for_decision /
-    issue_capability_for_reviewed_decision when called with a
-    replaces_operation_id whose evaluate_replacement_safety result is
-    not one of the SAFE_* categories -- the real enforcement hook, not
-    merely an advisory endpoint a caller could choose to ignore."""
+    issue_capability_for_reviewed_decision -- either via an explicit
+    replaces_operation_id, or (closeout pass, section 1) automatically
+    for a business-operation-identity-covered decision whose identity
+    already has a governing prior attempt that is not SAFE_* to
+    replace."""
 
     def __init__(self, operation_id: uuid.UUID, safety: str, reason: str):
         self.operation_id, self.safety, self.reason = operation_id, safety, reason
         super().__init__(f"replacement for operation {operation_id} not safe ({safety}): {reason}")
+
+
+class InvalidManualAdjudicationError(Exception):
+    """record_manual_adjudication's own validation failures: an empty
+    rationale, a non-terminal requested outcome, or evidence_reference_ids
+    naming rows that do not exist (or belong to a different Operation) --
+    section 2's own "recorded rationale, evidence references" requirement
+    is enforced here, not merely documented."""
 
 
 @dataclass(frozen=True)
@@ -175,12 +217,17 @@ def _get_operation_for_organization(db: Session, organization_id: uuid.UUID, ope
 def _evidence_strength(reporter_kind: str, signature_verified: bool) -> str:
     """Mechanically derived, never a free string a caller can set --
     section 5's own "evidence strength" requirement, answerable by
-    reading this table, not by trusting a claim."""
+    reading this table, not by trusting a claim. MANUAL_ADJUDICATION
+    always carries signature_verified=False (it is a human decision, not
+    a cryptographic proof) and gets its own, distinct label -- never
+    conflated with an unsigned RBAC_HUMAN relay of an external claim."""
     if reporter_kind == REPORTER_SIGNED_ADAPTER_IDENTITY and signature_verified:
         return "SIGNED_ADAPTER_REPORT"
     if reporter_kind == REPORTER_RBAC_HUMAN and not signature_verified:
         return "UNSIGNED_HUMAN_RELAY"
-    # Neither of the two real combinations above -- a caller asserting
+    if reporter_kind == REPORTER_MANUAL_ADJUDICATION and not signature_verified:
+        return "MANUAL_ADJUDICATION"
+    # None of the three real combinations above -- a caller asserting
     # SIGNED_ADAPTER_IDENTITY without signature_verified=True (or the
     # reverse) is a caller lying about its own provenance, not a case
     # this function silently accepts a label for.
@@ -188,23 +235,151 @@ def _evidence_strength(reporter_kind: str, signature_verified: bool) -> str:
 
 
 def create_operation_for_decision(
-    db: Session, organization_id: uuid.UUID, decision_id: uuid.UUID, material_action_digest: str,
+    db: Session, organization_id: uuid.UUID, decision_id: uuid.UUID, material_action_digest: str, *,
+    business_operation_identity_id: uuid.UUID | None = None,
+    integration_id: uuid.UUID | None = None,
+    integration_contract_version_id: uuid.UUID | None = None,
+    destination: str | None = None,
+    previous_attempt_operation_id: uuid.UUID | None = None,
 ) -> Operation:
     """Called once, at Capability issuance time (services/
-    capability_service.py's own _issue_and_persist), never independently
-    of a real, just-issued Capability. State AUTHORIZED: a Capability
-    exists; nothing has been claimed yet."""
+    capability_service.py's own _issue_and_persist / link_business_
+    operation_attempt), never independently of a real, just-issued
+    Capability. execution_stage AUTHORIZED, outcome_status UNKNOWN,
+    evidence_assurance NONE: a Capability exists; nothing has been
+    attempted or observed yet.
+
+    The five identity-related keyword params are all optional and
+    additive -- every caller that omits them (every non-identity-covered
+    decision, exactly today's default) gets an Operation with no
+    business-operation-identity coverage, unaffected by section 1's
+    automatic resolution/enforcement; only the pre-existing, explicit
+    replaces_operation_id mechanism remains available to it."""
     existing = db.scalar(select(Operation).where(Operation.decision_id == decision_id))
     if existing is not None:
         raise OperationAlreadyExistsForDecisionError(existing.id)
     operation = Operation(
         organization_id=organization_id, decision_id=decision_id,
-        material_action_digest=material_action_digest, state="AUTHORIZED",
+        material_action_digest=material_action_digest,
+        execution_stage="AUTHORIZED", outcome_status="UNKNOWN", evidence_assurance="NONE",
+        business_operation_identity_id=business_operation_identity_id,
+        integration_id=integration_id, integration_contract_version_id=integration_contract_version_id,
+        destination=destination, previous_attempt_operation_id=previous_attempt_operation_id,
     )
     db.add(operation)
     db.commit()
     db.refresh(operation)
     return operation
+
+
+def link_business_operation_attempt(
+    db: Session, organization_id: uuid.UUID, decision, intent, material_action_digest: str,
+) -> Operation:
+    """Closeout pass, section 1: the real, automatic enforcement path.
+    Called from capability_service.issue_capability_for_decision /
+    issue_capability_for_reviewed_decision whenever intent.
+    business_operation_id is set -- i.e. for every "supported
+    integration" submission, with NO dependence on the caller separately
+    declaring replaces_operation_id. Resolves (or creates) the
+    BusinessOperationIdentity for (organization, intent.integration_id,
+    intent.intended_destination, intent.business_operation_id), reads
+    its current governing attempt, and:
+
+      - if none exists yet, this is a genuine first attempt: creates the
+        Operation and races (via operation_identity_service.
+        advance_current_attempt's atomic conditional UPDATE) to become
+        the identity's current_operation_id. A concurrent FIRST attempt
+        at the same identity cannot both win -- the loser re-resolves
+        against whatever actually won and is safety-checked against it,
+        exactly like any other repeat (this is the "handle concurrent
+        creation ... using database constraints and transactions"
+        requirement, not a documentation-only claim).
+      - if a prior attempt exists, evaluate_replacement_safety is run
+        against it BEFORE this attempt's own Operation is even created
+        (ReplacementNotSafeError blocks issuance outright if unsafe --
+        "block another effect if the original committed," "block an
+        unsafe attempt while the original outcome is unknown," both
+        enforced here, unconditionally, never opt-in).
+      - either way, `requires_current_authorization` is always True on
+        the safety result -- a fresh Intent still had to independently
+        evaluate to ALLOW for this function to even be reached; safety
+        never substitutes for that.
+
+    The original operation, and every superseded attempt, is preserved
+    untouched (previous_attempt_operation_id chains them) -- "record
+    subsequent attempts separately" is not merely a phrase here, it is
+    the actual row structure."""
+    identity = operation_identity_service.resolve_or_create_business_operation_identity(
+        db, organization_id, intent.integration_id, intent.intended_destination, intent.business_operation_id,
+    )
+    db.commit()
+    db.refresh(identity)
+
+    prior_operation_id = identity.current_operation_id
+    if prior_operation_id is not None:
+        safety = evaluate_replacement_safety(
+            db, organization_id, prior_operation_id,
+            attempting_integration_identity_id=intent.integration_identity_id,
+            attempting_enforcement_binding_id=intent.enforcement_binding_id,
+        )
+        if not safety.safety.startswith("SAFE_"):
+            raise ReplacementNotSafeError(prior_operation_id, safety.safety, safety.reason)
+
+    operation = create_operation_for_decision(
+        db, organization_id, decision.id, material_action_digest,
+        business_operation_identity_id=identity.id, integration_id=intent.integration_id,
+        integration_contract_version_id=intent.integration_contract_version_id,
+        destination=intent.intended_destination, previous_attempt_operation_id=prior_operation_id,
+    )
+
+    for _ in range(operation_identity_service.MAX_CONCURRENT_ATTEMPT_RETRIES):
+        won = operation_identity_service.advance_current_attempt(
+            db, identity, expected_current_operation_id=prior_operation_id, new_operation_id=operation.id,
+        )
+        db.commit()
+        if won:
+            return operation
+
+        # Lost the race: a concurrent attempt became current between our
+        # read and our update. Never force our own value in on top of a
+        # winner we have not evaluated -- re-resolve and re-check safety
+        # against whatever actually won, then retry.
+        db.refresh(identity)
+        new_prior_id = identity.current_operation_id
+        if new_prior_id == operation.id:
+            return operation  # a previous pass of this same loop already won
+        safety = evaluate_replacement_safety(
+            db, organization_id, new_prior_id,
+            attempting_integration_identity_id=intent.integration_identity_id,
+            attempting_enforcement_binding_id=intent.enforcement_binding_id,
+        )
+        if not safety.safety.startswith("SAFE_"):
+            raise ReplacementNotSafeError(new_prior_id, safety.safety, safety.reason)
+        operation.previous_attempt_operation_id = new_prior_id
+        db.commit()
+        prior_operation_id = new_prior_id
+
+    raise operation_identity_service.ConcurrentBusinessOperationAttemptError(identity.id)
+
+
+def verify_still_current_attempt(db: Session, organization_id: uuid.UUID, operation: Operation) -> None:
+    """Closeout pass, section 1: the CONSUMPTION-time half of "enforce
+    this at issuance and consumption, including when safety facts change
+    between them." Called from record_claim, inside capability_service.
+    verify_and_consume_capability's own transaction -- a no-op for a
+    non-identity-covered operation (business_operation_identity_id is
+    None). For an identity-covered one, re-confirms this operation is
+    STILL its identity's current_operation_id; if a later attempt has
+    since become current (issued after this one, in between this
+    operation's own issuance and this consumption attempt), raises
+    OperationSupersededError, which capability_service propagates as a
+    rolled-back consumption -- stale authority is never allowed to
+    proceed merely because it was valid when issued."""
+    if operation.business_operation_identity_id is None:
+        return
+    identity = db.get(BusinessOperationIdentity, operation.business_operation_identity_id)
+    if identity is None or identity.current_operation_id != operation.id:
+        raise OperationSupersededError(operation.id, identity.current_operation_id if identity else None)
 
 
 def record_claim(db: Session, organization_id: uuid.UUID, operation: Operation, capability_id: uuid.UUID) -> None:
@@ -217,11 +392,16 @@ def record_claim(db: Session, organization_id: uuid.UUID, operation: Operation, 
     AUTHORIZED -> CLAIMED only: the Capability was atomically consumed,
     so an execution attempt was authorized to proceed. This does NOT
     establish that the executor ever actually called the destination --
-    see record_dispatch_evidence for that separate, later fact."""
+    see record_dispatch_evidence for that separate, later fact.
+
+    Re-checks verify_still_current_attempt FIRST -- a superseded
+    business-operation-identity attempt must never be allowed to claim,
+    even though its Capability itself was validly issued at the time."""
     if operation.organization_id != organization_id:
         raise OperationNotFoundError(str(operation.id))
+    verify_still_current_attempt(db, organization_id, operation)
     operation.capability_id = capability_id
-    operation.state = "CLAIMED"
+    operation.execution_stage = "CLAIMED"
     operation.attempt_count += 1
     operation.updated_at = datetime.now(timezone.utc)
 
@@ -237,12 +417,12 @@ def record_dispatch_evidence(
     (which only proves the attempt was authorized) and from an
     observation (which reports what the destination said back, if
     anything). CLAIMED -> DISPATCHED only; never inferred from CLAIMED
-    alone, and never itself produces COMMITTED/TERMINALLY_NOT_COMMITTED
-    -- only record_observation, backed by real reconciliation, does
-    that."""
+    alone, and never itself touches outcome_status -- only
+    _finalize_observation_event, under the evidence-acceptance rules
+    below, does that."""
     operation = _get_operation_for_organization(db, organization_id, operation_id)
-    if operation.state != "CLAIMED":
-        raise OperationNotClaimedError(operation.id, operation.state)
+    if operation.execution_stage != "CLAIMED":
+        raise OperationNotClaimedError(operation.id, operation.execution_stage)
 
     strength = _evidence_strength(reporter_kind, signature_verified)
     if destination is not None:
@@ -257,7 +437,7 @@ def record_dispatch_evidence(
         claimed_status="SENT", evidence_strength=strength,
     )
     db.add(event)
-    operation.state = "DISPATCHED"
+    operation.execution_stage = "DISPATCHED"
     operation.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(operation)
@@ -296,9 +476,11 @@ def record_observation(
     what it actually is. The real, signature-authenticated Adapter path
     (routers/execution_receipts.py) passes SIGNED_ADAPTER_IDENTITY /
     True; the RBAC recovery path (routers/operations.py) passes
-    RBAC_HUMAN / False. Neither is inferred.
+    RBAC_HUMAN / False. Neither is inferred. See _finalize_observation_
+    event for what each is actually ALLOWED to conclude (section 2:
+    acceptance rules, not just provenance labels).
 
-    Precondition: the Operation must already be CLAIMED or later --
+    Precondition: the Operation must already be CLAIMED or DISPATCHED --
     observation evidence about an operation whose Capability was never
     even consumed is not evidence about this operation at all
     (OperationNotClaimedError). Once CLAIMED, though, evidence is
@@ -307,27 +489,42 @@ def record_observation(
     be handled conservatively -- absence of dispatch evidence does not
     establish absence of an external effect.
 
-    Revocation of OBSERVATION authority specifically (as opposed to
-    execution authority) is not re-checked here as a separate step --
-    it's already the first thing submit_execution_receipt below checks
-    (`identity.status != "active"`), and this function raises whatever
-    that raises, unchanged. If observation authority is revoked, this
-    call fails before any evidence is recorded and before reconciliation
-    ever runs -- the state is left exactly as it was."""
+    A CONTRADICTORY report (execution_receipt_service's own conflict
+    detection) is retained, not silently discarded -- see the
+    OBSERVATION_CONFLICT_REJECTED event written below -- and never
+    overwrites whatever outcome_status/evidence_assurance already stood
+    before the conflicting attempt."""
     operation = _get_operation_for_organization(db, organization_id, operation_id)
-    if operation.state not in _STATES_ELIGIBLE_FOR_OBSERVATION:
-        raise OperationNotClaimedError(operation.id, operation.state)
+    if operation.execution_stage not in _STAGES_ELIGIBLE_FOR_OBSERVATION:
+        raise OperationNotClaimedError(operation.id, operation.execution_stage)
 
     if material_action_digest != operation.material_action_digest:
         raise MaterialActionMismatchError(operation.material_action_digest, material_action_digest)
 
-    receipt = receipt_svc.submit_execution_receipt(
-        db, identity, enforcement_binding_id=enforcement_binding_id, decision_id=operation.decision_id,
-        canonical_action_digest=canonical_action_digest,
-        external_operation_id=operation.destination_operation_id or _resolve_external_operation_id(db, operation),
-        destination=destination, status=status, capability_id=capability_id,
-        occurred_at=occurred_at, detail=detail,
-    )
+    try:
+        receipt = receipt_svc.submit_execution_receipt(
+            db, identity, enforcement_binding_id=enforcement_binding_id, decision_id=operation.decision_id,
+            canonical_action_digest=canonical_action_digest,
+            external_operation_id=operation.destination_operation_id or _resolve_external_operation_id(db, operation),
+            destination=destination, status=status, capability_id=capability_id,
+            occurred_at=occurred_at, detail=detail,
+        )
+    except receipt_svc.ExecutionReceiptConflictError:
+        # Section 2: "retain contradictory reports and prevent them from
+        # silently overwriting a terminal conclusion." The conflicting
+        # claim itself is preserved (a real, auditable attempt was
+        # made), but nothing about the Operation's own state changes --
+        # the caller still sees the conflict raised, unmodified.
+        conflict_event = OperationEvidenceEvent(
+            organization_id=organization_id, operation_id=operation.id, event_type="OBSERVATION_CONFLICT_REJECTED",
+            reporter_kind=reporter_kind, integration_identity_id=identity.id, reported_by=reported_by,
+            signature_verified=signature_verified, destination=destination, claimed_status=status,
+            evidence_strength=_evidence_strength(reporter_kind, signature_verified),
+        )
+        db.add(conflict_event)
+        db.commit()
+        raise
+
     return _finalize_observation_event(
         db, organization_id, operation, receipt, identity_id=identity.id,
         reporter_kind=reporter_kind, signature_verified=signature_verified, reported_by=reported_by,
@@ -345,10 +542,9 @@ def record_observation_for_existing_receipt(
     different, already-real way: submit_execution_receipt's own
     canonical_action_digest/identity/binding checks), so this does NOT
     re-run that step. It exists so a genuine, signature-verified Adapter
-    report ALSO advances a lifecycle-covered Operation's state -- without
-    this, only the weaker RBAC recovery path could ever reach COMMITTED/
-    TERMINALLY_NOT_COMMITTED, which would defeat the point of the
-    stronger channel existing at all.
+    report ALSO advances a lifecycle-covered Operation's state -- and,
+    per section 2, this is the ONLY ordinary observation path that can
+    actually move outcome_status into a terminal value.
 
     Silent no-op (returns None) when no Operation is linked to this
     receipt's decision_id -- the same "legacy caller, not lifecycle-
@@ -357,13 +553,13 @@ def record_observation_for_existing_receipt(
     operation = db.scalar(select(Operation).where(Operation.decision_id == receipt.decision_id, Operation.organization_id == organization_id))
     if operation is None:
         return None
-    if operation.state not in _STATES_ELIGIBLE_FOR_OBSERVATION:
+    if operation.execution_stage not in _STAGES_ELIGIBLE_FOR_OBSERVATION:
         # A receipt referencing a Capability that was never actually
         # claimed is exactly the "decision_not_found"-adjacent anomaly
         # submit_execution_receipt's own linkage checks are meant to
         # catch upstream; if one somehow reaches here, fail closed
         # rather than silently forcing a state transition.
-        raise OperationNotClaimedError(operation.id, operation.state)
+        raise OperationNotClaimedError(operation.id, operation.execution_stage)
     return _finalize_observation_event(
         db, organization_id, operation, receipt, identity_id=receipt.integration_identity_id,
         reporter_kind=reporter_kind, signature_verified=signature_verified, reported_by=reported_by,
@@ -375,6 +571,17 @@ def _finalize_observation_event(
     db: Session, organization_id: uuid.UUID, operation: Operation, receipt, *, identity_id: uuid.UUID,
     reporter_kind: str, signature_verified: bool, reported_by: str, destination: str, status: str,
 ):
+    """Section 2's own evidence-acceptance gate. Reconciliation is
+    ALWAYS computed and ALWAYS preserved on the event
+    (reconciliation_outcome) -- "reconciliation MATCHED establishes
+    consistency with the authorized action; it does not independently
+    prove destination commitment" -- but only a signature-verified
+    Adapter report is allowed to actually move outcome_status into a
+    terminal value. An unsigned RBAC_HUMAN relay's own reconciliation
+    result, even a raw MATCHED/EXECUTION_FAILED, is capped at UNKNOWN
+    here: it is evidence that SOMETHING was claimed, never proof that it
+    happened, and must not "automatically become verified destination
+    truth." """
     strength = _evidence_strength(reporter_kind, signature_verified)
 
     if operation.destination is None:
@@ -382,19 +589,26 @@ def _finalize_observation_event(
     if operation.destination_operation_id is None:
         operation.destination_operation_id = receipt.external_operation_id
 
+    result = reconciliation_svc.reconcile_decision(db, organization_id, operation.decision_id)
+    raw_new_outcome = _RECONCILIATION_OUTCOME_TO_OUTCOME_STATUS[result.outcome]
+    is_adapter_verified = reporter_kind == REPORTER_SIGNED_ADAPTER_IDENTITY and signature_verified
+    effective_new_outcome = raw_new_outcome if (is_adapter_verified or raw_new_outcome == "UNKNOWN") else "UNKNOWN"
+
     event = OperationEvidenceEvent(
         organization_id=organization_id, operation_id=operation.id, event_type="OBSERVATION",
         reporter_kind=reporter_kind, integration_identity_id=identity_id, reported_by=reported_by,
         signature_verified=signature_verified, destination=destination,
         destination_operation_id=operation.destination_operation_id, claimed_status=status,
-        evidence_strength=strength, receipt_id=receipt.id,
+        reconciliation_outcome=result.outcome, evidence_strength=strength, receipt_id=receipt.id,
     )
     db.add(event)
 
-    result = reconciliation_svc.reconcile_decision(db, organization_id, operation.decision_id)
-    new_state = _OUTCOME_TO_STATE[result.outcome]
-    if operation.state not in _TERMINAL_STATES or new_state in _TERMINAL_STATES:
-        operation.state = new_state
+    if operation.outcome_status not in _TERMINAL_OUTCOMES or effective_new_outcome in _TERMINAL_OUTCOMES:
+        operation.outcome_status = effective_new_outcome
+        if effective_new_outcome in _TERMINAL_OUTCOMES:
+            operation.evidence_assurance = "ADAPTER_REPORTED"
+        elif operation.evidence_assurance == "NONE" and reporter_kind == REPORTER_RBAC_HUMAN:
+            operation.evidence_assurance = "REPORTED_UNVERIFIED"
     operation.updated_at = datetime.now(timezone.utc)
 
     try:
@@ -416,6 +630,60 @@ def _finalize_observation_event(
     return operation, receipt, result
 
 
+def record_manual_adjudication(
+    db: Session, organization_id: uuid.UUID, operation_id: uuid.UUID, *,
+    adjudicated_by: str, outcome_status: str, rationale: str, evidence_reference_ids: list[uuid.UUID],
+) -> Operation:
+    """Section 2: the ONLY other way (besides a signature-verified
+    Adapter report) outcome_status can reach a terminal value. A
+    governance decision, not a report of an external fact -- gated by
+    Permission.OPERATION_MANUAL_ADJUDICATE at the router layer
+    (Governance Administrator only, deliberately NOT reachable by an
+    OPERATION_OBSERVE-only credential), and always requires a non-empty
+    rationale plus at least one real, existing evidence_reference_id
+    from THIS operation's own event log -- an adjudication with nothing
+    to point at is not representable here, by construction. Written as
+    its own OperationEvidenceEvent (reporter_kind=MANUAL_ADJUDICATION,
+    signature_verified=False -- a human decision, never a cryptographic
+    proof) so the full record -- who, why, based on what -- is
+    permanently distinguishable from an ordinary observation."""
+    operation = _get_operation_for_organization(db, organization_id, operation_id)
+    if outcome_status not in _TERMINAL_OUTCOMES:
+        raise InvalidManualAdjudicationError(f"outcome_status must be one of {sorted(_TERMINAL_OUTCOMES)}, got {outcome_status!r}")
+    if not rationale or not rationale.strip():
+        raise InvalidManualAdjudicationError("rationale is required")
+    if not evidence_reference_ids:
+        raise InvalidManualAdjudicationError("at least one evidence_reference_id is required")
+
+    referenced = db.scalars(
+        select(OperationEvidenceEvent).where(
+            OperationEvidenceEvent.id.in_(evidence_reference_ids),
+            OperationEvidenceEvent.operation_id == operation.id,
+        )
+    ).all()
+    if len(referenced) != len(set(evidence_reference_ids)):
+        found = {row.id for row in referenced}
+        missing = set(evidence_reference_ids) - found
+        raise InvalidManualAdjudicationError(f"evidence_reference_ids not found on this operation: {sorted(str(i) for i in missing)}")
+
+    strength = _evidence_strength(REPORTER_MANUAL_ADJUDICATION, False)
+    event = OperationEvidenceEvent(
+        organization_id=organization_id, operation_id=operation.id, event_type="MANUAL_ADJUDICATION",
+        reporter_kind=REPORTER_MANUAL_ADJUDICATION, reported_by=adjudicated_by, signature_verified=False,
+        claimed_status=outcome_status, evidence_strength=strength, rationale=rationale,
+        evidence_reference_ids=[str(i) for i in evidence_reference_ids],
+    )
+    db.add(event)
+
+    if operation.outcome_status not in _TERMINAL_OUTCOMES or outcome_status in _TERMINAL_OUTCOMES:
+        operation.outcome_status = outcome_status
+        operation.evidence_assurance = "MANUAL_ADJUDICATED"
+    operation.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(operation)
+    return operation
+
+
 def _resolve_external_operation_id(db: Session, operation: Operation) -> str:
     """Only reached when an Operation has never recorded a destination_
     operation_id at all (its very first observation) -- resolves the
@@ -434,20 +702,31 @@ def evaluate_replacement_safety(
     attempting_enforcement_binding_id: uuid.UUID | None = None,
 ) -> ReplacementSafety:
     """Answers SAFETY only -- never AUTHORITY (see this module's own
-    top-of-file docstring). Four distinct outcomes, not three:
+    top-of-file docstring). Reads outcome_status (closeout pass, section
+    3), never the old collapsed `state` -- execution_stage is
+    irrelevant to this question by construction: an operation stuck at
+    execution_stage=CLAIMED forever with outcome_status=UNKNOWN is just
+    as UNSAFE_UNRESOLVED as one stuck at DISPATCHED with the same
+    outcome_status; which stage it reached tells you nothing about
+    whether a duplicate effect is still possible.
+
+    Four distinct outcomes, not three:
 
       BLOCKED_ALREADY_COMMITTED       -- the original operation already
         succeeded. A "replacement" here is not a recovery action, it is
         a duplicate-effect risk in its own right; blocked, not offered
         as safe.
-      UNSAFE_UNRESOLVED               -- the original outcome is not yet
-        known (CLAIMED/DISPATCHED/OUTCOME_UNKNOWN) and no valid,
-        currently-covering guarantee exists. The fail-closed default.
-      SAFE_TERMINAL_NON_COMMIT_PROVEN -- destination-authoritative
-        evidence establishes the original did not, and will not,
-        commit. Safe to attempt a replacement, but `requires_current_
-        authorization` is always True: safety here never substitutes
-        for a fresh Intent actually evaluating to ALLOW.
+      UNSAFE_UNRESOLVED               -- outcome_status is not yet
+        COMMITTED or TERMINALLY_NOT_COMMITTED, and no valid, currently-
+        covering guarantee exists. The fail-closed default -- reached
+        both for an ordinary unresolved operation AND (section 2) for
+        one whose only "terminal-looking" evidence came from an
+        unsigned relay and was therefore capped at UNKNOWN.
+      SAFE_TERMINAL_NON_COMMIT_PROVEN -- sufficient evidence establishes
+        the original did not, and will not, commit. Safe to attempt a
+        replacement, but `requires_current_authorization` is always
+        True: safety here never substitutes for a fresh Intent actually
+        evaluating to ALLOW.
       SAFE_DUPLICATE_PREVENTION_GUARANTEED -- a live, human-documented
         guarantee covers this exact operation. If it is scoped to a
         specific identity/binding (restricted_to_integration_identity_id
@@ -458,17 +737,17 @@ def evaluate_replacement_safety(
         any identity at all."""
     operation = _get_operation_for_organization(db, organization_id, operation_id)
 
-    if operation.state == "COMMITTED":
+    if operation.outcome_status == "COMMITTED":
         return ReplacementSafety(
             safety="BLOCKED_ALREADY_COMMITTED",
             reason="the original operation already committed; a further effect would itself be a duplicate, not a recovery",
             requires_current_authorization=True,
         )
 
-    if operation.state == "TERMINALLY_NOT_COMMITTED":
+    if operation.outcome_status == "TERMINALLY_NOT_COMMITTED":
         return ReplacementSafety(
             safety="SAFE_TERMINAL_NON_COMMIT_PROVEN",
-            reason="destination-authoritative evidence establishes the original operation did not, and will not, commit",
+            reason="sufficient evidence establishes the original operation did not, and will not, commit",
             requires_current_authorization=True,
         )
 
@@ -507,7 +786,7 @@ def evaluate_replacement_safety(
 
     return ReplacementSafety(
         safety="UNSAFE_UNRESOLVED",
-        reason=f"operation state is {operation.state!r}: neither terminal non-commit proof nor a live, scoped duplicate-prevention guarantee exists for this exact operation",
+        reason=f"outcome_status is {operation.outcome_status!r} (evidence_assurance={operation.evidence_assurance!r}): neither terminal non-commit proof nor a live, scoped duplicate-prevention guarantee exists for this exact operation",
         requires_current_authorization=True,
     )
 

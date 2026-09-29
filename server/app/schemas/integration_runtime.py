@@ -45,3 +45,14 @@ class AttestedIntentRequest(BaseModel):
     # never format-restricted (no numeric/UUID requirement) and never
     # case-normalized: treated as an opaque identifier throughout.
     external_operation_id: str
+    # Closeout pass, section 1 (business-operation identity): optional,
+    # and required together (integration_runtime_service.submit_attested_
+    # intent enforces this, not this schema) -- a "supported integration"
+    # opting into lifecycle/replacement-safety protection supplies both;
+    # every existing Adapter that omits them gets exactly today's
+    # behaviour, no Operation ever created for that submission. DISTINCT
+    # from external_operation_id above -- see BusinessOperationIdentity's
+    # own docstring (app/db/models.py) for why these cannot be the same
+    # field.
+    business_operation_id: str | None = None
+    intended_destination: str | None = None

@@ -231,6 +231,7 @@ def issue_capability_for_decision(
     issued_by: str | None = None,
     ttl_seconds: int = DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS,
     replaces_operation_id: uuid.UUID | None = None,
+    material_action_digest: str | None = None,
 ) -> IssuedCapability:
     """Issues a Capability for a Decision Runtime Authority itself
     already, directly, decided ALLOW. See issue_capability_for_reviewed_decision
@@ -264,6 +265,7 @@ def issue_capability_for_decision(
 
     intent = db.get(Intent, decision.intent_id)
     _enforce_replacement_safety_if_linked(db, organization_id, replaces_operation_id, intent)
+    _link_business_operation_attempt_if_covered(db, organization_id, decision, intent, material_action_digest)
     return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds)
 
 
@@ -281,6 +283,48 @@ def _enforce_replacement_safety_if_linked(db: Session, organization_id: uuid.UUI
         raise operation_service.ReplacementNotSafeError(replaces_operation_id, result.safety, result.reason)
 
 
+def _link_business_operation_attempt_if_covered(
+    db: Session, organization_id: uuid.UUID, decision, intent, material_action_digest: str | None,
+) -> None:
+    """Closeout pass, section 1: the AUTOMATIC counterpart to
+    `_enforce_replacement_safety_if_linked` above -- that function only
+    ever runs when a caller explicitly supplies replaces_operation_id;
+    this one runs for EVERY "supported integration" submission that
+    declared business_operation_id + intended_destination at Intent
+    submission time, with no dependence on the issuance caller knowing
+    or declaring anything about a prior attempt. Called BEFORE
+    _issue_and_persist -- if a repeated identity's prior attempt is not
+    SAFE_* to replace, this raises ReplacementNotSafeError and no
+    CapabilityToken is ever persisted for this Decision at all, exactly
+    like the explicit path already does.
+
+    `material_action_digest`: defaults to the Intent's own already-
+    computed canonical_action_digest (app/domain/canonical_action.py) --
+    the generic, always-available digest every Adapter-mediated Intent
+    already carries. A caller with a richer, domain-specific materiality
+    contract (e.g. domain/order_action_contract.py's OrderAction, which
+    treats supplier/quantity/buyer_account/delivery_location/unit_price
+    as the material fields, a stricter set than the generic canonical
+    action digest alone would enforce) can override it explicitly --
+    this is what this codebase's own order-domain tests do."""
+    if intent.business_operation_id is None:
+        return
+    from app.services import operation_service
+
+    existing_operation = db.scalar(select(Operation).where(Operation.decision_id == decision.id))
+    if existing_operation is not None:
+        # A retried issuance call for a Decision that already has its
+        # own Operation (e.g. a second call after a transient failure
+        # downstream of this function, before a Capability was ever
+        # persisted) -- link_business_operation_attempt's own
+        # OperationAlreadyExistsForDecisionError would otherwise fire on
+        # a legitimate retry; nothing further to link.
+        return
+    operation_service.link_business_operation_attempt(
+        db, organization_id, decision, intent, material_action_digest or intent.canonical_action_digest or "",
+    )
+
+
 def issue_capability_for_reviewed_decision(
     db: Session,
     organization_id: uuid.UUID,
@@ -289,6 +333,7 @@ def issue_capability_for_reviewed_decision(
     issued_by: str | None = None,
     ttl_seconds: int = DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS,
     replaces_operation_id: uuid.UUID | None = None,
+    material_action_digest: str | None = None,
 ) -> IssuedCapability:
     """Trusted Integration Architecture, Phase 5.1, Part B: issues a
     Capability for a HUMAN_REVIEW decision an authorized reviewer has
@@ -325,6 +370,7 @@ def issue_capability_for_reviewed_decision(
         decision_id, resolution_row.resolved_by, resolution_row.resolved_by_user_id,
     )
     _enforce_replacement_safety_if_linked(db, organization_id, replaces_operation_id, intent)
+    _link_business_operation_attempt_if_covered(db, organization_id, decision, intent, material_action_digest)
     return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds)
 
 
@@ -755,6 +801,21 @@ def verify_and_consume_capability(
         try:
             operation_service.record_claim(db, row.organization_id, operation, row.id)
             db.commit()
+        except operation_service.OperationSupersededError:
+            # Closeout pass, section 1: distinct from a durability
+            # failure -- this operation was validly issued, but a LATER
+            # attempt at the same business-operation identity has since
+            # become current (facts changed between issuance and
+            # consumption). Rolled back exactly the same way, but
+            # re-raised as-is so a caller can tell "stale authority,
+            # never retry this capability" apart from "durability
+            # failure, retry may succeed."
+            db.rollback()
+            logger.warning(
+                "capability_consumption_result=ROLLED_BACK_OPERATION_SUPERSEDED capability_id=%s decision_id=%s operation_id=%s",
+                row.id, row.decision_id, operation.id,
+            )
+            raise
         except Exception as e:
             db.rollback()
             logger.error(

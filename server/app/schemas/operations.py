@@ -11,7 +11,26 @@ class OperationResponse(BaseModel):
     material_action_digest: str
     destination: str | None
     destination_operation_id: str | None
-    state: str
+    # Closeout pass, section 3: execution stage (what has been evidenced
+    # about the attempt itself) and outcome certainty (what is known
+    # about the destination outcome) are independent facts, not one
+    # collapsed `state` string -- execution_stage=CLAIMED and
+    # outcome_status=UNKNOWN is a valid, common, and meaningfully
+    # different combination from execution_stage=DISPATCHED and
+    # outcome_status=UNKNOWN. See Operation's own docstring
+    # (app/db/models.py) for the full vocabulary.
+    execution_stage: str
+    outcome_status: str
+    # Closeout pass, section 2: what KIND of evidence outcome_status
+    # currently rests on -- NONE/REPORTED_UNVERIFIED/ADAPTER_REPORTED/
+    # MANUAL_ADJUDICATED. An unsigned human relay alone can only ever
+    # produce REPORTED_UNVERIFIED with outcome_status still UNKNOWN.
+    evidence_assurance: str
+    # Closeout pass, section 1: present only for a business-operation-
+    # identity-covered Operation (None otherwise, exactly today's
+    # default for a non-identity-covered one).
+    business_operation_identity_id: UUID | None
+    previous_attempt_operation_id: UUID | None
     attempt_count: int
     created_at: datetime
     updated_at: datetime
@@ -78,3 +97,17 @@ class DuplicatePreventionGuaranteeResponse(BaseModel):
     documented_at: datetime
     restricted_to_integration_identity_id: UUID | None
     restricted_to_enforcement_binding_id: UUID | None
+
+
+class RecordManualAdjudicationRequest(BaseModel):
+    """Closeout pass, section 2: a governance override, never a report
+    of an external fact -- always carries a rationale and at least one
+    reference into this Operation's own evidence log. `adjudicated_by`
+    is resolved server-side from the caller's own authenticated session
+    (routers/operations.py's _reported_by), never accepted as a request
+    field -- the same "actual authenticated reporter" discipline every
+    other provenance field in this router already follows."""
+
+    outcome_status: str
+    rationale: str
+    evidence_reference_ids: list[UUID]
