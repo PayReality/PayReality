@@ -440,13 +440,19 @@ def test_observation_itself_revoked_blocks_the_observation(db, opa_url):
 
 
 def test_operation_observe_permission_grants_no_execution_permission():
-    """The real, testable proof: Auditor holds Permission.OPERATION_
+    """The real, testable proof: Reviewer holds Permission.OPERATION_
     OBSERVE and holds neither CAPABILITY_ISSUE nor CAPABILITY_VERIFY --
     observation and execution are genuinely separate credentials, not
-    the same one renamed."""
-    assert has_permission(Role.AUDITOR, Permission.OPERATION_OBSERVE) is True
-    assert has_permission(Role.AUDITOR, Permission.CAPABILITY_ISSUE) is False
-    assert has_permission(Role.AUDITOR, Permission.CAPABILITY_VERIFY) is False
+    the same one renamed. Deliberately Reviewer, not Auditor: granting
+    OPERATION_OBSERVE to Auditor was tried first and reverted after it
+    broke that role's own pre-existing, separately tested invariant
+    (test_auditor_is_strictly_read_only in test_rbac_permissions.py) --
+    recording an observation is a write, which a strictly-read-only role
+    must never be able to do, regardless of how narrow that write is."""
+    assert has_permission(Role.REVIEWER, Permission.OPERATION_OBSERVE) is True
+    assert has_permission(Role.REVIEWER, Permission.CAPABILITY_ISSUE) is False
+    assert has_permission(Role.REVIEWER, Permission.CAPABILITY_VERIFY) is False
+    assert has_permission(Role.AUDITOR, Permission.OPERATION_OBSERVE) is False, "Auditor must stay strictly read-only"
 
 
 def test_every_operations_route_is_gated_by_operation_observe_specifically():

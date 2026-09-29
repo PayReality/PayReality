@@ -139,11 +139,21 @@ class Permission(str, Enum):
     # safety, for an operation that ALREADY EXISTS -- and structurally
     # nothing else. Holding this permission alone grants no path to
     # issue_capability_for_decision, verify_and_consume_capability, or any
-    # Intent-submission endpoint; the Auditor role below holds this
-    # permission and holds neither CAPABILITY_ISSUE nor CAPABILITY_VERIFY,
-    # which is the real, testable proof (test_operation_observe_
-    # permission_cannot_execute) that observation and execution are
-    # genuinely separate credentials here, not the same one renamed.
+    # Intent-submission endpoint.
+    #
+    # Deliberately NOT granted to Auditor: recording an observation is a
+    # WRITE (it appends evidence and can transition Operation.state),
+    # which would violate that role's own pre-existing, separately
+    # tested invariant (test_auditor_is_strictly_read_only) -- caught by
+    # that real test before this comment was written, not designed
+    # around in advance. Granted to Reviewer instead: a role already
+    # accountable for the human-judgment side of a Decision (AUTHORITY_
+    # REVIEW, DECISIONS_RESOLVE), holding neither CAPABILITY_ISSUE nor
+    # CAPABILITY_VERIFY either -- the same real, testable proof
+    # (test_operation_observe_permission_grants_no_execution_permission)
+    # that observation and execution are genuinely separate credentials,
+    # just anchored on the role this actually fits rather than the one
+    # this milestone reached for first.
     OPERATION_OBSERVE = "operation.observe"
 
 
@@ -194,6 +204,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.AUTHORITY_REVIEW,
             Permission.DECISIONS_VIEW,
             Permission.DECISIONS_RESOLVE,
+            Permission.OPERATION_OBSERVE,
         }
     ),
     Role.AUDITOR: frozenset(
@@ -203,7 +214,6 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.RUNTIME_POLICY_VIEW,
             Permission.AGENT_VIEW,
             Permission.ASSURANCE_VIEW,
-            Permission.OPERATION_OBSERVE,
         }
     ),
     Role.EXECUTIVE: frozenset({Permission.ASSURANCE_VIEW}),
