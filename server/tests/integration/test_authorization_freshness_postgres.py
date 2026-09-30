@@ -68,6 +68,37 @@ def db(SessionLocal):
         session.close()
 
 
+@pytest.fixture(autouse=True)
+def _point_settings_at_ephemeral_opa(request):
+    """Root-cause fix (postgres-and-opa-fixes pass): this file always
+    passed its own real, ephemeral `opa_url` fixture value explicitly
+    into `deploy_policy(..., opa_url=opa_url)`, but never pointed
+    `settings.opa_url` (default: http://localhost:8181, nothing ever
+    listens there in this environment) at that same instance before
+    calling intent_service.submit_intent, which constructs its own
+    HttpOpaClient() with no explicit base_url and so reads settings.
+    opa_url. Every real query this file's tests ever made was
+    therefore a connection-refused against a dead port, converted by
+    HttpOpaClient.query's own httpx.HTTPError handling into
+    OPAEvaluationError(code="connection_error"), and by decision_
+    engine.evaluate's own fail-closed handling into Decision(outcome=
+    "HUMAN_REVIEW", reason="opa_error:connection_error") -- never
+    ALLOW. Confirmed directly via a standalone reproduction differing
+    only by setting settings.opa_url first, which returns ALLOW. This
+    was silently dormant since this whole file has never actually run
+    before (it always skipped: no Postgres was reachable in this
+    environment until this session). The same established pattern
+    already used correctly by every other real-OPA Postgres test file
+    in this suite (test_operation_identity_postgres.py)."""
+    opa_url = request.getfixturevalue("opa_url")
+    original = settings.opa_url
+    settings.opa_url = opa_url
+    try:
+        yield
+    finally:
+        settings.opa_url = original
+
+
 @pytest.fixture()
 def org(db):
     org = Organization(id=uuid.uuid4(), name="Org Freshness Postgres")
