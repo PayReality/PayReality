@@ -25,8 +25,11 @@ yourselves:
 - PayReality does not independently verify a destination outcome. Every "commit" fact traces back
   to either a signature-verified Adapter's own report, or an explicit human override -- there's no
   channel of our own to the destination system itself.
-- Automatic duplicate-attempt protection is opt-in per submission (a caller has to declare a
-  `business_operation_id`), not universal across every code path.
+- Automatic duplicate-attempt protection is mandatory and unbypassable for traffic that goes
+  through a contract we've marked `LIFECYCLE_REQUIRED` -- but that's scoped to the specific
+  integration binding, not the whole organization or action, and it doesn't apply at all to our
+  older, simpler Agent-direct submission path. If you're comparing against a system where this is
+  enforced uniformly everywhere, this is the one place our model is narrower.
 - During this same review I found and fixed a real bug: an ordinary, transient issuance rejection
   (e.g. an Agent suspended between authorization and issuance) could previously leave a business
   operation permanently blocked for all future legitimate attempts. It's fixed and covered by a

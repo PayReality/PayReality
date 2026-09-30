@@ -31,18 +31,50 @@ authorized, generic or domain-specific.
 ## 2. Lifecycle-required versus legacy contracts
 
 `IntegrationContractVersion.lifecycle_requirement` is one of two values: `LEGACY` (the default --
-every contract version that predates this field backfills to it) or `LIFECYCLE_REQUIRED`.
+every contract version that predates this field backfills to it) or `LIFECYCLE_REQUIRED`. A prior
+consolidation report described this as "opt-in per submission," which reads as contradicting the
+mandatory language below -- both are true, for different scopes; this section states the boundary
+precisely rather than as a single blanket claim, following a full recheck of every place an
+`Intent` row can be constructed (confirmed by direct grep: exactly two -- `integration_runtime_
+service.submit_attested_intent` and `intent_service.submit_intent`, no third path exists).
 
 - **LEGACY**: `business_operation_id`/`intended_destination` are optional on a submitted Intent.
   No automatic business-operation-identity resolution or replacement-safety enforcement occurs
-  for a submission that omits them.
-- **LIFECYCLE_REQUIRED**: a submission missing either field is rejected *before authorization* --
-  `integration_runtime_service.submit_attested_intent` checks the resolved contract version, never
-  the request body, so a caller cannot "downgrade" a LIFECYCLE_REQUIRED contract by simply omitting
-  the fields. A second, defense-in-depth recheck exists at capability issuance
-  (`capability_service._link_business_operation_attempt_if_covered`, `app/services/
-  capability_service.py`) in case any other code path ever constructs an Intent without going
-  through the first gate; it is not expected to be reachable in ordinary operation.
+  for a submission that omits them. Genuinely opt-in.
+- **LIFECYCLE_REQUIRED**: within its own scope (below), mandatory and unbypassable, confirmed by
+  code tracing, not merely asserted. A submission missing either field is rejected *before
+  authorization* -- `integration_runtime_service.submit_attested_intent` reads the contract version
+  resolved server-side from the request's own `enforcement_binding_id` (`binding.
+  integration_contract_version_id`), never anything the request body itself claims or names
+  directly -- `AttestedIntentRequest` has no `integration_contract_version_id` field at all, so a
+  caller cannot select a different, less strict version per request. A caller cannot omit,
+  downgrade, or override this from the request. A second, defense-in-depth recheck exists at
+  capability issuance (`capability_service._link_business_operation_attempt_if_covered`) in case
+  any future code path ever constructs an Intent without going through the first gate; confirmed
+  not reachable today, since no such path exists.
+
+  **The requirement's actual scope is the `EnforcementBinding`, not the organization or the
+  action.** Two real, disclosed boundaries, neither a bug in the mechanism itself:
+
+  1. **Binding-level, not retroactive.** `lifecycle_requirement` lives on the contract *version* an
+     `EnforcementBinding` is currently pointed at (`binding.integration_contract_version_id`).
+     Approving a new, stricter contract version never retires or otherwise affects any other
+     version (confirmed: `approve_contract_version`'s own docstring states this explicitly) --
+     an existing Binding keeps enforcing whatever version it already points at until someone
+     explicitly re-points it (`update_binding`). An organization with multiple Bindings for the
+     same Integration can have some on `LIFECYCLE_REQUIRED` and others still on `LEGACY`
+     indefinitely; "we require lifecycle protection now" describes a contract version, not
+     something that retroactively locks every Binding referencing an older one.
+  2. **Out of scope by construction for Agent-direct submissions.** `POST /v1/intents`
+     (`intent_service.submit_intent`) has no `business_operation_id`/`intended_destination`
+     parameters at all and no relationship to any `IntegrationContractVersion` -- confirmed by
+     reading its full signature. `lifecycle_requirement` cannot apply there; it is not a gap in
+     the check, it is a different, older, lower-assurance runtime path the check was never
+     designed to cover. An organization that permits the same real-world action through *both*
+     a `LIFECYCLE_REQUIRED` Adapter-mediated Binding and the Agent-direct path gets lifecycle
+     protection on the former only -- exactly the kind of customer-controlled alternative
+     execution path `OPERATION_LIFECYCLE.md`'s own "what this document does not claim" section
+     (8) already disclaims in general, now stated concretely for this specific mechanism.
 
 ## 3. Business-operation identity and separate attempts
 
@@ -168,10 +200,13 @@ customer's own Adapter:
 - Reports dispatch/observation evidence promptly and accurately, signed under its real
   `IntegrationIdentity`. `evidence_assurance` records what was actually reported; it cannot exceed
   what the Adapter chose to report.
-- Understands that **duplicate prevention is opt-in per attempt, not automatic for every code
-  path**: an Intent submitted without `business_operation_id` (a LEGACY contract, or any caller
-  that omits it) gets no automatic protection at all. This is a real, disclosed limitation, not
-  a claim that every possible submission path is covered.
+- Understands the precise boundary in section 2: under a `LIFECYCLE_REQUIRED` contract version,
+  `business_operation_id`/`intended_destination` are mandatory and the gate is unbypassable from
+  the request. Outside that scope -- a `LEGACY` contract version, a different `EnforcementBinding`
+  still pointed at an older version, or the Agent-direct runtime path entirely -- supplying them
+  is optional and duplicate prevention does not happen automatically. "Duplicate prevention is
+  opt-in" describes that second case only; it is not a blanket statement about every path, and
+  should not be read as one.
 - Understands that a `DestinationDuplicatePreventionGuarantee` is a **human-documented** safety
   fact (`Permission.OPERATION_SAFETY_APPROVE`), not something PayReality derives on its own from
   destination behavior -- creating one is a governance action with real consequences (it makes a

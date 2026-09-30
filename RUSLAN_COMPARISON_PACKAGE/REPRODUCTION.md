@@ -21,23 +21,27 @@ next to it; the harness truncates and rewrites its own output file on each run (
 file's own `_TRACE_PATH` handling), so a fresh run reproduces the same file, not an appended copy.
 
 ```bash
+# Produces the source file for the first four trace files, then splits it:
 # schedule_1_late_commitment_after_revocation.jsonl
 # schedule_2_unresolved_outcome_after_revocation.jsonl
 # material_action_binding_enforcement.jsonl
 # capability_consumption_concurrency.jsonl
-# (all four are schedules within the same run; the source file before
-# splitting is tests/integration/_interop_evidencebound_recovery_v01_output/traces.jsonl)
 pytest tests/integration/test_interop_evidencebound_recovery_v01.py -v
+python ../RUSLAN_COMPARISON_PACKAGE/split_traces.py
 
-# operation_attempt_registration_concurrency.jsonl
-# (source file before copying: tests/integration/_product_lifecycle_output/traces.jsonl)
+# operation_attempt_registration_concurrency.jsonl -- copy the test's own
+# output file directly, no splitting needed (it has only this one schedule):
 pytest tests/integration/test_product_lifecycle_vertical_slice.py -k test_concurrent_first_attempts_at_new_business_operation_identity -v
+cp tests/integration/_product_lifecycle_output/traces.jsonl ../RUSLAN_COMPARISON_PACKAGE/traces/operation_attempt_registration_concurrency.jsonl
 ```
 
-The splitting script that separates the four schedules out of the single source `traces.jsonl`
-into the four named files in `traces/` groups records by their own `"schedule"` field
-(`"1"`, `"2"`, `"material"`, `"race"`); this is a mechanical relabeling of already-produced output,
-not a re-execution or alteration of any recorded value.
+`split_traces.py` (in this package's own root) groups the single source file's records by their
+own `"schedule"` field (`"1"`, `"2"`, `"material"`, `"race"`) into the four named files -- a
+mechanical relabeling of already-produced output, never a re-execution or alteration of any
+recorded value. Run it from `server/` (its source path resolves relative to the current working
+directory, so it reads whichever checkout you actually ran pytest in, not a stale copy elsewhere)
+-- confirmed working this way against a clean, isolated worktree during this review's own
+verification.
 
 ## Regression coverage for the fix listed in the comparison matrix (row 10)
 
