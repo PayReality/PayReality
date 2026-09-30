@@ -154,7 +154,7 @@ def org_and_agent(db):
     return org, principal, agent
 
 
-def _submit(db, agent, action, amount):
+def _submit(db, agent, action, amount, opa_url):
     """A single ephemeral, WinGet-installed OPA process shared across
     this whole file's tests, repeatedly re-uploaded to (each deploy_policy
     call pushes a fresh package), was observed to occasionally answer a
@@ -167,7 +167,19 @@ def _submit(db, agent, action, amount):
     not silently swallowed: this still fails loudly if the same
     transient reason persists across every attempt. Production's own
     OPA process does not exhibit this: it isn't repeatedly re-uploaded
-    to at this rate outside of a test run."""
+    to at this rate outside of a test run.
+
+    `opa_url` is REQUIRED (OPA reliability pass, real bug found by an
+    instrumented full-suite run): intent_service.submit_intent's own
+    opa_url defaults to settings.opa_url (localhost:8181), NOT this
+    fixture's own ephemeral server -- omitting it here meant every
+    _submit call in this file was silently querying the wrong address
+    the entire time. Most attempts happened to fail fast against that
+    wrong address (nothing reliably listens on it in a dev environment),
+    masked by this same retry loop as if it were the documented OPA-
+    under-load flakiness above; once, it didn't fail fast, and one call
+    took over seven real minutes to finally time out. See
+    OPA_TIMEOUT_RELIABILITY.md's own account of this finding."""
     import time
 
     intent = decision = evidence = None
@@ -175,6 +187,7 @@ def _submit(db, agent, action, amount):
         intent, decision, evidence = intent_service.submit_intent(
             db, agent=agent, action=action, amount=amount, currency="USD", counterparty=None,
             context={}, requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
+            opa_url=opa_url,
         )
         transient = decision.reason == "opa_timeout" or (decision.reason or "").startswith("opa_error:")
         if not transient:
@@ -201,7 +214,7 @@ def test_historical_stability_decision_survives_later_policy_version(db, org_and
     policy_key = _deploy(db, org.id, "alice", "vendor_payment", max_amount=100000)
     svc.deploy_policy(db, policy_key, org.id, opa_url=opa_url)
 
-    intent_a, decision_a, evidence_a = _submit(db, agent, "vendor_payment", 500.0)
+    intent_a, decision_a, evidence_a = _submit(db, agent, "vendor_payment", 500.0, opa_url)
     assert decision_a.policy_id is not None, f"reason={decision_a.reason!r}"
     bundle_a_id = decision_a.policy_id
     bundle_a = db.get(Policy, bundle_a_id)
@@ -227,7 +240,7 @@ def test_bundle_stability_and_manifest_reconstruction(db, org_and_agent, opa_url
     policy_key = _deploy(db, org.id, "alice", "vendor_payment", max_amount=100000, policy_id="rp-stability")
     svc.deploy_policy(db, policy_key, org.id, opa_url=opa_url)
 
-    _, decision_a, _ = _submit(db, agent, "vendor_payment", 500.0)
+    _, decision_a, _ = _submit(db, agent, "vendor_payment", 500.0, opa_url)
     bundle_a = db.get(Policy, decision_a.policy_id)
     assert bundle_a.bundle_manifest is not None
     manifest_ids_a = {p["id"] for p in bundle_a.bundle_manifest["policies"]}
@@ -236,7 +249,7 @@ def test_bundle_stability_and_manifest_reconstruction(db, org_and_agent, opa_url
     _redeploy(db, org.id, policy_key, max_amount=50.0)
     svc.deploy_policy(db, policy_key, org.id, opa_url=opa_url)
 
-    _, decision_b, _ = _submit(db, agent, "vendor_payment", 10.0)
+    _, decision_b, _ = _submit(db, agent, "vendor_payment", 10.0, opa_url)
     assert decision_b.policy_id != decision_a.policy_id, "a decision made after redeploy binds to the new bundle, not the old one"
 
     db.expire_all()
@@ -255,7 +268,7 @@ def test_lifecycle_retirement_does_not_destroy_reconstruction(db, org_and_agent,
     org, principal, agent = org_and_agent
     policy_key = _deploy(db, org.id, "alice", "vendor_payment", max_amount=100000, policy_id="rp-lifecycle")
     svc.deploy_policy(db, policy_key, org.id, opa_url=opa_url)
-    _, decision, _ = _submit(db, agent, "vendor_payment", 500.0)
+    _, decision, _ = _submit(db, agent, "vendor_payment", 500.0, opa_url)
     bundle_id, bundle_hash = decision.policy_id, db.get(Policy, decision.policy_id).bundle_hash
 
     _redeploy(db, org.id, policy_key, max_amount=1.0)
@@ -286,7 +299,7 @@ def test_tenant_isolation_cross_org_cannot_resolve_binding(db, opa_url):
 
     policy_key = _deploy(db, org_a.id, "alice", "vendor_payment", max_amount=100000, policy_id="rp-tenant")
     svc.deploy_policy(db, policy_key, org_a.id, opa_url=opa_url)
-    _, decision, _ = _submit(db, agent_a, "vendor_payment", 500.0)
+    _, decision, _ = _submit(db, agent_a, "vendor_payment", 500.0, opa_url)
 
     bundle = db.get(Policy, decision.policy_id)
     assert bundle.organization_id == org_a.id
@@ -300,7 +313,7 @@ def test_evidence_is_internally_consistent_with_the_bound_policy(db, org_and_age
     org, principal, agent = org_and_agent
     policy_key = _deploy(db, org.id, "alice", "vendor_payment", max_amount=100000)
     svc.deploy_policy(db, policy_key, org.id, opa_url=opa_url)
-    _, decision, evidence = _submit(db, agent, "vendor_payment", 500.0)
+    _, decision, evidence = _submit(db, agent, "vendor_payment", 500.0, opa_url)
 
     bundle = db.get(Policy, decision.policy_id)
     assert evidence.payload["policy_bundle_hash"] == bundle.bundle_hash
@@ -323,7 +336,7 @@ def test_explainer_can_reconstruct_the_exact_historical_policy_state(db, org_and
     explained_policy_id = str(uuid.uuid4())
     policy_key = _deploy(db, org.id, "alice", "vendor_payment", max_amount=100000, policy_id=explained_policy_id)
     svc.deploy_policy(db, policy_key, org.id, opa_url=opa_url)
-    intent, decision, evidence = _submit(db, agent, "vendor_payment", 500.0)
+    intent, decision, evidence = _submit(db, agent, "vendor_payment", 500.0, opa_url)
 
     # Redeploy twice so "the active policy today" is nothing like what
     # evaluated this decision -- if reconstruction silently fell back to
