@@ -64,15 +64,23 @@ independently confirmed, validates what `OPERATION_LIFECYCLE.md` claims about `C
 
 ## Destination evidence and idempotency conditions to test
 
-- Confirm the SAME PaymentIntent twice with the SAME idempotency key (Stripe's own mechanism) --
-  expect Stripe itself to return the original result, not create a second charge. This is
-  destination-side idempotency, separate from and layered under PayReality's own
-  `business_operation_id`-based replacement-safety (see `OPERATION_LIFECYCLE.md` section 7).
+See `STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`'s own "Trusted operation identity and idempotency-key
+mapping (corrected)" section for the full design and the real bug it replaces (an earlier version
+of this plan proposed the Capability's own nonce as the idempotency key, which would have given
+every single attempt -- including illegitimate ones -- its own fresh Stripe-level scope). Summary:
+the idempotency key is derived from `Operation.id` + which Stripe call it is (create vs. confirm),
+never from the nonce or from `business_operation_id` directly.
+
+- Confirm the SAME PaymentIntent confirm call twice with the SAME derived idempotency key (a
+  client-side retry of the same attempt) -- expect Stripe itself to return the original result,
+  not create a second charge. This is destination-side idempotency, separate from and layered
+  under PayReality's own `business_operation_id`-based replacement-safety (see
+  `OPERATION_LIFECYCLE.md` section 7).
 - Confirm that a PayReality-authorized *replacement* attempt (a new Intent, new Decision, new
-  Capability, following a proven-`TERMINALLY_NOT_COMMITTED` original) generates a **new**
-  idempotency key for its own Stripe call, not a reused one -- reusing the original key would
-  incorrectly return the original (failed) PaymentIntent's own result instead of attempting a
-  fresh charge.
+  Capability, new `Operation`, following a proven-`TERMINALLY_NOT_COMMITTED` original) derives a
+  **new** idempotency key (since it has a new `Operation.id`) for its own Stripe call -- reusing
+  the original key would incorrectly return the original (failed) PaymentIntent's own result
+  instead of attempting a fresh charge.
 
 ## Success criteria
 
@@ -99,7 +107,16 @@ account of why this specifically is the thing that would matter).
   deliberately never proposes moving real funds, even in small amounts, since test mode already
   gives a real state machine without that risk.
 
+## Implementation status (update)
+
+The adapter and its local-simulation test suite are now implemented -- see
+`STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`'s own "Implementation status" section for what that
+covers and what it does not. This handoff document's own distinctions (PaymentIntent creation vs.
+confirmation vs. payment success vs. settlement) are what that implementation's tests are built
+around; nothing here is superseded by the implementation, only made concrete.
+
 ## Explicitly not done by this handoff
 
 No Stripe account created, no API key requested or generated, no PaymentIntent created or
-confirmed, no code written. This is a specification for a follow-up implementation task.
+confirmed against a real Stripe account, no live payment executed. (The adapter code and its
+tests against a local simulation ARE now written -- see "Implementation status" above.)

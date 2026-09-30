@@ -1,11 +1,36 @@
 # Stripe Test-Mode Sandbox: Concrete Implementation Plan
 
-A single, concrete action to validate, code-independent (no Stripe API is called and no code is
-written by this document). Builds on `REAL_INTEGRATION_VALIDATION_PLAN.md` (the original proposal)
-and `STRIPE_SANDBOX_HANDOFF.md` (the handoff distinguishing PaymentIntent creation/confirmation/
-success/settlement) -- this document adds the specific wiring an implementer needs to start:
-identity/idempotency mapping, evidence retrieval, retry handling, and exactly what test mode can
-and cannot prove.
+Builds on `REAL_INTEGRATION_VALIDATION_PLAN.md` (the original proposal) and
+`STRIPE_SANDBOX_HANDOFF.md` (the handoff distinguishing PaymentIntent creation/confirmation/
+success/settlement) -- this document adds the specific wiring an implementer needs: identity/
+idempotency mapping, evidence retrieval, retry handling, and exactly what test mode can and cannot
+prove.
+
+## Implementation status
+
+**Implemented**: `scripts/stripe_sandbox_adapter.py` (the corrected identity/idempotency mapping
+below, a `RealStripeClient` gated behind a real test-mode key + an explicit execution switch, and
+a `FakeStripeBackend` local simulation modeling Stripe's own documented idempotency/concurrency/
+retention behavior) and `server/tests/integration/test_stripe_sandbox_operation_lifecycle.py` (the
+eleven scenarios this review's own task list required, all passing against the real PayReality
+lifecycle service layer + a real, genuinely-generated-and-verified Ed25519 signature for the
+signed-Adapter reporting path, and the local Stripe simulation -- never a real network call).
+
+**Not executed, and not attempted, in this session**: any real call to Stripe's own API. No
+`STRIPE_TEST_SECRET_KEY` was configured anywhere in this environment (confirmed directly: no
+`STRIPE_*` environment variable exists here), and per this review's own explicit instruction,
+real Stripe execution requires both that key and `STRIPE_SANDBOX_EXECUTE=true` to be set --
+neither is, so `build_real_client_from_env()` returns `None` and nothing in the adapter can reach
+Stripe. This is confirmed by its own test
+(`test_real_stripe_client_requires_explicit_test_mode_key_and_execution_switch`), not merely
+asserted in prose.
+
+**What "12 passed" means, precisely**: all twelve are LOCAL, against `FakeStripeBackend` (or, for
+one test, a plain Python object implementing only the read-only method) -- proof that this
+adapter's own orchestration logic is correct, not proof that real Stripe test mode behaves as
+documented. The retention/parameter-matching/concurrency facts the simulation models are each
+cited to Stripe's own official documentation (see "Official sources" below); reproducing them
+against a real Stripe test-mode account remains outstanding, blocked on the credential above.
 
 ## The one action being validated
 
@@ -19,14 +44,81 @@ negative case, a guaranteed-decline terminal status) AND PayReality's own `Opera
 matches it. A completed PaymentIntent *creation* or *confirmation* call alone does not satisfy this
 -- see `STRIPE_SANDBOX_HANDOFF.md`'s own explicit distinction between the four steps.
 
-## Trusted operation identity and idempotency-key mapping
+## Trusted operation identity and idempotency-key mapping (corrected)
 
-| PayReality concept | Stripe concept | Mapping |
-|---|---|---|
-| `Operation.id` (PayReality's own durable identity for this attempt) | — | Not sent to Stripe; stays internal. |
-| `CapabilityToken.nonce` (already a real, random, per-issuance value -- `secrets.token_hex(16)`, `app/domain/capability/token.py`) | Stripe idempotency key (`Idempotency-Key` header on the `confirm` call) | Reuse directly. One Capability is consumed exactly once (already enforced, atomically, by existing code), so its own nonce is already a correct, unique-per-attempt value -- no new identifier needs to be minted for this purpose. |
-| `Operation.destination_operation_id` (existing, nullable `Text` column) | `PaymentIntent.id` (`pi_...`) | Written via the *existing* `record_dispatch_evidence` call (`operation_service.py`), passing Stripe's real `pi_...` id as `destination_operation_id` -- no schema change needed. |
-| `BusinessOperationIdentity` (correlates retries of the same real-world operation) | — (Stripe has no equivalent concept) | A genuinely new attempt (a fresh Intent after a proven `TERMINALLY_NOT_COMMITTED` original) must mint a **new** Capability, and therefore a new nonce/idempotency key, for its own Stripe call -- reusing the original key would make Stripe return the *original* (failed) PaymentIntent's result instead of attempting a fresh charge. This is the one place a real implementation bug could silently defeat the validation's own purpose; call it out explicitly in code review. |
+**The original version of this plan proposed reusing `CapabilityToken.nonce` directly as the
+Stripe idempotency key. This was wrong, and is corrected here.** A capability nonce identifies an
+*authorization artifact* (one Capability, consumed exactly once). A fresh, PayReality-authorized
+retry of the same logical operation -- following the system's own documented "each attempt gets
+its own Intent/Decision/Capability/Operation" model -- mints a brand-new Capability with a
+brand-new nonce, *while still referring to the same real-world destination operation*. Using the
+nonce as the idempotency key would therefore give every single attempt, including illegitimate
+ones, its own fresh Stripe-level scope -- Stripe would never recognize a second attempt as
+"the same operation," defeating the entire purpose of destination-side idempotency. Verified
+against Stripe's own official documentation
+([Idempotent requests](https://docs.stripe.com/api/idempotent_requests),
+[Advanced error handling: Idempotency](https://docs.stripe.com/error-low-level#idempotency)),
+not assumed:
+
+- **Retention**: keys are pruned after **24 hours**; reuse after pruning "generates a new
+  request" -- i.e. no protection at all past that window.
+- **Parameter matching**: reusing a key with different parameters than the original request
+  produces an explicit error (not a silent duplicate, not the new parameters silently applied).
+- **Concurrent requests**: a second request using a key still executing under the first
+  returns **HTTP 409 Conflict** -- an explicit, safe rejection, not a race that could double-book.
+- **Key-value guidance, directly from Stripe's own docs**: "Derive the key from a user-attached
+  object, like the ID of a shopping cart. This provides a relatively straightforward way to
+  protect against double submissions" -- Stripe itself recommends deriving the key from a
+  **stable, pre-existing business object's identity**, not a fresh, per-call token. This directly
+  validates the corrected design below, rather than the original nonce-based one.
+- **Scope**: per Stripe account (test-mode and live-mode keys are structurally separate
+  credentials, so environment separation is automatic; a single Stripe account shared by multiple
+  PayReality tenants is the real scoping concern this design must handle explicitly).
+- **GET/DELETE** are idempotent by definition and never take a key; only mutating `POST` calls
+  (create, confirm) need one, naturally separating status lookup from any effectful call.
+
+### The corrected mapping
+
+| Concept | Value | Stable across... | Sent to Stripe as |
+|---|---|---|---|
+| **Destination-operation identity** (audit/correlation only, never the idempotency key itself) | `BusinessOperationIdentity.id` (existing, already tenant/integration/action/destination-scoped by its own DB unique constraint -- reused, not re-derived) | Every attempt at the same real-world operation, original and all retries, including a fresh PayReality-authorized attempt after the original is proven `TERMINALLY_NOT_COMMITTED` | Stripe `metadata.payreality_business_operation_identity_id` |
+| **Idempotency key** (the actual `Idempotency-Key` header) | `f"{operation.id}:{operation_kind}"`, where `operation_kind` is `"payment_intent_create"` or `"payment_intent_confirm"` (never reused between the two -- they are different Stripe calls with different parameters, so sharing a key between them would hit Stripe's own parameter-mismatch error) | Repeated calls for the **same** attempt only (e.g. a client-side network-error retry of the same `Operation`'s own confirm call) -- **deliberately NOT** reused for a new, PayReality-authorized attempt, which gets its own new `Operation.id` and therefore its own fresh Stripe-level scope, so Stripe actually attempts a fresh charge rather than replaying a stale/declined result | `Idempotency-Key` header |
+| **Attempt identity** (audit only) | `Operation.id` | One specific attempt (already embedded in the idempotency key above) | Stripe `metadata.payreality_operation_id` |
+| **Capability nonce** (audit only, kept **separate** from both identities above, per this review's own explicit requirement) | `CapabilityToken.nonce` | Nothing -- it identifies the authorization artifact consumed to make *this one* call, not the operation itself | Stripe `metadata.payreality_capability_nonce` |
+| **Tenant/environment scope** (audit only) | `organization_id`, `integration_id` | N/A | Stripe `metadata.payreality_organization_id` / `payreality_integration_id` |
+| `Operation.destination_operation_id` (existing, nullable `Text` column) | `PaymentIntent.id` (`pi_...`) | N/A | Written back via the *existing* `record_dispatch_evidence` call -- no schema change needed |
+
+### Why this satisfies every property required of a stable destination-operation identity
+
+- **Unchanged across retries, including newly authorized attempts**: the *business-level*
+  correlation (`BusinessOperationIdentity.id`, sent as metadata) is identical across every attempt
+  at the same real-world operation, so a human or a reconciliation job can always trace a Stripe
+  object back to the logical operation it belongs to -- satisfied by metadata, not by literal
+  idempotency-key reuse (which would be actively harmful, per the retention/replay analysis above).
+- **Tenant- and account-scoped**: `BusinessOperationIdentity.id` is already unique per
+  `(organization_id, integration_id, action, destination, business_operation_id)` -- reusing its
+  existing, already-tested uniqueness guarantee rather than re-deriving a new one by hand.
+- **Distinguishes creation from confirmation**: the `operation_kind` suffix on the idempotency key
+  guarantees these are always different Stripe-level operations, never sharing a scope.
+- **Does not confuse two legitimate purchases with identical material fields**: identity is
+  derived entirely from the Adapter-declared `business_operation_id` (via `BusinessOperationIdentity`),
+  never from material content (amount, supplier, etc.) -- two genuinely different orders that
+  happen to share every material field still get different, non-colliding identities as long as
+  the Adapter declares different `business_operation_id` values for them (its own responsibility,
+  unchanged from the existing architecture).
+- **Rejects material changes presented as a retry**: because the *real, current* parameters are
+  still sent on every call alongside the derived key, Stripe's own parameter-mismatch check (not
+  a new PayReality mechanism) safely errors if a caller bug ever reused a key with different
+  material parameters, rather than silently processing a different charge under cover of "a retry."
+- **Does not rely on the idempotency key past its protection window**: the key is scoped per
+  *attempt* (`Operation.id`), and a dispatch attempt is expected to resolve at the transport level
+  (create -> confirm) within seconds to minutes, not hours -- nowhere close to Stripe's 24-hour
+  pruning window. Longer-term protection against re-attempting a *resolved* business operation is
+  explicitly **not** Stripe's job here: it is `evaluate_replacement_safety`'s (already-existing,
+  already-tested) job, which refuses to authorize a new Capability for an unresolved or
+  already-committed prior attempt regardless of how much time has passed. The two mechanisms are
+  layered deliberately: Stripe's key gives short-term, transport-level safety for one attempt;
+  PayReality's own replacement-safety gate gives long-term, business-level safety across attempts.
 
 ## Evidence retrieval and authentication
 
@@ -122,8 +214,22 @@ proof.
   `REAL_INTEGRATION_VALIDATION_PLAN.md`'s own success/invalidation criteria) and is reported, not
   hidden or explained away.
 
-## Explicitly not done by this plan
+## Official sources verified for this plan's own design
 
-No Stripe API call made, no PaymentIntent created, no external resource created, no payment
-executed, no code written. This is a plan for a follow-up implementation task, pending the open
-questions above.
+- [Idempotent requests](https://docs.stripe.com/api/idempotent_requests) -- retention (24 hours),
+  parameter-matching behavior, key-generation guidance (including the "derive from a stable
+  object, like a shopping cart ID" recommendation this design's corrected mapping follows),
+  GET/DELETE exemption.
+- [Advanced error handling: Idempotency and retries](https://docs.stripe.com/error-low-level#idempotency) --
+  concurrent-request behavior (HTTP 409), treatment of cached `4xx`/`5xx` results, the
+  metadata-correlation pattern for reconciling a request whose result was never received.
+- [Create a PaymentIntent](https://docs.stripe.com/api/payment_intents/create) -- request/response
+  shape (`id`, `status`, `metadata`, `amount`, `currency`) the `FakeStripeBackend` simulation
+  models.
+
+## Explicitly not done by this plan or its implementation
+
+No real Stripe API call made, no PaymentIntent created against a real Stripe account, no external
+resource created, no live payment executed. The adapter and its local-simulation tests ARE
+implemented (see "Implementation status" above); what remains is the real-Stripe-test-mode
+execution, blocked on the credential/switch described there.

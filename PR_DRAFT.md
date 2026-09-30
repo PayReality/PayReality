@@ -95,9 +95,13 @@ all passed.
 
 ## Remaining limitations and outstanding work
 
-- Not yet validated against a real destination system -- `REAL_INTEGRATION_VALIDATION_PLAN.md`
-  and `STRIPE_SANDBOX_HANDOFF.md` propose a Stripe test-mode sandbox validation as the next step;
-  not started, no external resources created, no live keys used.
+- Not yet validated against a real destination system. A Stripe test-mode sandbox adapter
+  (`scripts/stripe_sandbox_adapter.py`) and its local-simulation test suite (12 tests,
+  `test_stripe_sandbox_operation_lifecycle.py`) are now implemented and passing, including the
+  corrected identity/idempotency-key mapping (`STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`) -- but no
+  real Stripe API call has been made or attempted anywhere in this work: no test-mode credential
+  was ever configured in this environment, and the adapter refuses to reach Stripe without both a
+  real key and an explicit execution switch. Real-Stripe validation remains outstanding.
 - No shutdown cleanup of the shared OPA HTTP client (disclosed, low-risk, unrelated to this
   feature's own correctness -- `OPA_TIMEOUT_RELIABILITY.md`).
 - The Adapter-mediated router endpoint's own signature-verification dependency has never been
