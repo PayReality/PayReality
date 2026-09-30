@@ -90,6 +90,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -329,7 +330,29 @@ def create_operation_for_decision(
         destination=destination, previous_attempt_operation_id=previous_attempt_operation_id,
     )
     db.add(operation)
-    db.commit()
+    # Consolidation review finding (medium-high): the read-then-insert
+    # above is a fast path, not the guarantee -- two concurrent issuance
+    # calls for the same Decision (e.g. a caller's own timeout-retry,
+    # the exact scenario _link_business_operation_attempt_if_covered's
+    # own comment anticipates) can both pass the pre-check above before
+    # either commits. uq_operations_decision (migration a7c3e9f1b5d6) is
+    # what actually makes this safe; catching the loser's IntegrityError
+    # here and re-raising the SAME typed error the non-racing pre-check
+    # above already raises matches the identical discipline this same
+    # feature already applies in operation_identity_service.resolve_or_
+    # create_business_operation_identity and capability_service._issue_
+    # and_persist for their own analogous unique constraints -- without
+    # this, the race escaped as an unhandled IntegrityError instead of
+    # the typed, caller-classifiable error every other racing insert in
+    # this feature already produces.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raced = db.scalar(select(Operation).where(Operation.decision_id == decision_id))
+        if raced is None:
+            raise  # pragma: no cover -- a UNIQUE violation with no row to explain it is unexpected
+        raise OperationAlreadyExistsForDecisionError(raced.id) from None
     db.refresh(operation)
     return operation
 

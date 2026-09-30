@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -181,7 +182,15 @@ def upgrade() -> None:
     # --- 4. operation_evidence_events: evidence-acceptance-rule fields ---
     op.add_column('operation_evidence_events', sa.Column('reconciliation_outcome', sa.Text(), nullable=True))
     op.add_column('operation_evidence_events', sa.Column('rationale', sa.Text(), nullable=True))
-    op.add_column('operation_evidence_events', sa.Column('evidence_reference_ids', sa.JSON(), nullable=True))
+    # Consolidation review finding: models.py declares this column
+    # JSONB (app/db/models.py's own OperationEvidenceEvent), matching
+    # every other JSON-shaped column in this codebase's own migrations
+    # (postgresql.JSONB() throughout, never plain sa.JSON()) -- this
+    # column was the one place that convention was missed, a real
+    # model/migration type mismatch (plain `json` storage, no GIN-index/
+    # key-lookup operator support), not a functional bug today since
+    # nothing yet queries it with JSON operators.
+    op.add_column('operation_evidence_events', sa.Column('evidence_reference_ids', postgresql.JSONB(), nullable=True))
 
     op.drop_constraint('ck_operation_evidence_events_type', 'operation_evidence_events', type_='check')
     op.create_check_constraint(

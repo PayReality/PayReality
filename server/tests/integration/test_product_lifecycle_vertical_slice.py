@@ -1377,6 +1377,75 @@ def test_late_commit_after_revocation_reaches_committed_via_adapter_evidence(db,
         _consume(db, org.id, issued, binding)
 
 
+def test_issuance_freshness_rejection_never_orphans_the_business_operation_identity(db, opa_url):
+    """Consolidation review finding (critical, now fixed): issue_capability_
+    for_decision used to link the business-operation attempt (create the
+    Operation, advance the identity's current_operation_id -- both
+    committed durably) BEFORE its own live fail-closed rechecks
+    (_check_agent_active and friends) ran. An agent suspended in the
+    window between Decision and issuance -- an ordinary, expected
+    scenario these rechecks exist to catch, not an edge case -- made
+    issuance raise AFTER the Operation already existed and was already
+    the identity's current attempt. That Operation could then never be
+    claimed (no Capability was ever issued for it) or evidenced, so it
+    sat at outcome_status=UNKNOWN forever, and every SUBSEQUENT genuinely
+    new attempt at the same business operation resolved to it as
+    prior_operation_id, found it UNSAFE_UNRESOLVED, and was blocked
+    outright by ReplacementNotSafeError -- an ordinary, transient
+    issuance rejection permanently jamming all future legitimate
+    attempts at that business operation.
+
+    This test proves both halves directly: the rejected attempt leaves
+    NO Operation row at all (not merely a harmless one), and a second,
+    genuinely new attempt at the identical business operation succeeds
+    normally afterward -- which would have raised ReplacementNotSafeError
+    before this fix."""
+    org = _org(db)
+    identity, _cv, binding, agent = _scenario(db, org.id)
+    _deploy_policy(db, org.id, opa_url)
+    op_id = f"{OPERATION_ID}-ISSUANCE-FRESHNESS-NO-ORPHAN"
+    boid = "ORDER-ISSUANCE-FRESHNESS-NO-ORPHAN"
+
+    intent, decision, _ev = runtime_svc.submit_attested_intent(
+        db, identity, enforcement_binding_id=binding.id, origin_agent_id=agent.id,
+        source_operation=SOURCE_OPERATION, action=ACTION, resource=SUPPLIER_RESOURCE,
+        amount=None, currency=None, counterparty=None, context=dict(ORDER_CONTEXT),
+        requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
+        external_operation_id=op_id, business_operation_id=boid, intended_destination=DESTINATION,
+    )
+    assert decision.outcome == "ALLOW"
+
+    agent_service.suspend_agent(db, agent.id, reason="pending investigation")
+    with pytest.raises(capability_service.OriginAgentNotActiveError):
+        capability_service.issue_capability_for_decision(
+            db, org.id, decision.id, audience="reference-pep",
+            material_action_digest=_order_action(op_id).digest(),
+        )
+
+    # The core regression check: the rejected attempt must leave no
+    # Operation and no BusinessOperationIdentity at all -- before this
+    # fix, both existed and were already durably committed at this point.
+    assert db.scalar(select(Operation).where(Operation.decision_id == decision.id)) is None
+    assert db.scalar(
+        select(BusinessOperationIdentity).where(
+            BusinessOperationIdentity.organization_id == org.id,
+            BusinessOperationIdentity.business_operation_id == boid,
+        )
+    ) is None
+
+    agent_service.activate_agent(db, agent.id)
+    op_id_2 = f"{op_id}-RETRY"
+    intent_2, decision_2, issued_2, operation_2 = _submit_and_authorize(
+        db, org.id, identity, binding, agent, external_operation_id=op_id_2,
+        business_operation_id=boid, intended_destination=DESTINATION,
+        material_action_digest=_order_action(op_id_2).digest(),
+    )
+    assert decision_2.outcome == "ALLOW"
+    assert issued_2 is not None, "a genuinely new attempt at the same business operation must not be blocked by the earlier, never-actually-attempted rejection"
+    assert operation_2 is not None
+    assert operation_2.previous_attempt_operation_id is None, "there was no real prior attempt to chain from -- the rejected one never got an Operation at all"
+
+
 def test_terminal_non_commit_via_signed_adapter_evidence(db, opa_url):
     org = _org(db)
     identity, _cv, binding, agent = _scenario(db, org.id)

@@ -1,9 +1,22 @@
 """product lifecycle vertical slice: operations, evidence events, and destination duplicate prevention guarantees
 
 Revision ID: a7c3e9f1b5d6
-Revises: f3a5c7e9b1d4
+Revises: e2c4b6d8f1a3
 Create Date: 2026-09-29 00:00:00.000001
 
+Consolidation-review fix: this migration was originally authored with
+down_revision = 'f3a5c7e9b1d4' (authority_extraction_safety_remediation),
+a migration file that exists only as UNCOMMITTED, untracked content on a
+separate, unrelated feature branch that happened to share this same local
+working directory -- it was never part of this branch's own committed
+history. That made alembic's own revision graph unbuildable on any real
+checkout of this branch (`alembic heads`/`history`/`upgrade head` all
+raised `KeyError: 'f3a5c7e9b1d4'`, confirmed directly). Re-pointed to
+e2c4b6d8f1a3 (reconciliation_results), the actual committed revision the
+missing file itself chained from -- a pure graph correction, zero change
+to what this migration's own upgrade()/downgrade() do or assume about
+prior schema state, since f3a5c7e9b1d4 was never applied to any database
+this branch's own history is responsible for.
 """
 from typing import Sequence, Union
 
@@ -13,7 +26,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'a7c3e9f1b5d6'
-down_revision: Union[str, Sequence[str], None] = 'f3a5c7e9b1d4'
+down_revision: Union[str, Sequence[str], None] = 'e2c4b6d8f1a3'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

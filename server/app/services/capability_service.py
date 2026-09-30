@@ -265,8 +265,15 @@ def issue_capability_for_decision(
 
     intent = db.get(Intent, decision.intent_id)
     _enforce_replacement_safety_if_linked(db, organization_id, replaces_operation_id, intent)
+    # Consolidation review finding (critical): the live fail-closed
+    # rechecks below MUST run, and be allowed to reject, BEFORE
+    # _link_business_operation_attempt_if_covered ever commits an
+    # Operation and advances the identity's current_operation_id --
+    # see _precheck_issuance's own docstring for the failure mode this
+    # ordering closes.
+    precheck = _precheck_issuance(db, organization_id, decision, intent)
     _link_business_operation_attempt_if_covered(db, organization_id, decision, intent, material_action_digest)
-    return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds)
+    return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds, precheck)
 
 
 def _enforce_replacement_safety_if_linked(db: Session, organization_id: uuid.UUID, replaces_operation_id: uuid.UUID | None, intent) -> None:
@@ -385,8 +392,9 @@ def issue_capability_for_reviewed_decision(
         decision_id, resolution_row.resolved_by, resolution_row.resolved_by_user_id,
     )
     _enforce_replacement_safety_if_linked(db, organization_id, replaces_operation_id, intent)
+    precheck = _precheck_issuance(db, organization_id, decision, intent)
     _link_business_operation_attempt_if_covered(db, organization_id, decision, intent, material_action_digest)
-    return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds)
+    return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds, precheck)
 
 
 def _existing_capability_or_none(db: Session, decision_id: uuid.UUID) -> CapabilityToken | None:
@@ -476,29 +484,64 @@ def _check_organization_active(db: Session, decision_id: uuid.UUID, organization
     return org
 
 
-def _issue_and_persist(
-    db: Session,
-    organization_id: uuid.UUID,
-    decision,
-    intent: Intent,
-    audience: str,
-    issued_by: str | None,
-    ttl_seconds: int,
-) -> IssuedCapability:
-    """The shared tail every issuance path (ALLOW-direct, post-review)
-    converges on: live fail-closed rechecks, then an idempotency-safe
-    issue-and-persist. Sharing this one implementation, rather than a
-    copy per path, is what section 8 (Agent-direct compatibility) and
-    section 17 (post-review issuance reusing Part A's own invariant)
-    actually mean structurally -- a fix made once here is a fix made
-    everywhere this function is called from, not something that can be
-    forgotten on a second, parallel path."""
+@dataclass(frozen=True)
+class _IssuancePrecheck:
+    """The output of _precheck_issuance -- everything _issue_and_persist
+    used to derive itself, computed once, early, before this decision's
+    business-operation attempt is linked."""
+    integration_identity_id: uuid.UUID | None
+    enforcement_binding_id: uuid.UUID | None
+    integration_contract_version_id: uuid.UUID | None
+    environment: str | None
+    external_operation_id: str | None
+
+
+def _precheck_issuance(db: Session, organization_id: uuid.UUID, decision, intent: Intent) -> _IssuancePrecheck:
+    """Consolidation review finding (critical, confirmed by tracing the
+    actual code, not hypothetical): these live fail-closed rechecks used
+    to run INSIDE _issue_and_persist, i.e. AFTER
+    _link_business_operation_attempt_if_covered had already committed a
+    new Operation and (for a genuine first attempt) advanced the
+    identity's own current_operation_id -- both via their own, separate
+    db.commit() calls. If a recheck here then rejected (e.g. the origin
+    Agent was suspended in the window between Decision and issuance --
+    exactly the ordinary, expected scenario these rechecks exist to
+    catch, not an edge case), issuance raised and no Capability was ever
+    created, but the just-linked Operation was already durable: stuck at
+    execution_stage=AUTHORIZED forever (it can only ever advance via a
+    real Capability's own consumption), with no Capability to claim it
+    and therefore no evidence event ever possible against it (record_
+    claim/record_dispatch_evidence both require a real, consumed
+    Capability first) and no automatic path to
+    TERMINALLY_NOT_COMMITTED or a covering guarantee either. Every
+    SUBSEQUENT, genuinely new attempt at that same business operation
+    (a fresh Intent, the system's own documented retry model) then
+    resolved to this same orphaned operation as its
+    current_operation_id, ran evaluate_replacement_safety against it,
+    found UNSAFE_UNRESOLVED, and was blocked outright -- an ordinary,
+    transient issuance rejection permanently and silently jamming every
+    future legitimate attempt at that business operation, recoverable
+    only by a human manually creating a DestinationDuplicatePrevention
+    Guarantee for an operation nothing was ever actually attempted
+    against.
+
+    Fixed by running every one of these checks -- and the fast existing-
+    capability pre-check, so a genuine retry of an already-issued
+    decision is rejected before touching linking too -- BEFORE
+    _link_business_operation_attempt_if_covered is ever called, so a
+    rejection here can no longer leave a committed, unreachable Operation
+    behind. The narrower, separate race (two concurrent callers both
+    passing this precheck, then racing on the Operation/Capability
+    inserts themselves) is unaffected by this reordering and remains
+    correctly handled by uq_operations_decision / uq_capability_tokens_
+    decision's own DB-level uniqueness, unchanged."""
     decision_id = decision.id
 
     # Fast pre-check: almost always correct, and avoids doing the live
-    # status rechecks and signing work below for a request that's going
-    # to be rejected anyway. NOT the actual safety guarantee -- see the
-    # IntegrityError handling further down for that.
+    # status rechecks, linking, and signing work below for a request
+    # that's going to be rejected anyway. NOT the actual safety
+    # guarantee -- see _issue_and_persist's own IntegrityError handling
+    # for that.
     existing = _existing_capability_or_none(db, decision_id)
     if existing is not None:
         _raise_for_existing_capability(existing)
@@ -509,7 +552,7 @@ def _issue_and_persist(
     # change at any point after its Intent was accepted, independent of
     # any Binding. Phase 6.1: Organization joins this same re-check.
     _check_organization_active(db, decision_id, organization_id, moment="ISSUANCE")
-    agent = _check_agent_active(db, decision_id, intent.agent_id, moment="ISSUANCE")
+    _check_agent_active(db, decision_id, intent.agent_id, moment="ISSUANCE")
 
     # Trusted Integration Architecture, Phase 5: the Phase-2 blanket
     # suppression (CapabilityNotAvailableForIntegrationIntentError) is
@@ -536,6 +579,43 @@ def _issue_and_persist(
         integration_contract_version_id = intent.integration_contract_version_id
         environment = intent.environment
         external_operation_id = intent.external_operation_id
+
+    return _IssuancePrecheck(
+        integration_identity_id=integration_identity_id,
+        enforcement_binding_id=enforcement_binding_id,
+        integration_contract_version_id=integration_contract_version_id,
+        environment=environment,
+        external_operation_id=external_operation_id,
+    )
+
+
+def _issue_and_persist(
+    db: Session,
+    organization_id: uuid.UUID,
+    decision,
+    intent: Intent,
+    audience: str,
+    issued_by: str | None,
+    ttl_seconds: int,
+    precheck: _IssuancePrecheck,
+) -> IssuedCapability:
+    """The shared tail every issuance path (ALLOW-direct, post-review)
+    converges on: an idempotency-safe issue-and-persist, using the live
+    fail-closed rechecks _precheck_issuance already ran (before this
+    decision's business-operation attempt was linked -- see that
+    function's own docstring for why the ordering matters). Sharing this
+    one implementation, rather than a copy per path, is what section 8
+    (Agent-direct compatibility) and section 17 (post-review issuance
+    reusing Part A's own invariant) actually mean structurally -- a fix
+    made once here is a fix made everywhere this function is called
+    from, not something that can be forgotten on a second, parallel
+    path."""
+    decision_id = decision.id
+    integration_identity_id = precheck.integration_identity_id
+    enforcement_binding_id = precheck.enforcement_binding_id
+    integration_contract_version_id = precheck.integration_contract_version_id
+    environment = precheck.environment
+    external_operation_id = precheck.external_operation_id
 
     earliest_evidence = db.scalar(
         select(Evidence).where(Evidence.decision_id == decision.id).order_by(Evidence.created_at.asc()).limit(1)

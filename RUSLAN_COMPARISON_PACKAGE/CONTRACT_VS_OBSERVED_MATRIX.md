@@ -1,0 +1,28 @@
+# Contract vs. Observed Behavior
+
+Each row: a specific claim from PayReality's own architecture (`OPERATION_LIFECYCLE.md`,
+`OPA_TIMEOUT_RELIABILITY.md`), and whether real code, run this session, actually behaves that way.
+"Observed" means a real test executed against real application code produced this result --
+never inferred from documentation alone.
+
+| # | Claim | Observed | Evidence |
+|---|---|---|---|
+| 1 | A Capability can be consumed exactly once; two concurrent consumption attempts cannot both succeed | **Confirmed** | `traces/capability_consumption_concurrency.jsonl` -- two real OS processes, one `SUCCESS`, one `CapabilityTokenAlreadyConsumedError` |
+| 2 | Two concurrent first attempts at the same business-operation identity cannot both become the governing attempt | **Confirmed** | `traces/operation_attempt_registration_concurrency.jsonl` -- one `ISSUED`, one `REPLACEMENT_NOT_SAFE` (`UNSAFE_UNRESOLVED`) |
+| 3 | Observation authority (reporting what happened) is separate from execution authority (being allowed to act); revoking one does not silently revoke the other | **Confirmed** | `traces/schedule_1_late_commitment_after_revocation.jsonl` -- execution authority revoked, a signed observation is still recorded and reconciled `MATCHED` afterward |
+| 4 | Revoking observation authority (the *reporting* identity, not the acting Agent) blocks a late confirmation that execution-authority revocation alone did not | **Confirmed** | Same file, final two records -- an explicit second revocation (the IntegrationIdentity, not the Agent) is required to block the late observation; the two are genuinely independent controls |
+| 5 | An ambiguous destination signal (`NOT_FOUND_NOW`) is never treated as authoritative | **Confirmed** | `traces/schedule_2_unresolved_outcome_after_revocation.jsonl`, record 1 -- explicitly labeled `evidence_source: synthetic_destination (ambiguous, not authoritative)`, and `recovery_state` stays `UNKNOWN` |
+| 6 | A fresh attempt by a different, active Agent at an unresolved prior operation is authorized but **not** automatically established as safe | **Confirmed** | Same file, records 6-7 -- `authority_to_make_new_attempt: GRANTED` but `safety_of_new_attempt: NOT_ESTABLISHED`, explicitly noting no duplicate-prevention mechanism evaluates it automatically |
+| 7 | Materiality is whatever a specific Integration Contract Version's own `context_bindings` declares, not a fixed universal list | **Confirmed** | `traces/material_action_binding_enforcement.jsonl` -- four declared fields rejected on change; one undeclared field (`unit_price`) silently unenforced if omitted, rejected outright if explicitly submitted |
+| 8 | `evidence_assurance=ADAPTER_REPORTED` proves what an Adapter reported, never independent destination proof | **Confirmed, by design** | `OPERATION_LIFECYCLE.md` section 5; no trace in this package claims otherwise -- every `synthetic_destination*` record is explicitly labeled as test-harness ground truth, distinct from what PayReality itself can know |
+| 9 | `timeout_ms` on an OPA query is a strict, adversarial-safe total deadline | **Refuted, corrected this review** | `OPA_TIMEOUT_RELIABILITY.md` sections 1-2 -- a cold client's construction cost and a slow-trickling peer can both exceed the configured budget; now documented as best-effort, not a hard deadline |
+| 10 | An ordinary, transient issuance rejection (e.g. a suspended Agent) can never leave a business operation permanently blocked | **Was false, fixed this review** | Found via code tracing (not a trace file): the business-operation attempt was linked and committed *before* the live freshness rechecks ran, so a routine rejection could orphan an unclaimable Operation and block every future legitimate attempt at that business operation. Fixed by reordering the freshness checks before linking (`app/services/capability_service.py::_precheck_issuance`); a permanent regression test (`test_issuance_freshness_rejection_never_orphans_the_business_operation_identity`) proves the fix directly, including reproducing the original failure against the pre-fix code |
+| 11 | PayReality independently verifies that a reported destination outcome actually happened | **Not claimed; explicitly disclaimed** | `OPERATION_LIFECYCLE.md`, "What this document does not claim"; `DECLARED_VS_OBSERVED_RECONCILIATION.md` in full |
+| 12 | PayReality detects duplicate effects universally, across any submission path | **Not claimed; explicitly disclaimed** | `OPERATION_LIFECYCLE.md` section 8 -- automatic protection exists only for Intents that declare `business_operation_id`; a Legacy-contract submission that omits it gets none |
+| 13 | PayReality prevents a customer from bypassing its own enforcement model entirely | **Not claimed; explicitly disclaimed** | `OPERATION_LIFECYCLE.md`, "What this document does not claim" -- PayReality has no visibility into a customer's own systems outside its Capability/enforcement model |
+
+## What this matrix is not
+
+Not a claim that PayReality's model matches EvidenceBound's own architecture in every respect --
+this package describes PayReality's own real, verified behavior against PayReality's own stated
+claims, as a basis for a real technical comparison, not a scorecard against an assumed standard.

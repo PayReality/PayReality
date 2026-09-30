@@ -65,6 +65,13 @@ def issue_capability(
         raise HTTPException(status_code=422, detail=f"lifecycle_requirement_not_satisfied: {e}")
     except operation_identity_service.ConcurrentBusinessOperationAttemptError as e:
         raise HTTPException(status_code=409, detail=f"concurrent_business_operation_attempt: {e}")
+    except operation_service.OperationAlreadyExistsForDecisionError as e:
+        # Consolidation review finding: the underlying race this catches
+        # (two concurrent issuance calls for the same Decision) is a
+        # legitimate "retry with the same decision_id" signal, exactly
+        # like CapabilityAlreadyIssuedError above, not a caller error --
+        # was previously unhandled here (a raw, unclassified 500).
+        raise HTTPException(status_code=409, detail=f"operation_already_exists_for_decision: {e}")
     return IssueCapabilityResponse(
         token=issued.token, capability_id=issued.capability_id, expires_at=issued.expires_at
     )
@@ -131,6 +138,8 @@ def issue_capability_from_review(
         raise HTTPException(status_code=422, detail=f"lifecycle_requirement_not_satisfied: {e}")
     except operation_identity_service.ConcurrentBusinessOperationAttemptError as e:
         raise HTTPException(status_code=409, detail=f"concurrent_business_operation_attempt: {e}")
+    except operation_service.OperationAlreadyExistsForDecisionError as e:
+        raise HTTPException(status_code=409, detail=f"operation_already_exists_for_decision: {e}")
     return IssueCapabilityResponse(
         token=issued.token, capability_id=issued.capability_id, expires_at=issued.expires_at
     )
