@@ -5,6 +5,17 @@ branch's final head. This is the final pre-merge review; it does not repeat the 
 narrative of the two prior consolidation passes (see git log for those commits' own messages) --
 it states what is now true, what was found and fixed across all passes, and what remains open.
 
+**What changed in the final pass** (commit `b044475`), stated precisely rather than as a single
+"documentation only" label: no production code, migration, or test file changed. What did change:
+prose documentation (`OPERATION_LIFECYCLE.md`, this file, the comparison package's own README/
+matrix/draft message); a new, real utility script (`RUSLAN_COMPARISON_PACKAGE/split_traces.py`),
+which itself had a real bug (resolved its source path relative to its own on-disk location rather
+than the caller's working directory) found and fixed during that pass's own verification; and the
+regenerated data artifacts that bug fix produced (four trace `.jsonl` files, re-run from a clean
+checkout after the fix, not hand-edited). None of these are "documentation" in the prose sense,
+but none are production code, a migration, or a test either -- distinguished here so neither
+category is overstated.
+
 ## Migration ordering, schema consistency, existing-data compatibility
 
 - **Fixed**: `a7c3e9f1b5d6`'s `down_revision` pointed at a migration (`f3a5c7e9b1d4`) that exists
