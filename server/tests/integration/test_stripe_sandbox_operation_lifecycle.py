@@ -1185,14 +1185,28 @@ def test_real_stripe_payment_intent_creation_only_against_live_test_mode_api(db,
     completion, or settlement (see STRIPE_SANDBOX_HANDOFF.md's own
     four-step distinction).
 
-    Exercises the REAL, supported PayReality lifecycle end to end (real
-    Decision/Capability/Operation service-layer code, exactly like
-    every other test in this file) with the REAL Stripe client
-    substituted for FakeStripeBackend -- never calling Stripe directly
-    while bypassing PayReality. Only synthetic, PayReality-internal
-    identifiers (organization/integration/operation/capability-nonce
-    UUIDs) are ever sent as metadata; no real customer information
-    anywhere in the request.
+    Exercises the real Decision/Capability/Operation SERVICE-LAYER code
+    (exactly like every other test in this file) with the REAL Stripe
+    client substituted for FakeStripeBackend, never calling Stripe
+    directly while bypassing PayReality's own authority/capability
+    model. This is a service-layer integration test, not a claim about
+    the HTTP/ASGI submission API, its routing, or its authentication
+    middleware -- none of those are exercised here or anywhere in this
+    file (no TestClient/ASGI harness exists anywhere in this
+    repository, a pre-existing, disclosed convention). Calls create_or_
+    resume_payment_intent directly, NOT the full dispatch_payment_
+    intent orchestration -- which means ensure_dispatch_window_still_
+    valid and the live account-binding comparison inside dispatch_
+    payment_intent are NOT exercised against the real API by this test
+    (verified only against FakeStripeBackend elsewhere in this file).
+    Never calls record_dispatch_evidence/record_observation/
+    reconciliation either -- outcome_status for every Operation this
+    test touches stays UNKNOWN throughout; a real Stripe object is
+    created, but PayReality's own Operation record is never told a
+    dispatch happened, matching this review's own creation-only scope.
+    Only synthetic, PayReality-internal identifiers (organization/
+    integration/operation/capability-nonce UUIDs) are ever sent as
+    metadata; no real customer information anywhere in the request.
 
     Covers this review's own numbered scenario list against the real
     API:
@@ -1204,11 +1218,18 @@ def test_real_stripe_payment_intent_creation_only_against_live_test_mode_api(db,
          identity forward, deriving the IDENTICAL idempotency key --
          proven against Stripe's own REAL idempotency cache (not
          simulated): the second create call returns the SAME real
-         PaymentIntent id, never a second object. This is the honest
-         equivalent of 'recover after a lost response' achievable
-         against a real, external API without being able to force a
-         deterministic network failure mid-flight -- disclosed as such,
-         not described as a literal injected network drop.
+         PaymentIntent id, never a second object. NO response loss of
+         any kind is simulated here -- both create calls complete with
+         normal, fully-received responses; what this proves is narrower
+         than 'recovery from a lost response' and is stated that way:
+         a repeated call under the same derived key reliably resolves
+         to the same object via Stripe's own real cache. A genuine lost
+         response, a transport timeout, and a process crash are three
+         distinct things this single real run does not distinguish or
+         prove between -- see STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md's
+         own 'External execution' section for which of those IS
+         simulated, locally, by drop_next_response_for_key elsewhere in
+         this file.
       5. Read-only recovery after execution authority is revoked: the
          Agent is revoked, a NEW submission is correctly rejected
          (runtime_svc.IntegrationRejectionError), and a real, genuine

@@ -103,23 +103,32 @@ all passed.
 
 ## Remaining limitations and outstanding work
 
-- **Partially validated against a real destination system now** -- a Stripe test-mode sandbox
-  adapter (`scripts/stripe_sandbox_adapter.py`) and its test suite (21 scenarios,
-  `test_stripe_sandbox_operation_lifecycle.py`: 20 local-simulation, 1 against Stripe's real
-  test-mode API) are implemented and passing, including a revised identity/idempotency-key mapping
-  (`STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`) that fixes a real duplicate-effect gap found in an
-  earlier pass's own "corrected" design, a durable race-safe dispatch-window anchor (proven against
-  a real Postgres database), and a live Stripe account-binding check. **A genuine, real PaymentIntent
-  CREATION call ran against Stripe's test-mode API this pass**, once the user securely configured a
-  real `rk_test_...` credential -- scoped exactly to creation only, no confirmation/capture/
-  settlement. That run itself found and fixed two real bugs no local simulation had caught (a
+- **Partially validated against a real destination system now, scoped narrowly and precisely** -- a
+  Stripe test-mode sandbox adapter (`scripts/stripe_sandbox_adapter.py`) and its test suite (21
+  scenarios, `test_stripe_sandbox_operation_lifecycle.py`: 20 local-simulation, 1 against Stripe's
+  real test-mode API) are implemented and passing, including a revised identity/idempotency-key
+  mapping (`STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`) that fixes a real duplicate-effect gap found in
+  an earlier pass's own "corrected" design, a durable race-safe dispatch-window anchor (proven
+  against a real Postgres database), and a live Stripe account-binding check. **A genuine, real
+  PaymentIntent CREATION call ran against Stripe's test-mode API this pass**, once the user securely
+  configured a real `rk_test_...` credential directly (never pasted into chat; two earlier,
+  different values that WERE pasted into chat were never used for any call -- whether those two
+  values have since been revoked in the Stripe Dashboard is not established by anything available to
+  this review and requires the user's own confirmation, not yet given). The real run is a
+  SERVICE-LAYER integration test (PayReality's own HTTP/ASGI submission API, routing, and
+  authentication middleware are not exercised here or anywhere in this test suite, a pre-existing
+  convention) that calls the Stripe create primitive directly, not the full dispatch orchestration --
+  meaning the window-expiry and account-binding guards were not invoked against the real API this
+  pass, and no observation/reconciliation step was ever recorded for the real dispatch (`outcome_
+  status` stays `UNKNOWN`). It found and fixed two real bugs no local simulation had caught (a
   metadata key exceeding Stripe's real 40-character limit; metadata that varied per attempt and
-  broke the exact carried-forward-key recovery scenario this design exists to make safe) -- see
-  `STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`'s own "External execution: what actually ran" section for
-  the full, separated account. PaymentIntent confirmation, decline/3-D-Secure handling, and the
-  account-binding/window-expiry guards against genuinely different real accounts/elapsed time remain
-  unverified against the real API -- disclosed under "Remaining unverified behavior" in that same
-  document, not claimed as proven.
+  broke the exact carried-forward-key recovery scenario this design exists to make safe), and
+  established exactly 2 real test-mode PaymentIntent objects were created across 3 invocations (2
+  failing, 1 passing) -- see `STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`'s own "External execution: what
+  actually ran" and "Test-resource inventory" sections for the full, separated account. PaymentIntent
+  confirmation, decline/3-D-Secure handling, and the account-binding/window-expiry guards against
+  genuinely different real accounts/elapsed time remain unverified against the real API -- disclosed
+  under "Remaining unverified behavior" in that same document, not claimed as proven.
 - No shutdown cleanup of the shared OPA HTTP client (disclosed, low-risk, unrelated to this
   feature's own correctness -- `OPA_TIMEOUT_RELIABILITY.md`).
 - The Adapter-mediated router endpoint's own signature-verification dependency has never been
