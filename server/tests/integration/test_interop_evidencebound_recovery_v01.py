@@ -375,7 +375,7 @@ def test_schedule_1_late_committed_outcome(db, opa_url):
     assert decision.outcome == "ALLOW"
     issued = capability_service.issue_capability_for_decision(db, org.id, decision.id, audience="reference-pep")
     _trace(
-        "1", "execution_authority_valid", attempt_id=intent.id, capability_id=issued.capability_id,
+        "1", "execution_authority_valid", external_operation_id=OPERATION_ID, attempt_id=intent.id, capability_id=issued.capability_id,
         execution_authority="GRANTED", evidence_source="payreality_decision_engine",
     )
 
@@ -387,7 +387,7 @@ def test_schedule_1_late_committed_outcome(db, opa_url):
         enforcement_binding_id=binding.id, expected_organization_id=org.id,
     )
     _trace(
-        "1", "operation_attempted", attempt_id=intent.id, capability_id=consumed.capability_id,
+        "1", "operation_attempted", external_operation_id=OPERATION_ID, attempt_id=intent.id, capability_id=consumed.capability_id,
         execution_authority="CONSUMED_SINGLE_USE", evidence_source="payreality_capability_consumption",
     )
 
@@ -395,7 +395,8 @@ def test_schedule_1_late_committed_outcome(db, opa_url):
     result = destination.attempt(OPERATION_ID)
     assert result == "COMMITTED_INTERNALLY_NO_RECEIPT_ISSUED"
     _trace(
-        "1", "destination_commit_no_receipt", destination_observation="COMMITTED_INTERNALLY_NO_RECEIPT_ISSUED",
+        "1", "destination_commit_no_receipt", external_operation_id=OPERATION_ID,
+        destination_observation="COMMITTED_INTERNALLY_NO_RECEIPT_ISSUED",
         effect_count=destination.commit_count, evidence_source="synthetic_destination_internal_state (test harness ground truth, NOT obtainable by PayReality)",
     )
     # PayReality's own reading at this point: no receipt was submitted,
@@ -403,19 +404,19 @@ def test_schedule_1_late_committed_outcome(db, opa_url):
     result_before_receipt = reconciliation_svc.reconcile_decision(db, org.id, decision.id)
     assert result_before_receipt.outcome == "RECEIPT_MISSING"
     _trace(
-        "1", "payreality_reconciliation_before_receipt", recovery_state="RECEIPT_MISSING",
+        "1", "payreality_reconciliation_before_receipt", external_operation_id=OPERATION_ID, recovery_state="RECEIPT_MISSING",
         effect_count="UNKNOWN", evidence_source="payreality_reconciliation_service (no receipt received)",
     )
 
     # Step 4: execution authority is revoked.
     agent_service.revoke_agent(db, agent.id, reason="pending investigation, EvidenceBound recovery schedule 1")
-    _trace("1", "execution_authority_revoked", agent_id=agent.id, execution_authority="REVOKED", evidence_source="payreality_agent_service")
+    _trace("1", "execution_authority_revoked", external_operation_id=OPERATION_ID, agent_id=agent.id, execution_authority="REVOKED", evidence_source="payreality_agent_service")
 
     # Step 5: a late, authoritative destination observation reports
     # COMMITTED for the original operation_id.
     late_observation = destination.late_authoritative_observation(OPERATION_ID)
     assert late_observation == "COMMITTED"
-    _trace("1", "late_authoritative_observation", destination_observation="COMMITTED", evidence_source="synthetic_destination (test-designated authoritative observation)")
+    _trace("1", "late_authoritative_observation", external_operation_id=OPERATION_ID, destination_observation="COMMITTED", evidence_source="synthetic_destination (test-designated authoritative observation)")
 
     # Check: does execution-authority revocation (the Agent) also block
     # this late observation from being recorded? Real-code answer: no --
@@ -424,7 +425,7 @@ def test_schedule_1_late_committed_outcome(db, opa_url):
     # a separate fact from execution authority; proven, not assumed.
     receipt = _submit_receipt(db, identity, binding, decision, intent, status="SUCCEEDED", capability_id=consumed.capability_id)
     _trace(
-        "1", "observation_recorded_despite_revoked_execution_authority", receipt_id=receipt.id,
+        "1", "observation_recorded_despite_revoked_execution_authority", external_operation_id=OPERATION_ID, receipt_id=receipt.id,
         execution_authority="REVOKED", observation_authority="INTACT",
         evidence_source="payreality_execution_receipt_service (adapter-reported, authenticated)",
     )
@@ -433,7 +434,7 @@ def test_schedule_1_late_committed_outcome(db, opa_url):
     result_after = reconciliation_svc.reconcile_decision(db, org.id, decision.id)
     assert result_after.outcome == "MATCHED"
     _trace(
-        "1", "reconciled_matched", recovery_state="MATCHED", effect_count=1,
+        "1", "reconciled_matched", external_operation_id=OPERATION_ID, recovery_state="MATCHED", effect_count=1,
         evidence_source="payreality_reconciliation_service + adapter_reported_receipt (self-reported integration evidence, not independently destination-authoritative)",
         receipt_id=receipt.id,
     )
@@ -457,7 +458,7 @@ def test_schedule_1_late_committed_outcome(db, opa_url):
         capability_service.issue_capability_for_decision(db, org.id, decision.id, audience="reference-pep")
     assert destination.commit_count == 1, "no duplicate effect was introduced by any recovery/observation step"
     _trace(
-        "1", "capability_remains_unusable_no_duplicate_effect", effect_count=1,
+        "1", "capability_remains_unusable_no_duplicate_effect", external_operation_id=OPERATION_ID, effect_count=1,
         rejection_reason="OriginAgentNotActiveError (freshness re-check fires before the already-consumed check)",
         recovery_state="MATCHED", authority_to_make_new_attempt="N/A (same operation, not a replacement)",
         evidence_source="payreality_capability_service (single-use + decision-scoped idempotency, both real code)",
@@ -470,11 +471,22 @@ def test_schedule_1_identity_revocation_also_blocks_observation(db, opa_url):
     status observation? Real-code answer: yes --
     execution_receipt_service.submit_execution_receipt checks
     `identity.status != "active"` and rejects outright. Reported as the
-    actual blocked behaviour, not invented."""
+    actual blocked behaviour, not invented.
+
+    A SEPARATE experiment from test_schedule_1_late_committed_outcome
+    above -- its own fresh org/Decision/Operation, tagged with its own
+    distinct external_operation_id
+    (f"{OPERATION_ID}-IDENTITY-CHECK", never OPERATION_ID itself) so the
+    two experiments' events are never mistaken for one continuous
+    narrative about the same attempt once both land in the same
+    schedule="1" trace file. This one never reaches MATCHED at all --
+    its own observation is blocked before it can be recorded, which is
+    exactly what it is testing."""
     org = _org(db)
     identity, _cv, binding, agent = _scenario(db, org.id)
     _deploy_policy(db, org.id, opa_url)
-    intent, decision, _ev = _submit_order_intent(db, identity, binding, agent, external_operation_id=f"{OPERATION_ID}-IDENTITY-CHECK")
+    identity_check_op_id = f"{OPERATION_ID}-IDENTITY-CHECK"
+    intent, decision, _ev = _submit_order_intent(db, identity, binding, agent, external_operation_id=identity_check_op_id)
     issued = capability_service.issue_capability_for_decision(db, org.id, decision.id, audience="reference-pep")
     consumed = capability_service.verify_and_consume_capability(
         db, issued.token, "reference-pep", ACTION, SUPPLIER_RESOURCE,
@@ -482,12 +494,15 @@ def test_schedule_1_identity_revocation_also_blocks_observation(db, opa_url):
         enforcement_binding_id=binding.id, expected_organization_id=org.id,
     )
     destination = FakeDestination(DestinationBehaviour.COMMIT_NO_RECEIPT)
-    destination.attempt(f"{OPERATION_ID}-IDENTITY-CHECK")
+    destination.attempt(identity_check_op_id)
 
     identity_svc.suspend_integration_identity(db, identity.id, org.id)
-    _trace("1", "observation_authority_revoked_via_identity_suspension", integration_identity_id=identity.id, observation_authority="REVOKED")
+    _trace(
+        "1", "observation_authority_revoked_via_identity_suspension", external_operation_id=identity_check_op_id,
+        integration_identity_id=identity.id, observation_authority="REVOKED",
+    )
 
-    late_observation = destination.late_authoritative_observation(f"{OPERATION_ID}-IDENTITY-CHECK")
+    late_observation = destination.late_authoritative_observation(identity_check_op_id)
     assert late_observation == "COMMITTED"
 
     from app.services.execution_receipt_service import ExecutionReceiptRejectionError
@@ -495,9 +510,11 @@ def test_schedule_1_identity_revocation_also_blocks_observation(db, opa_url):
     with pytest.raises(ExecutionReceiptRejectionError):
         _submit_receipt(db, identity, binding, decision, intent, status="SUCCEEDED", capability_id=consumed.capability_id)
     _trace(
-        "1", "late_observation_blocked_by_identity_revocation", destination_observation="COMMITTED",
+        "1", "late_observation_blocked_by_identity_revocation", external_operation_id=identity_check_op_id,
+        destination_observation="COMMITTED",
         observation_authority="REVOKED", recovery_state="RECEIPT_MISSING", effect_count="UNKNOWN",
         evidence_source="payreality_execution_receipt_service (rejected: integration_identity_not_active)",
+        note="a SEPARATE Decision/Operation from this schedule's own earlier records (external_operation_id differs) -- not a reversal of the MATCHED conclusion reached for OPERATION_ID above; this operation's own observation was blocked and never recorded at all",
     )
     result = reconciliation_svc.reconcile_decision(db, org.id, decision.id)
     assert result.outcome == "RECEIPT_MISSING", "outcome stays unresolved -- the real, authoritative COMMITTED observation exists, but no channel can record it"
@@ -589,6 +606,27 @@ def test_schedule_2_outcome_remains_unknown(db, opa_url):
     # ALLOW) policy, is a genuinely separate question -- and PayReality
     # grants it, proving authority-to-attempt and safety-of-attempt are
     # not the same check phrased two ways.
+    #
+    # IMPORTANT, PAYREALITY-VERIFIED CONFIGURATION FACT (confirmed by
+    # reading app/services/integration_contract_service.py and
+    # integration_runtime_service.py directly this session, not
+    # assumed): PayReality DOES have a real, existing replacement-safety
+    # mechanism (operation_service.evaluate_replacement_safety, backing
+    # the whole operation-lifecycle feature) -- it is simply never
+    # REACHED by this schedule's own test setup. _scenario() above never
+    # passes lifecycle_requirement to create_contract_version, which
+    # defaults to "LEGACY" (confirmed: integration_contract_service.
+    # create_contract_version's own default), and _submit_order_intent
+    # never supplies business_operation_id/intended_destination at all.
+    # submit_attested_intent only links a new attempt to a Business
+    # OperationIdentity, and so only ever reaches evaluate_replacement_
+    # safety, when business_operation_id is actually supplied -- which
+    # this schedule's own Intent never does. This is a fact about THIS
+    # test's own configuration, not a platform-wide absence: an
+    # Enforcement Binding pointed at a LIFECYCLE_REQUIRED contract
+    # version, submitting business_operation_id, would reach the real
+    # mechanism (see CONTRACT_VS_OBSERVED_MATRIX.md row 12 for the
+    # platform-wide scope of that mechanism).
     _identity2, _cv2, binding2, fresh_agent = _scenario(db, org.id, extra_context_bindings=None)
     replacement_intent, replacement_decision, _e2 = _submit_order_intent(
         db, _identity2, binding2, fresh_agent, external_operation_id=replacement_op_id,
@@ -597,9 +635,9 @@ def test_schedule_2_outcome_remains_unknown(db, opa_url):
     _trace(
         "2", "authority_to_make_new_attempt_evaluated",
         authority_to_make_new_attempt="GRANTED (a different, active agent, current policy unchanged)",
-        safety_of_new_attempt="NOT_ESTABLISHED (PayReality has no mechanism evaluating duplicate-effect risk against an unresolved prior operation; confirmed by grep, no such service exists)",
+        safety_of_new_attempt="NOT_ESTABLISHED (not reached by this schedule's own configuration: this Integration Contract Version defaults to lifecycle_requirement=LEGACY, and this Intent never supplies business_operation_id -- PayReality's real replacement-safety mechanism, operation_service.evaluate_replacement_safety, exists and is exercised elsewhere, but is only invoked for a business-operation-identity-covered submission, which this schedule's own harness never configures)",
         recovery_state="UNRESOLVED", effect_count="UNKNOWN",
-        evidence_source="payreality_decision_engine (authority grant) + absence-of-mechanism (no code path establishes safety)",
+        evidence_source="payreality_decision_engine (authority grant) + payreality_integration_contract_service/integration_runtime_service (confirms replacement-safety is not invoked for THIS schedule's own LEGACY, non-business-operation-identity-covered configuration, not that no such mechanism exists)",
     )
     # Deliberately stop here: no capability is issued or consumed for
     # this replacement. Authority being grantable is not treated as
