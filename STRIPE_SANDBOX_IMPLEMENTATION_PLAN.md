@@ -73,15 +73,13 @@ second paste was not a genuine rotation, it was the same value re-sent). **Neith
 any call in this adapter, this test, or anywhere in this session** -- confirmed directly: the actual
 credential used was a Stripe **restricted key** (`rk_test_...`, a different value, Stripe's own
 currently-recommended credential type over a full `sk_test_...` secret key), which the user typed
-directly into `server/.env` themselves, never through this conversation. **Whether the two
-originally-exposed values have actually been revoked in the Stripe Dashboard is NOT established by
-anything available to this review** -- there is no local evidence that could confirm or deny it (the
-key material itself cannot be queried for its own status without using it, which this review will
-not do), and the user's own statement after the first exposure ("ive rotated it") was followed
-immediately by pasting the identical, unchanged value again, which contradicts a completed rotation
-having actually happened at that point. **This requires the user's own confirmation**: have both
-originally-exposed values been revoked or expired in the Stripe Dashboard? Until confirmed, this
-review does not claim they have been.
+directly into `server/.env` themselves, never through this conversation. Whether the two
+originally-exposed values had actually been revoked in the Stripe Dashboard could not be
+established from local evidence alone (the key material itself cannot be queried for its own status
+without using it, which this review would not do, and the user's own statement after the first
+exposure -- "ive rotated it" -- was followed immediately by pasting the identical, unchanged value
+again, which contradicted a completed rotation having actually happened at that point). **Confirmed
+directly by the user, after being asked**: both originally-exposed values have since been revoked.
 
 **Scope of what was actually exercised -- and what was not.** `_authorize_and_consume` (the test's
 own helper, shared with every other test in this file) calls `runtime_svc.submit_attested_intent`

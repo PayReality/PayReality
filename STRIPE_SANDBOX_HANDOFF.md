@@ -138,8 +138,8 @@ external run is authorized to reach, it does not change the distinction itself.
 **This ran, for real, this session**, once a genuine test-mode credential (a Stripe restricted key,
 `rk_test_...`, configured directly by the user in `server/.env` -- never pasted into chat) was
 securely provided. Two earlier, different values WERE pasted into chat; neither was ever used for
-any call, and whether those two have since been revoked in the Stripe Dashboard is not established
-by anything available to this review -- that requires the user's own confirmation, not yet given.
+any call, and the user has since confirmed directly that both have been revoked in the Stripe
+Dashboard.
 
 Also scoped more narrowly than "the PayReality lifecycle" might suggest: the real run is a
 SERVICE-LAYER integration test (PayReality's own HTTP submission API, routing, and authentication
