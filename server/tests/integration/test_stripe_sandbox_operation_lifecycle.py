@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import nacl.signing
@@ -243,12 +243,49 @@ def _report_signed(db, org_id, operation, identity, signing_key, binding, *, sta
     )
 
 
-def _dispatch_and_confirm(backend, org, integration, operation, nonce, db, *, amount=5000, payment_method="pm_card_visa"):
+def _chain(db, operation) -> dict[str, "adapter.OperationLink"]:
+    """Loads every Operation sharing the same business_operation_identity_id
+    as `operation` and builds the plain, ORM-free OperationLink chain
+    adapter.destination_dispatch_identity needs -- the adapter itself
+    never imports SQLAlchemy/app.db.models; this is the real caller-side
+    responsibility that module's own docstring describes."""
+    rows = db.scalars(
+        select(Operation).where(Operation.business_operation_identity_id == operation.business_operation_identity_id)
+    ).all()
+    return {
+        str(row.id): adapter.OperationLink(
+            operation_id=str(row.id),
+            previous_attempt_operation_id=str(row.previous_attempt_operation_id) if row.previous_attempt_operation_id else None,
+            outcome_status=row.outcome_status,
+        )
+        for row in rows
+    }
+
+
+def _destination_identity(db, operation) -> str:
+    return adapter.destination_dispatch_identity(str(operation.id), _chain(db, operation))
+
+
+def _first_dispatch_attempted_at(db, operation):
+    """The real system has no explicit 'first dispatch attempted at'
+    timestamp today -- this uses the ROOT operation's own created_at
+    (the operation whose id equals the computed destination_dispatch_
+    identity) as a reasonable, disclosed proxy, exactly as documented in
+    STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md."""
+    root_id = _destination_identity(db, operation)
+    root = db.get(Operation, uuid.UUID(root_id))
+    return root.created_at.replace(tzinfo=timezone.utc) if root.created_at.tzinfo is None else root.created_at
+
+
+def _dispatch_and_confirm(backend, org, integration, operation, nonce, db, *, amount=5000, payment_method="pm_card_visa", now=None):
     boi = db.get(BusinessOperationIdentity, operation.business_operation_identity_id)
     return adapter.dispatch_payment_intent(
         backend, organization_id=str(org.id), integration_id=str(integration.id),
+        destination_dispatch_identity=_destination_identity(db, operation),
         business_operation_identity_id=str(boi.id), operation_id=str(operation.id),
         capability_nonce=nonce, amount=amount, currency="usd", payment_method=payment_method,
+        first_dispatch_attempted_at=_first_dispatch_attempted_at(db, operation),
+        outcome_status=operation.outcome_status, now=now,
     )
 
 
@@ -286,65 +323,68 @@ def test_initial_operation_and_normal_response(db, opa_url):
     assert looked_up["status"] == "succeeded"
 
 
-# === 2. Lost response after destination processing =============================
+# === 2. Lost response after successful creation, recovered via retry with the
+# same idempotency key ===========================================================
 
 
-def test_lost_response_after_destination_processing_recovered_via_status_lookup(db, opa_url):
-    """The confirm call's RESPONSE is lost (simulated network drop) even
-    though the fake backend's own internal state already reflects a
-    resolved outcome -- matching Stripe's own documented '500/network
-    error: treat as indeterminate, the side effect may have still
-    happened' guidance. Proves the adapter's own design: the read-only
-    status lookup, not a blind retry, is what recovers visibility."""
+def test_lost_response_after_successful_creation_recovered_via_retry_with_same_key(db, opa_url):
+    """This review's own literal scenario: Stripe creates a PaymentIntent
+    (the create call genuinely executes and its result is cached,
+    exactly as Stripe's own docs describe -- 'saving the resulting
+    status code and body of the first request... regardless of whether
+    it succeeds or fails'), but the create call's own HTTP response is
+    lost before PayReality ever durably records the resulting pi_id. Per
+    Stripe's own 'Retrieve a PaymentIntent' docs, no metadata-search
+    recovery path exists -- the only documented recovery is retrying the
+    SAME call with the SAME idempotency key, which is exactly what this
+    test proves works: a second call lands on the cached, already-
+    created object rather than creating a duplicate one. (The OLD test
+    at this position let the test directly mutate backend._payment_
+    intents[pi_id]['status'], implying the adapter already knew the
+    pi_id despite "the response being lost" -- unrealistic, since Stripe
+    generates that id server-side. drop_next_response_for_key below
+    models the real gap correctly: the caller never learns the id at all.)"""
     org = _org(db)
     identity, signing_key, _cv, binding, agent, integration, principal = _scenario(db, org.id, opa_url)
-    _intent, _decision, operation, consumed, nonce = _authorize_and_consume(
+    _intent, _decision, operation, _consumed, nonce = _authorize_and_consume(
         db, org.id, identity, binding, agent, principal.name,
         business_operation_id="STRIPE-OP-002", external_operation_id="ext-002",
     )
     backend = adapter.FakeStripeBackend()
-    boi = db.get(BusinessOperationIdentity, operation.business_operation_identity_id)
-    created_key = adapter.idempotency_key(str(operation.id), adapter.OPERATION_KIND_CREATE)
-    created = backend.create_payment_intent(
-        idempotency_key=created_key, amount=5000, currency="usd",
-        metadata=adapter.build_metadata(organization_id=str(org.id), integration_id=str(integration.id), business_operation_identity_id=str(boi.id), operation_id=str(operation.id), capability_nonce=nonce),
+    create_key = adapter.idempotency_key(
+        organization_id=str(org.id), integration_id=str(integration.id),
+        destination_dispatch_identity=_destination_identity(db, operation), operation_kind=adapter.OPERATION_KIND_CREATE,
     )
-    backend.set_outcome(created["id"], "no_response")
-    confirm_key = adapter.idempotency_key(str(operation.id), adapter.OPERATION_KIND_CONFIRM)
+    backend.drop_next_response_for_key(create_key)
+
     with pytest.raises(TimeoutError):
-        backend.confirm_payment_intent(payment_intent_id=created["id"], idempotency_key=confirm_key, payment_method="pm_card_visa", metadata={})
+        _dispatch_and_confirm(backend, org, integration, operation, nonce, db)
 
-    # Simulate that Stripe's OWN side actually did process it, despite
-    # the response never reaching the adapter (exactly the scenario
-    # Stripe's own docs describe for a 500/network failure).
-    backend._payment_intents[created["id"]]["status"] = "succeeded"
+    # Stripe's own side DID process the create call -- only the first
+    # caller's own response was lost. Exactly one PaymentIntent exists
+    # despite the lost response, before any retry is even attempted.
+    assert len(backend._payment_intents) == 1
 
-    # Structural proof this recovery is read-only: retrieve_status never
-    # touches create/confirm at all.
-    looked_up = adapter.retrieve_status(backend, payment_intent_id=created["id"])
-    assert looked_up["status"] == "succeeded"
-
-    operation_service.record_claim(db, org.id, operation, consumed.capability_id)
-    _report_signed(
-        db, org.id, operation, identity, signing_key, binding, status="SUCCEEDED",
-        payment_intent_id=created["id"], external_operation_id="ext-002",
-    )
-    db.refresh(operation)
-    assert operation.outcome_status == "COMMITTED"
+    dispatched = _dispatch_and_confirm(backend, org, integration, operation, nonce, db)
+    assert dispatched.payment_intent_id.startswith("pi_sim_")
+    assert dispatched.status == "succeeded"
+    assert len(backend._payment_intents) == 1, "the retry must land on the SAME cached object, never create a second one"
 
 
-# === 3. Same logical operation, new capability nonce, same destination identity ===
+# === 3. A replacement after a PROVEN non-commit gets a genuinely fresh identity ==
 
 
-def test_retry_with_new_capability_nonce_keeps_the_same_destination_identity(db, opa_url):
+def test_replacement_after_proven_non_commit_gets_a_fresh_destination_identity(db, opa_url):
     """A genuinely new attempt (new Intent, new Decision, new
     Capability, new nonce, new Operation) at the SAME business
     operation -- following a proven TERMINALLY_NOT_COMMITTED original --
-    must derive a DIFFERENT Stripe idempotency key (new Operation.id)
-    while the metadata correlation (BusinessOperationIdentity.id) stays
-    identical. This is the exact property the corrected mapping design
-    exists to guarantee, tested directly rather than only reasoned
-    about."""
+    must derive a DIFFERENT Stripe idempotency key, because its own
+    destination_dispatch_identity is genuinely fresh (the chain-walk
+    stops at a proven non-commit predecessor), while the metadata
+    correlation (BusinessOperationIdentity.id) stays identical. This is
+    the ONE case where a fresh Operation.id SHOULD also mean a fresh
+    destination identity -- there is no risk of a duplicate effect from
+    an original proven never to have taken effect."""
     org = _org(db)
     identity, signing_key, _cv, binding, agent, integration, principal = _scenario(db, org.id, opa_url)
     boid = "STRIPE-OP-003"
@@ -356,6 +396,11 @@ def test_retry_with_new_capability_nonce_keeps_the_same_destination_identity(db,
     assert dispatched_a.status == "canceled"
 
     operation_service.record_claim(db, org.id, operation_a, consumed_a.capability_id)
+    operation_service.record_dispatch_evidence(
+        db, org.id, operation_a.id, reporter_kind=operation_service.REPORTER_SIGNED_ADAPTER_IDENTITY,
+        signature_verified=True, reported_by=f"integration_identity:{identity.name}",
+        integration_identity_id=identity.id, destination=DESTINATION, destination_operation_id=dispatched_a.payment_intent_id,
+    )
     _report_signed(
         db, org.id, operation_a, identity, signing_key, binding, status="FAILED",
         payment_intent_id=dispatched_a.payment_intent_id, external_operation_id="ext-003-a",
@@ -378,17 +423,125 @@ def test_retry_with_new_capability_nonce_keeps_the_same_destination_identity(db,
     boi_b = db.get(BusinessOperationIdentity, operation_b.business_operation_identity_id)
     assert boi_a.id == boi_b.id, "both attempts correlate to the SAME business-operation identity"
 
-    key_a = adapter.idempotency_key(str(operation_a.id), adapter.OPERATION_KIND_CREATE)
-    key_b = adapter.idempotency_key(str(operation_b.id), adapter.OPERATION_KIND_CREATE)
+    identity_a = _destination_identity(db, operation_a)
+    identity_b = _destination_identity(db, operation_b)
+    assert identity_a == str(operation_a.id)
+    assert identity_b == str(operation_b.id), "fresh -- NOT carried forward, unlike the guarantee-based case (see the next test)"
+    assert identity_b != identity_a
+
+    key_a = adapter.idempotency_key(organization_id=str(org.id), integration_id=str(integration.id), destination_dispatch_identity=identity_a, operation_kind=adapter.OPERATION_KIND_CREATE)
+    key_b = adapter.idempotency_key(organization_id=str(org.id), integration_id=str(integration.id), destination_dispatch_identity=identity_b, operation_kind=adapter.OPERATION_KIND_CREATE)
     assert key_a != key_b, "the two attempts must NOT share a Stripe-level idempotency scope"
 
     backend.set_default_outcome("succeeded")
     dispatched_b = _dispatch_and_confirm(backend, org, integration, operation_b, nonce_b, db)
     assert dispatched_b.payment_intent_id != dispatched_a.payment_intent_id, "the retry must create a genuinely NEW PaymentIntent, not replay the declined one"
     assert dispatched_b.status == "succeeded"
+    assert len(backend._payment_intents) == 2
 
 
-# === 4. Concurrent attempts ======================================================
+# === 4. The critical regression: a replacement authorized despite an UNRESOLVED
+# outcome must carry forward the SAME destination identity, not mint a fresh one =
+
+
+def test_replacement_authorized_despite_unresolved_outcome_carries_forward_the_same_destination_identity(db, opa_url):
+    """The exact concern this review raised, reproduced for real -- and
+    the one scenario the PREVIOUS ('corrected') mapping got wrong. That
+    design keyed the idempotency key off Operation.id alone, reasoning
+    that a fresh, PayReality-authorized attempt should always get a
+    fresh Stripe-level scope. That is correct for the PROVEN-non-commit
+    scenario (the test above) but wrong here: a replacement authorized
+    via a human-documented duplicate-prevention GUARANTEE despite the
+    original's own outcome still being UNKNOWN. Reproduces this review's
+    own literal 5-step sequence:
+
+      1. Operation A dispatches; Stripe creates a PaymentIntent.
+      2. The response is lost before A's own destination_operation_id is
+         ever durably recorded (simulated via drop_next_response_for_key).
+      3. A.outcome_status stays UNKNOWN -- nothing resolves it.
+      4. A human records a DestinationDuplicatePreventionGuarantee (the
+         real, existing escape hatch) -> evaluate_replacement_safety
+         returns SAFE_DUPLICATE_PREVENTION_GUARANTEED, and a fresh
+         Capability/Operation B is authorized for the same business
+         operation.
+      5. The adapter dispatches again for B.
+
+    This test fails against the pre-fix (Operation.id-keyed) design: the
+    old scheme's own key for B is demonstrated below to differ from A's,
+    which would create a SECOND, independent PaymentIntent. The fixed
+    design instead carries A's own destination identity forward onto B,
+    deriving the IDENTICAL key -- so B's dispatch correctly lands on the
+    SAME object A's own (lost-response) create call already produced."""
+    org = _org(db)
+    identity, signing_key, _cv, binding, agent, integration, principal = _scenario(db, org.id, opa_url)
+    _intent_a, _decision_a, operation_a, _consumed_a, nonce_a = _authorize_and_consume(
+        db, org.id, identity, binding, agent, principal.name,
+        business_operation_id="STRIPE-OP-004", external_operation_id="ext-004a",
+    )
+
+    backend = adapter.FakeStripeBackend()
+    identity_a = _destination_identity(db, operation_a)
+    assert identity_a == str(operation_a.id)  # a root attempt -- no prior chain to carry forward yet
+    create_key_a = adapter.idempotency_key(
+        organization_id=str(org.id), integration_id=str(integration.id),
+        destination_dispatch_identity=identity_a, operation_kind=adapter.OPERATION_KIND_CREATE,
+    )
+    backend.drop_next_response_for_key(create_key_a)
+    with pytest.raises(TimeoutError):
+        _dispatch_and_confirm(backend, org, integration, operation_a, nonce_a, db)
+
+    db.refresh(operation_a)
+    assert operation_a.outcome_status == "UNKNOWN", "nothing ever resolved A's own fate -- PayReality never learned the resulting pi_id"
+    assert len(backend._payment_intents) == 1, "Stripe's own side DID process the create call; only the response was lost"
+    real_pi_id = next(iter(backend._payment_intents))
+
+    operation_service.record_destination_duplicate_prevention_guarantee(
+        db, org.id, operation_a.id, destination=DESTINATION,
+        scope_description="lost create response confirmed non-duplicating by out-of-band support ticket #004",
+        retention_until=datetime.now(timezone.utc) + timedelta(hours=1), documented_by="governance-admin@example.com",
+    )
+    safety = operation_service.evaluate_replacement_safety(db, org.id, operation_a.id)
+    assert safety.safety == "SAFE_DUPLICATE_PREVENTION_GUARANTEED"
+
+    _intent_b, _decision_b, operation_b, _consumed_b, nonce_b = _authorize_and_consume(
+        db, org.id, identity, binding, agent, principal.name,
+        business_operation_id="STRIPE-OP-004", external_operation_id="ext-004b",
+    )
+    assert operation_b.previous_attempt_operation_id == operation_a.id
+
+    # Proves this test fails against the PRE-FIX design: the old,
+    # Operation.id-keyed scheme necessarily derives a DIFFERENT key for
+    # B than whatever A's own (lost) create call used.
+    old_style_key_a = f"{operation_a.id}:{adapter.OPERATION_KIND_CREATE}"
+    old_style_key_b = f"{operation_b.id}:{adapter.OPERATION_KIND_CREATE}"
+    assert old_style_key_a != old_style_key_b, (
+        "sanity check on the FLAW itself: the old scheme's key is Operation.id-derived, "
+        "so B's fresh Operation.id necessarily produces a fresh, unrelated key -- which "
+        "would create a second PaymentIntent for what is actually the same destination operation"
+    )
+
+    # The fix: B's own destination identity carries A's forward, because
+    # the chain-walk finds no TERMINALLY_NOT_COMMITTED predecessor (A has
+    # none, and A's OWN outcome is UNKNOWN, not a proven non-commit).
+    identity_b = _destination_identity(db, operation_b)
+    assert identity_b == identity_a == str(operation_a.id)
+    create_key_b = adapter.idempotency_key(
+        organization_id=str(org.id), integration_id=str(integration.id),
+        destination_dispatch_identity=identity_b, operation_kind=adapter.OPERATION_KIND_CREATE,
+    )
+    assert create_key_b == create_key_a
+
+    dispatched_b = _dispatch_and_confirm(backend, org, integration, operation_b, nonce_b, db)
+    assert dispatched_b.payment_intent_id == real_pi_id
+    assert dispatched_b.status == "succeeded"
+    assert dispatched_b.confirmation_skipped is False, "this is the FIRST confirm call for this object -- A's own dispatch never got past the (dropped-response) create step"
+    assert len(backend._payment_intents) == 1, (
+        "exactly one PaymentIntent must exist -- B's dispatch must resume A's own "
+        "cached create result, never create a second, independent object"
+    )
+
+
+# === 5. Concurrent attempts ======================================================
 
 
 def test_concurrent_attempts_at_the_same_idempotency_key_never_both_mutate(db, opa_url):
@@ -401,14 +554,15 @@ def test_concurrent_attempts_at_the_same_idempotency_key_never_both_mutate(db, o
     identity, signing_key, _cv, binding, agent, integration, principal = _scenario(db, org.id, opa_url)
     _intent, _decision, operation, consumed, nonce = _authorize_and_consume(
         db, org.id, identity, binding, agent, principal.name,
-        business_operation_id="STRIPE-OP-004", external_operation_id="ext-004",
+        business_operation_id="STRIPE-OP-004B", external_operation_id="ext-004c",
     )
     backend = adapter.FakeStripeBackend()
     boi = db.get(BusinessOperationIdentity, operation.business_operation_identity_id)
+    destination_identity = _destination_identity(db, operation)
     created = backend.create_payment_intent(
-        idempotency_key=adapter.idempotency_key(str(operation.id), adapter.OPERATION_KIND_CREATE),
+        idempotency_key=adapter.idempotency_key(organization_id=str(org.id), integration_id=str(integration.id), destination_dispatch_identity=destination_identity, operation_kind=adapter.OPERATION_KIND_CREATE),
         amount=5000, currency="usd",
-        metadata=adapter.build_metadata(organization_id=str(org.id), integration_id=str(integration.id), business_operation_identity_id=str(boi.id), operation_id=str(operation.id), capability_nonce=nonce),
+        metadata=adapter.build_metadata(organization_id=str(org.id), integration_id=str(integration.id), business_operation_identity_id=str(boi.id), destination_dispatch_identity=destination_identity, operation_id=str(operation.id), capability_nonce=nonce),
     )
     backend.set_outcome(created["id"], "succeeded")
 
@@ -422,7 +576,7 @@ def test_concurrent_attempts_at_the_same_idempotency_key_never_both_mutate(db, o
         return real_cached_or_execute(key, params, slow_execute)
     backend._cached_or_execute = slow_cached_or_execute
 
-    confirm_key = adapter.idempotency_key(str(operation.id), adapter.OPERATION_KIND_CONFIRM)
+    confirm_key = adapter.idempotency_key(organization_id=str(org.id), integration_id=str(integration.id), destination_dispatch_identity=destination_identity, operation_kind=adapter.OPERATION_KIND_CONFIRM)
     results = []
 
     def worker():
@@ -444,14 +598,18 @@ def test_concurrent_attempts_at_the_same_idempotency_key_never_both_mutate(db, o
     assert adapter.STRIPE_CONCURRENT_REQUEST_STATUS_CODE in [r[1] for r in results if r[0] == "error"]
 
 
-# === 5. Changed material parameters ==============================================
+# === 6. Changed material parameters ==============================================
 
 
 def test_changed_material_parameters_rejected_not_silently_processed(db, opa_url):
     """A caller bug that reuses the same derived key with a DIFFERENT
     amount must be rejected by Stripe's own parameter-mismatch check
     (simulated here), never silently processed as if it were a
-    legitimate retry of the original."""
+    legitimate retry of the original. A metadata-only difference is
+    deliberately NOT exercised here as a mismatch -- see
+    create_payment_intent's own fingerprinting, fixed this review to
+    exclude metadata (correlation-only, never part of duplicate-
+    prevention matching) from the comparison."""
     org = _org(db)
     identity, signing_key, _cv, binding, agent, integration, principal = _scenario(db, org.id, opa_url)
     _intent, _decision, operation, consumed, nonce = _authorize_and_consume(
@@ -460,8 +618,9 @@ def test_changed_material_parameters_rejected_not_silently_processed(db, opa_url
     )
     backend = adapter.FakeStripeBackend()
     boi = db.get(BusinessOperationIdentity, operation.business_operation_identity_id)
-    metadata = adapter.build_metadata(organization_id=str(org.id), integration_id=str(integration.id), business_operation_identity_id=str(boi.id), operation_id=str(operation.id), capability_nonce=nonce)
-    key = adapter.idempotency_key(str(operation.id), adapter.OPERATION_KIND_CREATE)
+    destination_identity = _destination_identity(db, operation)
+    metadata = adapter.build_metadata(organization_id=str(org.id), integration_id=str(integration.id), business_operation_identity_id=str(boi.id), destination_dispatch_identity=destination_identity, operation_id=str(operation.id), capability_nonce=nonce)
+    key = adapter.idempotency_key(organization_id=str(org.id), integration_id=str(integration.id), destination_dispatch_identity=destination_identity, operation_kind=adapter.OPERATION_KIND_CREATE)
     backend.create_payment_intent(idempotency_key=key, amount=5000, currency="usd", metadata=metadata)
     with pytest.raises(adapter.StripeClientError) as exc_info:
         backend.create_payment_intent(idempotency_key=key, amount=999999, currency="usd", metadata=metadata)
@@ -469,7 +628,7 @@ def test_changed_material_parameters_rejected_not_silently_processed(db, opa_url
     assert exc_info.value.body["error"]["type"] == "idempotency_error"
 
 
-# === 6. Revocation before execution ==============================================
+# === 7. Revocation before execution ==============================================
 
 
 def test_revocation_before_execution_blocks_consumption_dispatch_never_reached(db, opa_url):
@@ -507,7 +666,7 @@ def test_revocation_before_execution_blocks_consumption_dispatch_never_reached(d
     assert operation.capability_id is None
 
 
-# === 7. Revocation during recovery, with permitted read-only observation =========
+# === 8. Revocation during recovery, with permitted read-only observation =========
 
 
 def test_revocation_during_recovery_still_permits_read_only_observation(db, opa_url):
@@ -552,31 +711,37 @@ def test_revocation_during_recovery_still_permits_read_only_observation(db, opa_
         )
 
 
-# === 8. Expired idempotency protection without terminal outcome evidence ========
+# === 9. Expired idempotency protection blocks automatic recreation while the
+# outcome remains unresolved ======================================================
 
 
-def test_expired_idempotency_window_generates_a_genuinely_new_request(db, opa_url):
-    """After Stripe's own real 24-hour retention window, reusing the
-    same key does NOT return the original result -- Stripe 'generates a
-    new request.' This is exactly why long-term protection against
-    re-attempting an unresolved operation must come from PayReality's
-    own evaluate_replacement_safety, never from the Stripe key's own
-    (short, transport-level) protection window."""
+def test_expired_protection_with_unresolved_outcome_blocks_automatic_recreation(db, opa_url):
+    """Two distinct things, both proven: (1) Stripe's own real 24-hour
+    key-retention window, simulated directly against FakeStripeBackend --
+    past it, the SAME key produces a genuinely new object, never the
+    cached original ('we generate a new request if a key is reused
+    after the original is pruned'). (2) This review's own new
+    requirement: PayReality's adapter must not rely on that window at
+    all -- past it, with the outcome still unresolved, dispatch_payment_
+    intent must BLOCK outright (DispatchWindowExpiredError) rather than
+    silently dispatching under cover of a key Stripe itself would treat
+    as brand new."""
     org = _org(db)
     identity, signing_key, _cv, binding, agent, integration, principal = _scenario(db, org.id, opa_url)
     _intent, _decision, operation, consumed, nonce = _authorize_and_consume(
         db, org.id, identity, binding, agent, principal.name,
-        business_operation_id="STRIPE-OP-008", external_operation_id="ext-008",
+        business_operation_id="STRIPE-OP-009", external_operation_id="ext-009a",
     )
     backend = adapter.FakeStripeBackend()
     boi = db.get(BusinessOperationIdentity, operation.business_operation_identity_id)
-    metadata = adapter.build_metadata(organization_id=str(org.id), integration_id=str(integration.id), business_operation_identity_id=str(boi.id), operation_id=str(operation.id), capability_nonce=nonce)
-    key = adapter.idempotency_key(str(operation.id), adapter.OPERATION_KIND_CREATE)
+    destination_identity = _destination_identity(db, operation)
+    metadata = adapter.build_metadata(organization_id=str(org.id), integration_id=str(integration.id), business_operation_identity_id=str(boi.id), destination_dispatch_identity=destination_identity, operation_id=str(operation.id), capability_nonce=nonce)
+    key = adapter.idempotency_key(organization_id=str(org.id), integration_id=str(integration.id), destination_dispatch_identity=destination_identity, operation_kind=adapter.OPERATION_KIND_CREATE)
     first = backend.create_payment_intent(idempotency_key=key, amount=5000, currency="usd", metadata=metadata)
 
     backend._clock.advance(adapter.STRIPE_IDEMPOTENCY_KEY_RETENTION_HOURS * 3600 + 60)
     second = backend.create_payment_intent(idempotency_key=key, amount=5000, currency="usd", metadata=metadata)
-    assert second["id"] != first["id"], "past the retention window, the SAME key must produce a genuinely new object, not the cached original"
+    assert second["id"] != first["id"], "past Stripe's own retention window, the SAME key must produce a genuinely new object, not the cached original"
 
     # PayReality's own outcome tracking is still UNKNOWN throughout --
     # nothing here or in operation_service infers a resolution merely
@@ -585,8 +750,89 @@ def test_expired_idempotency_window_generates_a_genuinely_new_request(db, opa_ur
     safety = operation_service.evaluate_replacement_safety(db, org.id, operation.id)
     assert safety.safety == "UNSAFE_UNRESOLVED", "an unresolved operation stays unsafe to replace regardless of how much real or simulated time has passed"
 
+    # This review's own new requirement: the real orchestration function
+    # must not even attempt to dispatch past this window while unresolved.
+    now_past_window = _first_dispatch_attempted_at(db, operation) + timedelta(hours=25)
+    pre_existing_count = len(backend._payment_intents)
+    with pytest.raises(adapter.DispatchWindowExpiredError):
+        _dispatch_and_confirm(backend, org, integration, operation, nonce, db, now=now_past_window)
+    assert len(backend._payment_intents) == pre_existing_count, "blocked before any further Stripe-side call was even attempted"
 
-# === 9. Status lookup returning an unresolved result =============================
+
+def test_expired_window_does_not_block_once_outcome_is_resolved(db, opa_url):
+    """The guard's own complement: once the original's outcome has been
+    PROVEN (TERMINALLY_NOT_COMMITTED), the window guard does not apply
+    at all -- a resolved operation's own safety is governed by
+    evaluate_replacement_safety, not by this expiry guard, which exists
+    only to block blind recreation of a still-UNRESOLVED one."""
+    org = _org(db)
+    identity, signing_key, _cv, binding, agent, integration, principal = _scenario(db, org.id, opa_url)
+    _intent, _decision, operation, consumed, nonce = _authorize_and_consume(
+        db, org.id, identity, binding, agent, principal.name,
+        business_operation_id="STRIPE-OP-009B", external_operation_id="ext-009b",
+    )
+    backend = adapter.FakeStripeBackend(default_outcome="declined")
+    dispatched = _dispatch_and_confirm(backend, org, integration, operation, nonce, db)
+    operation_service.record_claim(db, org.id, operation, consumed.capability_id)
+    operation_service.record_dispatch_evidence(
+        db, org.id, operation.id, reporter_kind=operation_service.REPORTER_SIGNED_ADAPTER_IDENTITY,
+        signature_verified=True, reported_by=f"integration_identity:{identity.name}",
+        integration_identity_id=identity.id, destination=DESTINATION, destination_operation_id=dispatched.payment_intent_id,
+    )
+    _report_signed(
+        db, org.id, operation, identity, signing_key, binding, status="FAILED",
+        payment_intent_id=dispatched.payment_intent_id, external_operation_id="ext-009b",
+    )
+    db.refresh(operation)
+    assert operation.outcome_status == "TERMINALLY_NOT_COMMITTED"
+
+    now_past_window = _first_dispatch_attempted_at(db, operation) + timedelta(hours=25)
+    # No exception: the guard only blocks an UNRESOLVED outcome past the window.
+    adapter.ensure_dispatch_window_still_valid(
+        first_dispatch_attempted_at=_first_dispatch_attempted_at(db, operation),
+        outcome_status=operation.outcome_status, now=now_past_window,
+    )
+
+
+# === 10. Wrong account/environment/tenant cannot reuse or redirect an identity ===
+
+
+def test_wrong_tenant_cannot_reuse_or_redirect_an_identity():
+    """Tenant/account scoping is embedded DIRECTLY in the idempotency key
+    string itself -- not relied upon via metadata alone (this review's
+    own explicit requirement). Even if two different organizations (or
+    two different integrations within the same organization) somehow
+    computed the identical destination_dispatch_identity value, the
+    resulting Stripe-level key would still differ, so one tenant's own
+    retry can never resume or redirect another's Stripe object. A pure,
+    DB-free test: the property holds at the key-derivation layer itself,
+    not merely as an accident of how real UUIDs never collide."""
+    shared_destination_identity = str(uuid.uuid4())
+    key_org_a = adapter.idempotency_key(
+        organization_id="org-a", integration_id="integration-1",
+        destination_dispatch_identity=shared_destination_identity, operation_kind=adapter.OPERATION_KIND_CREATE,
+    )
+    key_org_b = adapter.idempotency_key(
+        organization_id="org-b", integration_id="integration-1",
+        destination_dispatch_identity=shared_destination_identity, operation_kind=adapter.OPERATION_KIND_CREATE,
+    )
+    key_same_org_different_integration = adapter.idempotency_key(
+        organization_id="org-a", integration_id="integration-2",
+        destination_dispatch_identity=shared_destination_identity, operation_kind=adapter.OPERATION_KIND_CREATE,
+    )
+    assert key_org_a != key_org_b, "two different organizations must never share a Stripe-level key, even given an identical destination identity"
+    assert key_org_a != key_same_org_different_integration, "two different integrations within the SAME organization must never share a key either"
+
+    backend = adapter.FakeStripeBackend()
+    real = backend.create_payment_intent(idempotency_key=key_org_a, amount=5000, currency="usd", metadata={})
+    # Org B's own key, despite the shared destination identity, finds no
+    # cached result at all -- it creates its OWN, independent object
+    # rather than resuming or redirecting org A's.
+    other = backend.create_payment_intent(idempotency_key=key_org_b, amount=5000, currency="usd", metadata={})
+    assert other["id"] != real["id"]
+
+
+# === 11. Status lookup returning an unresolved result =============================
 
 
 def test_status_lookup_unresolved_result_stays_unknown(db, opa_url):
@@ -612,7 +858,7 @@ def test_status_lookup_unresolved_result_stays_unknown(db, opa_url):
     assert operation.outcome_status == "UNKNOWN"
 
 
-# === 10. Observation path cannot create or confirm a PaymentIntent ===============
+# === 12. Observation path cannot create or confirm a PaymentIntent ===============
 
 
 def test_status_lookup_path_cannot_create_or_confirm(db, opa_url):
@@ -637,7 +883,7 @@ def test_status_lookup_path_cannot_create_or_confirm(db, opa_url):
     assert not hasattr(read_only_client, "confirm_payment_intent")
 
 
-# === 11. Distinct legitimate operations with identical material fields ==========
+# === 13. Distinct legitimate operations with identical material fields ==========
 
 
 def test_distinct_operations_with_identical_material_fields_do_not_collide(db, opa_url):

@@ -96,12 +96,16 @@ all passed.
 ## Remaining limitations and outstanding work
 
 - Not yet validated against a real destination system. A Stripe test-mode sandbox adapter
-  (`scripts/stripe_sandbox_adapter.py`) and its local-simulation test suite (12 tests,
-  `test_stripe_sandbox_operation_lifecycle.py`) are now implemented and passing, including the
-  corrected identity/idempotency-key mapping (`STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`) -- but no
-  real Stripe API call has been made or attempted anywhere in this work: no test-mode credential
-  was ever configured in this environment, and the adapter refuses to reach Stripe without both a
-  real key and an explicit execution switch. Real-Stripe validation remains outstanding.
+  (`scripts/stripe_sandbox_adapter.py`) and its local-simulation test suite (15 tests,
+  `test_stripe_sandbox_operation_lifecycle.py`) are now implemented and passing, including a
+  revised identity/idempotency-key mapping (`STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`) that fixes a
+  real duplicate-effect gap found in an earlier pass's own "corrected" design -- a replacement
+  authorized despite an unresolved (not proven-failed) original now correctly carries the original
+  destination identity forward instead of minting an unrelated one, closing the one scenario where
+  the earlier design could still create a duplicate PaymentIntent. No real Stripe API call has been
+  made or attempted anywhere in this work: no test-mode credential was ever configured in this
+  environment, and the adapter refuses to reach Stripe without both a real key and an explicit
+  execution switch. Real-Stripe validation remains outstanding.
 - No shutdown cleanup of the shared OPA HTTP client (disclosed, low-risk, unrelated to this
   feature's own correctness -- `OPA_TIMEOUT_RELIABILITY.md`).
 - The Adapter-mediated router endpoint's own signature-verification dependency has never been

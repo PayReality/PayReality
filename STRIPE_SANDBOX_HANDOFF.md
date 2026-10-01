@@ -65,22 +65,30 @@ independently confirmed, validates what `OPERATION_LIFECYCLE.md` claims about `C
 ## Destination evidence and idempotency conditions to test
 
 See `STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`'s own "Trusted operation identity and idempotency-key
-mapping (corrected)" section for the full design and the real bug it replaces (an earlier version
-of this plan proposed the Capability's own nonce as the idempotency key, which would have given
-every single attempt -- including illegitimate ones -- its own fresh Stripe-level scope). Summary:
-the idempotency key is derived from `Operation.id` + which Stripe call it is (create vs. confirm),
-never from the nonce or from `business_operation_id` directly.
+mapping (corrected, revision 2)" section for the full design and the two real bugs it replaces, in
+order: an earlier version of this plan proposed the Capability's own nonce as the idempotency key
+(every attempt, including illegitimate ones, would get its own fresh Stripe-level scope); the first
+correction then keyed the idempotency key off `Operation.id` alone, which is wrong specifically for
+a replacement authorized despite an unresolved (not proven-failed) original -- see that section for
+the exact scenario and the regression test that reproduces it. Summary: the idempotency key is
+derived from a computed `destination_dispatch_identity` (carried forward across an unresolved
+replacement, fresh only past a proven non-commit) plus `organization_id`/`integration_id` plus
+which Stripe call it is (create vs. confirm) -- never from the nonce or `Operation.id` alone, and
+never from `business_operation_id` directly.
 
 - Confirm the SAME PaymentIntent confirm call twice with the SAME derived idempotency key (a
   client-side retry of the same attempt) -- expect Stripe itself to return the original result,
   not create a second charge. This is destination-side idempotency, separate from and layered
   under PayReality's own `business_operation_id`-based replacement-safety (see
   `OPERATION_LIFECYCLE.md` section 7).
-- Confirm that a PayReality-authorized *replacement* attempt (a new Intent, new Decision, new
-  Capability, new `Operation`, following a proven-`TERMINALLY_NOT_COMMITTED` original) derives a
-  **new** idempotency key (since it has a new `Operation.id`) for its own Stripe call -- reusing
-  the original key would incorrectly return the original (failed) PaymentIntent's own result
-  instead of attempting a fresh charge.
+- Confirm that a PayReality-authorized *replacement* attempt following a **proven**
+  `TERMINALLY_NOT_COMMITTED` original derives a **new** idempotency key (a genuinely fresh
+  `destination_dispatch_identity`) for its own Stripe call -- reusing the original key would
+  incorrectly return the original (failed) PaymentIntent's own result instead of attempting a
+  fresh charge.
+- Confirm that a replacement authorized despite an **unresolved** (`UNKNOWN`) original instead
+  **carries the original's own identity forward**, deriving the IDENTICAL idempotency key -- so a
+  lost-but-actually-successful original create call is correctly resumed, not duplicated.
 
 ## Success criteria
 
@@ -111,7 +119,8 @@ account of why this specifically is the thing that would matter).
 
 The adapter and its local-simulation test suite are now implemented -- see
 `STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`'s own "Implementation status" section for what that
-covers and what it does not. This handoff document's own distinctions (PaymentIntent creation vs.
+covers and what it does not, including a real flaw found and fixed in a later pass (the identity
+mapping's own "revision 2"). This handoff document's own distinctions (PaymentIntent creation vs.
 confirmation vs. payment success vs. settlement) are what that implementation's tests are built
 around; nothing here is superseded by the implementation, only made concrete.
 
