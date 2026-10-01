@@ -692,14 +692,19 @@ class FakeStripeBackend:
             }
             self._payment_intents[pi_id] = obj
             return dict(obj)
-        # Fingerprinted on MATERIAL parameters only (amount, currency) --
-        # never metadata. Metadata is correlation-only by this module's
-        # own design (see build_metadata's docstring): two legitimate
-        # attempts at the same destination operation (a fresh Operation.id,
-        # a fresh capability nonce) necessarily carry different metadata,
-        # and that difference must never itself trigger a simulated
-        # parameter-mismatch error when they otherwise share a carried-
-        # forward destination_dispatch_identity and therefore the same key.
+        # Fingerprinted on MATERIAL parameters only (amount, currency),
+        # matching the real API's own documented behavior as confirmed by
+        # genuine execution against it -- see build_metadata's own
+        # docstring for the real bug this corrects: an earlier version of
+        # this module reasoned that metadata could safely keep varying per
+        # attempt (fresh Operation.id, fresh capability nonce) while never
+        # triggering a mismatch, which Stripe's own real idempotency-error
+        # check disproved directly. The actual fix is upstream of this
+        # line: build_metadata no longer puts Operation.id/capability
+        # nonce in metadata at all, so two attempts sharing a carried-
+        # forward destination_dispatch_identity now send IDENTICAL
+        # metadata, not merely metadata this fingerprint chooses to
+        # ignore -- there is nothing left to false-positive on.
         return _reject_if_livemode(self._cached_or_execute(idempotency_key, {"amount": amount, "currency": currency}, _do))
 
     def confirm_payment_intent(self, *, payment_intent_id: str, idempotency_key: str, payment_method: str, metadata: dict) -> dict:

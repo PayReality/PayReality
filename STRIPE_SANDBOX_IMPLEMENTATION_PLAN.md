@@ -67,19 +67,23 @@ exception -- see below.
 exactly to this review's own narrow authorization: PaymentIntent **creation only**, no automatic
 confirmation, capture, or settlement claim.
 
-**Credential provenance, stated precisely.** Two values were pasted directly into the chat
-conversation earlier in this engagement (character-for-character identical to each other -- the
-second paste was not a genuine rotation, it was the same value re-sent). **Neither was ever used for
-any call in this adapter, this test, or anywhere in this session** -- confirmed directly: the actual
-credential used was a Stripe **restricted key** (`rk_test_...`, a different value, Stripe's own
+**Credential provenance, stated precisely -- corrected here to accurately reflect what actually
+happened, not an earlier, imprecise "two values" framing.** The SAME `sk_test_...` value was pasted
+directly into the chat conversation on two separate occasions, character-for-character identical
+both times -- the second paste, despite an intervening claim of "ive rotated it," was not a
+genuinely new, rotated credential, it was the original value re-sent. A third, intervening paste
+contained only literal placeholder text (copied from this review's own setup instructions verbatim,
+e.g. `sk_test_...your rotated key...`), not a real credential at all, and is not counted as an
+exposure. **This one originally-exposed value was never used for any call in this adapter, this
+test, or anywhere in this session** -- confirmed directly: the actual credential used was a Stripe
+**restricted key** (`rk_test_...`, a wholly separate, different value, Stripe's own
 currently-recommended credential type over a full `sk_test_...` secret key), which the user typed
-directly into `server/.env` themselves, never through this conversation. Whether the two
-originally-exposed values had actually been revoked in the Stripe Dashboard could not be
-established from local evidence alone (the key material itself cannot be queried for its own status
-without using it, which this review would not do, and the user's own statement after the first
-exposure -- "ive rotated it" -- was followed immediately by pasting the identical, unchanged value
-again, which contradicted a completed rotation having actually happened at that point). **Confirmed
-directly by the user, after being asked**: both originally-exposed values have since been revoked.
+directly into `server/.env` themselves, never through this conversation. Whether the
+originally-exposed value had actually been revoked in the Stripe Dashboard could not be established
+from local evidence alone (the key material itself cannot be queried for its own status without
+using it, which this review would not do, and the user's own first "ive rotated it" statement was
+directly contradicted by the identical value being pasted again immediately afterward). **Confirmed
+directly by the user, after being asked**: the originally-exposed value has since been revoked.
 
 **Scope of what was actually exercised -- and what was not.** `_authorize_and_consume` (the test's
 own helper, shared with every other test in this file) calls `runtime_svc.submit_attested_intent`
@@ -336,10 +340,17 @@ Verified against Stripe's own official documentation
   relying on a key Stripe itself would treat as brand new.
 - **Parameter matching**: reusing a key with different parameters than the original request
   produces an explicit error (not a silent duplicate, not the new parameters silently applied).
-  Fixed this pass to fingerprint only *material* parameters (amount, currency; payment method for
-  confirm) -- metadata (which legitimately differs between two attempts sharing a carried-forward
-  destination identity, e.g. `operation_id`/`capability_nonce`) is correlation-only and must never
-  itself trigger a mismatch error.
+  **Corrected after real execution, superseding what this revision originally claimed**: this
+  section's own first-written version stated that Stripe's matching could be made to ignore
+  metadata entirely by fingerprinting only *material* parameters (amount, currency) in the local
+  simulation, reasoning metadata "is correlation-only and must never itself trigger a mismatch
+  error." Stripe's own real API disagreed -- its matching compares the FULL request, metadata
+  included (see "External execution: what actually ran" above for the exact real rejection this
+  produced). The simulation's own fingerprint was still corrected to material-parameters-only (so
+  it no longer produces FALSE mismatches of its own), but that alone was not the fix -- the actual,
+  load-bearing fix was removing `operation_id`/`capability_nonce` from the metadata sent alongside
+  a key-bearing request in the first place (see `build_metadata`'s own docstring and the six-
+  identity table below, both corrected to match).
 - **Concurrent requests**: a second request using a key still executing under the first
   returns **HTTP 409 Conflict** -- an explicit, safe rejection, not a race that could double-book.
 - **Key-value guidance, directly from Stripe's own docs**: "Derive the key from a user-attached
@@ -358,14 +369,23 @@ Verified against Stripe's own official documentation
 - **GET/DELETE** are idempotent by definition and never take a key; only mutating `POST` calls
   (create, confirm) need one, naturally separating status lookup from any effectful call.
 
-### The corrected mapping (revision 2) -- six distinct identities
+### The corrected mapping (revision 2, metadata columns updated post-real-execution) -- six
+distinct identities
+
+**This table was updated after real Stripe execution found both of the following to be wrong as
+originally written** (see "External execution: what actually ran" above for the real evidence):
+`payreality_business_operation_identity_id` (row 1's original key name, 41 characters) exceeded
+Stripe's real 40-character metadata-key limit; and rows 2/3 were originally shown as sent to
+Stripe as `metadata.payreality_operation_id`/`metadata.payreality_capability_nonce` -- neither is
+actually sent anymore, because doing so broke idempotency-key reuse against the real API (see the
+"Parameter matching" bullet above). The table below reflects the current, real, running code.
 
 | # | Concept | Value | Stable across... | Sent to Stripe as |
 |---|---|---|---|---|
-| 1 | **Business operation** | `BusinessOperationIdentity.id` | Every attempt at the same real-world operation, forever | `metadata.payreality_business_operation_identity_id` |
-| 2 | **Authorized attempt** | `Operation.id` | One real authorization (one Decision, one Capability) -- a new attempt always gets a new value | `metadata.payreality_operation_id` |
-| 3 | **Capability nonce** | `CapabilityToken.nonce` | Nothing -- identifies the single-use authorization artifact consumed for *this* call | `metadata.payreality_capability_nonce` |
-| 4 | **Logical destination operation** (new this revision) | `destination_dispatch_identity(operation_id, chain)` -- NOT always equal to #2 | Carried forward across a replacement authorized despite an unresolved (`UNKNOWN`) predecessor outcome; genuinely fresh only past a predecessor *proven* `TERMINALLY_NOT_COMMITTED` | `metadata.payreality_destination_dispatch_identity` |
+| 1 | **Business operation** | `BusinessOperationIdentity.id` | Every attempt at the same real-world operation, forever | `metadata.payreality_biz_operation_identity_id` |
+| 2 | **Authorized attempt** | `Operation.id` | One real authorization (one Decision, one Capability) -- a new attempt always gets a new value | **NOT sent to Stripe** -- would vary per attempt while sharing a carried-forward key, which breaks real idempotency-key reuse (found this pass); tracked instead in PayReality's own database, queryable via the `previous_attempt_operation_id` chain |
+| 3 | **Capability nonce** | `CapabilityToken.nonce` | Nothing -- identifies the single-use authorization artifact consumed for *this* call | **NOT sent to Stripe**, same reason as #2 |
+| 4 | **Logical destination operation** (new this revision) | `destination_dispatch_identity(operation_id, chain)` -- NOT always equal to #2 | Carried forward across a replacement authorized despite an unresolved (`UNKNOWN`) predecessor outcome; genuinely fresh only past a predecessor *proven* `TERMINALLY_NOT_COMMITTED` | `metadata.payreality_destination_dispatch_id` |
 | 5 | **Stripe object id** | `PaymentIntent.id` (`pi_...`) | N/A -- durable once learned | `Operation.destination_operation_id`, written back via the existing `record_dispatch_evidence` call |
 | 6 | **Stripe idempotency key** | `f"{organization_id}:{integration_id}:{destination_dispatch_identity}:{operation_kind}"` | Repeated calls that resolve to the SAME #4 + the same Stripe call (create vs. confirm) | `Idempotency-Key` header -- never equal to #2 or #3 directly, and never derived from them alone |
 
@@ -389,10 +409,15 @@ Verified against Stripe's own official documentation
   #1), never from material content -- two genuinely different orders sharing every material field
   still get different, non-colliding identities as long as the Adapter declares different
   `business_operation_id` values for them.
-- **Rejects material changes presented as a retry, without false-positiving on metadata**: the
-  simulated parameter-mismatch check now fingerprints only material parameters (see above);
-  correlation metadata legitimately differing between two attempts sharing #4 is never mistaken
-  for a mismatch.
+- **Rejects material changes presented as a retry, without false-positiving on metadata**: corrected
+  after real execution -- the earlier version of this bullet claimed metadata could safely keep
+  varying per attempt (via a local-simulation-only fingerprint) while still never causing a
+  mismatch against the real API. That was wrong (see "Parameter matching" above): Stripe's real
+  matching compares the full request, metadata included. The actual fix is that metadata sent
+  alongside a key-bearing request **no longer varies at all** between two attempts sharing #4 --
+  `payreality_operation_id`/`payreality_capability_nonce` were removed from it entirely (see the
+  six-identity table above), so there is nothing left that could differ and trigger a mismatch,
+  real or simulated.
 - **Does not rely on the idempotency key past its protection window**: `ensure_dispatch_window_
   still_valid` blocks a dispatch attempt outright once this module's own conservative 24h boundary
   has elapsed since the *real first dispatch* for this #4 chain (see the next section for why "real

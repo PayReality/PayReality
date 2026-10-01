@@ -111,9 +111,10 @@ all passed.
   an earlier pass's own "corrected" design, a durable race-safe dispatch-window anchor (proven
   against a real Postgres database), and a live Stripe account-binding check. **A genuine, real
   PaymentIntent CREATION call ran against Stripe's test-mode API this pass**, once the user securely
-  configured a real `rk_test_...` credential directly (never pasted into chat; two earlier,
-  different values that WERE pasted into chat were never used for any call, and the user has since
-  confirmed directly that both have been revoked in the Stripe Dashboard). The real run is a
+  configured a real `rk_test_...` credential directly (never pasted into chat; the same, separate
+  `sk_test_...` value WAS pasted into chat twice earlier, identical both times, and was never used
+  for any call -- the user has since confirmed directly that it has been revoked in the Stripe
+  Dashboard). The real run is a
   SERVICE-LAYER integration test (PayReality's own HTTP/ASGI submission API, routing, and
   authentication middleware are not exercised here or anywhere in this test suite, a pre-existing
   convention) that calls the Stripe create primitive directly, not the full dispatch orchestration --
