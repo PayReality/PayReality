@@ -5,7 +5,10 @@ anywhere that compares an Agent's own declared intent against an independently-s
 observation of the same real-world action, and the follow-up task explicitly asked for this
 document instead of an implementation. Read this alongside `INTEGRATION_KIT.md`'s own "Trust
 Statement" and `app/domain/canonical_action.py`'s module docstring, which this document doesn't
-repeat.
+repeat. `OPERATION_LIFECYCLE.md`'s own section 5 (added later, consolidation review) restates this
+same single-attester limitation in the vocabulary of the `evidence_assurance` field
+(`ADAPTER_REPORTED` proves what an Adapter reported, never independent destination proof) -- the
+underlying limitation this document describes is unchanged, not superseded.
 
 ## The current, honest limitation
 

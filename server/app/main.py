@@ -24,6 +24,7 @@ from app.routers import (
     integration_identities,
     integration_runtime,
     intents,
+    operations,
     organization as organization_router,
     organization_lifecycle,
     organization_structure,
@@ -133,8 +134,32 @@ def _ensure_authority_intelligence_search_index() -> None:
         logger.exception("authority_intelligence_search_index_failed_at_startup")
 
 
+def _warm_up_opa_client() -> None:
+    """OPA reliability pass: constructing the shared httpx.Client used by
+    every OPA request (app.opa_client._get_shared_client) is itself
+    unbounded -- measured directly at 0.6-0.9s in this environment, and
+    critically NOT covered by any per-request timeout, since it happens
+    before that timeout is ever applied. Left lazy, this cost would land
+    unpredictably on whichever real request happens to be first --
+    possibly a live decision on the hot path, well outside its own
+    intended budget. Called first, before
+    _reconcile_opa_with_active_policies, so that hook's own first real
+    OPA request already has a warm client too. Same failure posture as
+    every other startup hook here: never raises, logs and lets the app
+    boot -- a failed warm-up just means the next real call pays the
+    construction cost itself, exactly as it would have without this
+    hook."""
+    try:
+        from app.opa_client import warm_up_shared_client
+
+        warm_up_shared_client()
+    except Exception:
+        logger.exception("opa_client_warm_up_failed_at_startup")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _warm_up_opa_client()
     _register_current_signing_key()
     _bootstrap_organisation_owner()
     _reconcile_opa_with_active_policies()
@@ -308,6 +333,7 @@ def create_app() -> FastAPI:
     app.include_router(assurance.router)
     app.include_router(sandbox.router)
     app.include_router(execution_receipts.router)
+    app.include_router(operations.router)
 
     return app
 

@@ -70,6 +70,8 @@ def submit_attested_intent(
             nonce=body.nonce,
             correlation_id=body.correlation_id,
             external_operation_id=body.external_operation_id,
+            business_operation_id=body.business_operation_id,
+            intended_destination=body.intended_destination,
         )
     except IntegrationRejectionError as e:
         raise HTTPException(status_code=422, detail=f"integration_rejection:{e.reason}")

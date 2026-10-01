@@ -308,11 +308,23 @@ rule this generic bridge does not provide.
 **Not built, deliberately:** no workflow-specific reconciliation rules (nothing here knows what
 "supplier bank details" or any other specific action means); no declared-vs-observed reconciliation
 (a second, independently-solicited signal from the Agent itself, compared against the Adapter's own
-attestation -- see `DECLARED_VS_OBSERVED_RECONCILIATION.md`); no dashboard/API surface for browsing
-reconciliation results (the service and its Evidence trail exist; a human-facing view of them is a
-natural, undecided next step, not yet built); no automatic re-reconciliation on a schedule or
-deadline (a caller invokes `reconcile_decision` explicitly; there is no background job that notices a
-receipt never arrived and reconciles `RECEIPT_MISSING` on its own after some deadline).
+attestation -- see `DECLARED_VS_OBSERVED_RECONCILIATION.md`); no automatic re-reconciliation on a
+schedule or deadline (a caller invokes `reconcile_decision` explicitly; there is no background job
+that notices a receipt never arrived and reconciles `RECEIPT_MISSING` on its own after some
+deadline). Correction (consolidation review): a real, authenticated read surface for an operation's
+*current* reconciled state now exists (`GET /v1/operations/{operation_id}`, `Permission.
+OPERATION_OBSERVE`) -- see `OPERATION_LIFECYCLE.md`. This is a current-state read, not a browsable
+history/list view of past reconciliation runs; the latter remains undecided/not built.
+
+## Operation Lifecycle (business-operation identity, execution stage, replacement safety)
+
+The vertical slice built on top of the above -- `Operation`/`BusinessOperationIdentity` rows,
+`execution_stage`/`outcome_status`/`evidence_assurance` as independent facts, automatic
+replacement-safety enforcement for Intents that declare `business_operation_id`, and the
+`OPERATION_OBSERVE`/`OPERATION_SAFETY_APPROVE`/`OPERATION_MANUAL_ADJUDICATE` permission split --
+is documented in full in `OPERATION_LIFECYCLE.md`, including exactly what it does and does not
+guarantee (no independent destination verification, no universal duplicate detection, no
+protection against a customer bypassing PayReality's own enforcement model entirely).
 
 ## Integration recipe: Supplier bank details change
 

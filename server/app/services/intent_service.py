@@ -650,7 +650,7 @@ def append_generic_evidence_event(
 def _evaluate_and_record(
     db: Session, intent: Intent, agent: Agent, action: str, amount: float | None, currency: str | None,
     counterparty: str | None, resource: str | None, context: dict, requested_at: datetime,
-    *, integration_provenance: dict | None = None,
+    *, integration_provenance: dict | None = None, opa_url: str | None = None,
 ) -> tuple[Decision, Evidence]:
     """The shared tail of both submit_intent (Agent-direct, below) and
     integration_runtime_service.submit_attested_intent (Trusted
@@ -669,7 +669,22 @@ def _evaluate_and_record(
     -- passed straight through into append_evidence's own additive,
     optional kwargs. None (the default) for every Agent-direct call,
     which is exactly what keeps that path's Evidence payload byte-for-
-    byte unchanged."""
+    byte unchanged.
+
+    `opa_url`, OPA reliability pass: None (the default) preserves every
+    existing caller's behavior exactly -- HttpOpaClient(None) falls back
+    to settings.opa_url, unchanged. Added because a real full-suite run
+    surfaced a genuine bug this parameter's absence caused: a test using
+    a real, ephemeral, per-session OPA server (tests/integration/
+    conftest.py's own opa_url fixture) had no way to route this
+    function's own decision-query OPA client at that ephemeral address,
+    so it silently queried settings.opa_url's default
+    (http://localhost:8181) instead -- a wrong address in that
+    environment, where nothing reliably listens on it, so most queries
+    failed fast (masked by that test's own retry loop) and, once,
+    stalled for over seven real minutes before finally timing out
+    (see OPA_TIMEOUT_RELIABILITY.md, "Section 4 findings"), which is
+    what actually made that one test slow, not any suspended process."""
     resolved = runtime_truth_service.resolve(db, agent, amount)
 
     # Milestone 2 (Multi-Tenant Foundation): the same Principal already
@@ -699,7 +714,7 @@ def _evaluate_and_record(
         },
         acting_for_principal_id=resolved.principal_name,
         policy_store=_DbPolicyStore(db, organization_id),
-        opa_client=_EngineOpaClient(HttpOpaClient(), data_path=opa_data_path),
+        opa_client=_EngineOpaClient(HttpOpaClient(opa_url), data_path=opa_data_path),
         agent_id=str(agent.id),
         enterprise_knowledge=enterprise_knowledge,
     )
@@ -792,6 +807,7 @@ def submit_intent(
     correlation_id: str | None,
     resource: str | None = None,
     source: str | None = None,
+    opa_url: str | None = None,
 ) -> tuple[Intent, Decision, Evidence]:
     # Phase 9 (AGENT_LIFECYCLE.md "Runtime Behaviour"): revoked and retired
     # agents are rejected before an Intent row even exists, no evidentiary
@@ -931,6 +947,7 @@ def submit_intent(
     # call's behavior differs from what previously lived inline here.
     decision, evidence = _evaluate_and_record(
         db, intent, agent, action, amount, currency, counterparty, resource, context, requested_at,
+        opa_url=opa_url,
     )
     return intent, decision, evidence
 

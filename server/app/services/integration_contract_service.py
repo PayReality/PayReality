@@ -122,7 +122,11 @@ MAX_VERSION_CREATE_ATTEMPTS = 3
 _HASHED_SEMANTIC_FIELDS = (
     "source_operation", "canonical_action", "resource_path",
     "fact_subject_path", "amount_path", "currency_path", "context_bindings",
+    "lifecycle_requirement", "destination_evidence_kind",
 )
+
+LIFECYCLE_REQUIREMENTS = ("LEGACY", "LIFECYCLE_REQUIRED")
+DESTINATION_EVIDENCE_KINDS = ("ADAPTER_OWN_OBSERVATION",)  # the only kind this platform implements -- see IntegrationContractVersion's own docstring
 
 
 def _compute_content_hash(semantic: dict[str, Any]) -> str:
@@ -145,6 +149,8 @@ def _validate_semantic_fields(
     resource_path: str | None, fact_subject_path: str | None,
     amount_path: str | None, currency_path: str | None,
     context_bindings: dict[str, Any],
+    lifecycle_requirement: str = "LEGACY",
+    destination_evidence_kind: str = "ADAPTER_OWN_OBSERVATION",
 ) -> None:
     """Deterministic only -- never touches a live external system, an
     LLM, or an existing RuntimePolicy. Every check here is a pure
@@ -168,6 +174,13 @@ def _validate_semantic_fields(
             raise ContractValidationError(f"context_bindings key is not a valid canonical context key: {key!r}")
         if not isinstance(path, str) or not _PATH_RE.match(path):
             raise ContractValidationError(f"context_bindings[{key!r}] is not a well-formed field path: {path!r}")
+    if lifecycle_requirement not in LIFECYCLE_REQUIREMENTS:
+        raise ContractValidationError(f"lifecycle_requirement must be one of {LIFECYCLE_REQUIREMENTS}, got {lifecycle_requirement!r}")
+    if destination_evidence_kind not in DESTINATION_EVIDENCE_KINDS:
+        raise ContractValidationError(
+            f"destination_evidence_kind must be one of {DESTINATION_EVIDENCE_KINDS} "
+            f"(no independently-verified destination-evidence tier is implemented), got {destination_evidence_kind!r}"
+        )
 
 
 # --- Integration -------------------------------------------------------------
@@ -215,6 +228,8 @@ def create_contract_version(
     context_bindings: dict[str, Any] | None = None,
     source_schema_fingerprint: str | None = None,
     created_by: str | None = None,
+    lifecycle_requirement: str = "LEGACY",
+    destination_evidence_kind: str = "ADAPTER_OWN_OBSERVATION",
 ) -> IntegrationContractVersion:
     """Always DRAFT. Version is allocated under a bounded retry (see
     _create_contract_version_attempt below), never a naive
@@ -222,12 +237,21 @@ def create_contract_version(
     caller under real concurrent creation for the same
     (integration_id, source_operation) -- the same discipline already
     established for deploy_policy's own version/active-slot race
-    (runtime_policy_service.py, PayReality 1.0 Audit finding G02)."""
+    (runtime_policy_service.py, PayReality 1.0 Audit finding G02).
+
+    `lifecycle_requirement`/`destination_evidence_kind` (contract-
+    enforcement pass): both default to their existing, pre-this-pass
+    behaviour ('LEGACY' / 'ADAPTER_OWN_OBSERVATION') -- every existing
+    caller that omits them gets exactly what it got before. Both are
+    semantic (part of content_hash), so changing either on an existing
+    mapping requires creating a new version through this same governance
+    pipeline, never a direct field mutation on an approved row."""
     get_integration(db, integration_id, organization_id)  # raises IntegrationNotFoundError; enforces org ownership
     context_bindings = context_bindings or {}
     _validate_semantic_fields(
         source_operation, canonical_action, resource_path, fact_subject_path,
         amount_path, currency_path, context_bindings,
+        lifecycle_requirement, destination_evidence_kind,
     )
 
     for _attempt in range(MAX_VERSION_CREATE_ATTEMPTS):
@@ -236,6 +260,7 @@ def create_contract_version(
                 db, integration_id, organization_id, source_operation, canonical_action,
                 resource_path, fact_subject_path, amount_path, currency_path,
                 context_bindings, source_schema_fingerprint, created_by,
+                lifecycle_requirement, destination_evidence_kind,
             )
         except IntegrityError:
             db.rollback()
@@ -250,6 +275,7 @@ def _create_contract_version_attempt(
     amount_path: str | None, currency_path: str | None,
     context_bindings: dict[str, Any], source_schema_fingerprint: str | None,
     created_by: str | None,
+    lifecycle_requirement: str, destination_evidence_kind: str,
 ) -> IntegrationContractVersion:
     next_version = (
         db.scalar(
@@ -267,6 +293,7 @@ def _create_contract_version_attempt(
         fact_subject_path=fact_subject_path, amount_path=amount_path, currency_path=currency_path,
         context_bindings=context_bindings, source_schema_fingerprint=source_schema_fingerprint,
         status="draft", created_by=created_by,
+        lifecycle_requirement=lifecycle_requirement, destination_evidence_kind=destination_evidence_kind,
     )
     db.add(row)
     db.commit()
@@ -314,6 +341,7 @@ def edit_draft_contract_version(
     resource_path: Any = _UNSET, fact_subject_path: Any = _UNSET,
     amount_path: Any = _UNSET, currency_path: Any = _UNSET,
     context_bindings: Any = _UNSET, source_schema_fingerprint: Any = _UNSET,
+    lifecycle_requirement: Any = _UNSET, destination_evidence_kind: Any = _UNSET,
 ) -> IntegrationContractVersion:
     """DRAFT is the only mutable status. `_UNSET` (not `None`) marks
     "caller didn't supply this field" so an explicit `None` (e.g.
@@ -340,10 +368,15 @@ def edit_draft_contract_version(
         row.context_bindings = context_bindings if context_bindings is not None else {}
     if source_schema_fingerprint is not _UNSET:
         row.source_schema_fingerprint = source_schema_fingerprint
+    if lifecycle_requirement is not _UNSET:
+        row.lifecycle_requirement = lifecycle_requirement
+    if destination_evidence_kind is not _UNSET:
+        row.destination_evidence_kind = destination_evidence_kind
 
     _validate_semantic_fields(
         row.source_operation, row.canonical_action, row.resource_path, row.fact_subject_path,
         row.amount_path, row.currency_path, row.context_bindings,
+        row.lifecycle_requirement, row.destination_evidence_kind,
     )
     db.commit()
     db.refresh(row)
@@ -366,6 +399,7 @@ def validate_contract_version(
     _validate_semantic_fields(
         row.source_operation, row.canonical_action, row.resource_path, row.fact_subject_path,
         row.amount_path, row.currency_path, row.context_bindings,
+        row.lifecycle_requirement, row.destination_evidence_kind,
     )
     row.content_hash = _compute_content_hash(
         {
@@ -373,6 +407,8 @@ def validate_contract_version(
             "resource_path": row.resource_path, "fact_subject_path": row.fact_subject_path,
             "amount_path": row.amount_path, "currency_path": row.currency_path,
             "context_bindings": row.context_bindings,
+            "lifecycle_requirement": row.lifecycle_requirement,
+            "destination_evidence_kind": row.destination_evidence_kind,
         }
     )
     row.status = "validated"

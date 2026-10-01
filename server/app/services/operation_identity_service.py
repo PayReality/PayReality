@@ -41,12 +41,14 @@ import json
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import Intent
+from app.db.models import BusinessOperationIdentity, Intent
 
 MAX_EXTERNAL_OPERATION_ID_LENGTH = 256
+MAX_CONCURRENT_ATTEMPT_RETRIES = 3
 
 
 class InvalidExternalOperationIdError(Exception):
@@ -134,3 +136,121 @@ def find_existing_operation(
             Intent.external_operation_id == external_operation_id,
         )
     )
+
+
+# === Closeout pass, section 1: business-operation identity ===============
+#
+# DISTINCT from everything above. `find_existing_operation` (and the
+# whole external_operation_id scope) answers "have I already made a
+# Decision for this exact SUBMISSION" -- its own DB constraint
+# (idx_intents_external_operation_scope) forbids a second Intent from
+# ever sharing an external_operation_id, so it cannot represent "the
+# same real-world operation, attempted again." The functions below
+# answer that different question, for callers that opt in by supplying
+# BOTH business_operation_id and an intended destination at submission
+# time (schemas/integration_runtime.py AttestedIntentRequest).
+
+
+class ConcurrentBusinessOperationAttemptError(Exception):
+    """Raised when advance_current_attempt could not win the atomic
+    conditional UPDATE after MAX_CONCURRENT_ATTEMPT_RETRIES real
+    attempts -- a sustained, repeated concurrent racer, not a single
+    transient collision (a single collision is retried transparently;
+    see that function's own docstring). The caller should treat this the
+    same as any other "try again" signal, never as a permanent
+    rejection."""
+
+    def __init__(self, business_operation_identity_id: uuid.UUID):
+        self.business_operation_identity_id = business_operation_identity_id
+        super().__init__(
+            f"business_operation_identity {business_operation_identity_id}: "
+            f"could not win the current-attempt update after {MAX_CONCURRENT_ATTEMPT_RETRIES} retries"
+        )
+
+
+def resolve_or_create_business_operation_identity(
+    db: Session, organization_id: uuid.UUID, integration_id: uuid.UUID, action: str,
+    destination: str, business_operation_id: str,
+) -> BusinessOperationIdentity:
+    """The read-then-insert-then-catch-IntegrityError-then-requery shape
+    Phase 3 already established for Intent's own idempotency scope
+    (integration_runtime_service.submit_attested_intent), applied here
+    to the SAME real concurrency hazard: two genuinely concurrent first
+    attempts at the same business identity must not both succeed in
+    creating a row -- the DB's own unique constraint
+    (uq_business_operation_identity) is the actual guarantee; this
+    function's own read-first and except-IntegrityError-then-requery are
+    the fast path and the correctness fallback, not the guarantee
+    itself.
+
+    `action` (contract-enforcement pass): the canonical action type --
+    part of the identity's own namespace alongside integration_id and
+    destination, so two unrelated action types under the same
+    integration/destination can never collide merely for reusing the
+    same business_operation_id string."""
+    existing = db.scalar(
+        select(BusinessOperationIdentity).where(
+            BusinessOperationIdentity.organization_id == organization_id,
+            BusinessOperationIdentity.integration_id == integration_id,
+            BusinessOperationIdentity.action == action,
+            BusinessOperationIdentity.destination == destination,
+            BusinessOperationIdentity.business_operation_id == business_operation_id,
+        )
+    )
+    if existing is not None:
+        return existing
+
+    identity = BusinessOperationIdentity(
+        organization_id=organization_id, integration_id=integration_id, action=action,
+        destination=destination, business_operation_id=business_operation_id,
+    )
+    db.add(identity)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = db.scalar(
+            select(BusinessOperationIdentity).where(
+                BusinessOperationIdentity.organization_id == organization_id,
+                BusinessOperationIdentity.integration_id == integration_id,
+                BusinessOperationIdentity.action == action,
+                BusinessOperationIdentity.destination == destination,
+                BusinessOperationIdentity.business_operation_id == business_operation_id,
+            )
+        )
+        if existing is None:
+            # The unique constraint fired but a requery finds nothing --
+            # not the concurrent-creation race this except clause exists
+            # for; re-raising rather than silently returning None keeps
+            # this function's contract honest (it always returns a real,
+            # persisted row, or raises).
+            raise
+        return existing
+    return identity
+
+
+def advance_current_attempt(
+    db: Session, identity: BusinessOperationIdentity, *, expected_current_operation_id: uuid.UUID | None, new_operation_id: uuid.UUID,
+) -> bool:
+    """The atomic conditional UPDATE -- `WHERE current_operation_id IS
+    [NOT DISTINCT FROM / =] expected` -- mirroring the exact shape
+    capability_service.verify_and_consume_capability's own
+    `UPDATE ... WHERE consumed_at IS NULL` already established for a
+    different resource's single-writer-wins race. Returns True if THIS
+    call won (rowcount == 1); False means a concurrent attempt already
+    advanced current_operation_id to something else since it was read --
+    the caller (operation_service's issuance-time orchestration) is
+    responsible for re-reading, re-evaluating replacement safety against
+    whatever actually won, and retrying, exactly how a losing capability-
+    consume attempt is handled -- never for silently forcing its own
+    value in on top."""
+    if expected_current_operation_id is None:
+        condition = BusinessOperationIdentity.current_operation_id.is_(None)
+    else:
+        condition = BusinessOperationIdentity.current_operation_id == expected_current_operation_id
+    result = db.execute(
+        update(BusinessOperationIdentity)
+        .where(BusinessOperationIdentity.id == identity.id, condition)
+        .values(current_operation_id=new_operation_id)
+    )
+    return result.rowcount == 1

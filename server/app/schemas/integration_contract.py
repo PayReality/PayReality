@@ -25,6 +25,11 @@ class CreateContractVersionRequest(BaseModel):
     currency_path: str | None = None
     context_bindings: dict[str, Any] = {}
     source_schema_fingerprint: str | None = None
+    # Contract-enforcement pass: both default to the pre-existing
+    # behaviour. 'LEGACY' / 'ADAPTER_OWN_OBSERVATION' -- see
+    # IntegrationContractVersion's own docstring (app/db/models.py).
+    lifecycle_requirement: str = "LEGACY"
+    destination_evidence_kind: str = "ADAPTER_OWN_OBSERVATION"
 
 
 class EditContractVersionRequest(BaseModel):
@@ -42,6 +47,8 @@ class EditContractVersionRequest(BaseModel):
     currency_path: str | None = None
     context_bindings: dict[str, Any] | None = None
     source_schema_fingerprint: str | None = None
+    lifecycle_requirement: str | None = None
+    destination_evidence_kind: str | None = None
 
 
 class ApproveContractVersionRequest(BaseModel):
@@ -62,6 +69,8 @@ class ContractVersionResponse(BaseModel):
     context_bindings: dict[str, Any]
     content_hash: str | None
     source_schema_fingerprint: str | None
+    lifecycle_requirement: str
+    destination_evidence_kind: str
     status: str
     created_by: str | None
     created_at: datetime

@@ -51,7 +51,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Agent, CapabilityToken, Decision, DecisionResolution, EnforcementBinding, Evidence, Intent, IntegrationIdentity, Organization
+from app.db.models import Agent, CapabilityToken, Decision, DecisionResolution, EnforcementBinding, Evidence, Intent, IntegrationContractVersion, IntegrationIdentity, Operation, Organization
 from app.domain.capability import token as capability_token
 from app.services import intent_service, signing_key_service
 from app.services.intent_service import CrossOrganizationAccessError, DecisionNotFoundError
@@ -230,6 +230,8 @@ def issue_capability_for_decision(
     audience: str,
     issued_by: str | None = None,
     ttl_seconds: int = DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS,
+    replaces_operation_id: uuid.UUID | None = None,
+    material_action_digest: str | None = None,
 ) -> IssuedCapability:
     """Issues a Capability for a Decision Runtime Authority itself
     already, directly, decided ALLOW. See issue_capability_for_reviewed_decision
@@ -237,7 +239,23 @@ def issue_capability_for_decision(
     intentionally distinct functions with distinct preconditions
     (section 11: a resolution is never treated as an unrelated new ALLOW
     decision), converging only on the shared, idempotency-safe
-    _issue_and_persist tail."""
+    _issue_and_persist tail.
+
+    `replaces_operation_id` (hardening pass, section 3): optional, and
+    additive -- every existing caller that omits it gets exactly the
+    prior behaviour. When a caller EXPLICITLY declares this new
+    Capability is meant to replace an existing, named Operation, this is
+    the real ENFORCEMENT point (not merely the advisory GET /v1/
+    operations/{id}/replacement-safety endpoint): operation_service.
+    evaluate_replacement_safety is called with this new Decision's own
+    identity/binding, and issuance is refused (ReplacementNotSafeError)
+    unless the result is one of the SAFE_* categories, with the
+    attempting identity/binding matching whatever a covering guarantee
+    actually restricts it to. An unlinked new Intent -- the ordinary
+    case, no replaces_operation_id supplied -- is NOT detected or
+    blocked by anything here; this system claims no ability to notice on
+    its own that two independent Intents happen to describe the same
+    real-world action."""
     # Reuses intent_service's own org-scoped decision lookup unchanged
     # (the exact function GET /v1/decisions/{id} is built on) rather
     # than re-deriving organization scoping here a second way.
@@ -246,7 +264,87 @@ def issue_capability_for_decision(
         raise DecisionNotAllowError(f"decision {decision_id} outcome={decision.outcome!r}")
 
     intent = db.get(Intent, decision.intent_id)
-    return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds)
+    _enforce_replacement_safety_if_linked(db, organization_id, replaces_operation_id, intent)
+    # Consolidation review finding (critical): the live fail-closed
+    # rechecks below MUST run, and be allowed to reject, BEFORE
+    # _link_business_operation_attempt_if_covered ever commits an
+    # Operation and advances the identity's current_operation_id --
+    # see _precheck_issuance's own docstring for the failure mode this
+    # ordering closes.
+    precheck = _precheck_issuance(db, organization_id, decision, intent)
+    _link_business_operation_attempt_if_covered(db, organization_id, decision, intent, material_action_digest)
+    return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds, precheck)
+
+
+def _enforce_replacement_safety_if_linked(db: Session, organization_id: uuid.UUID, replaces_operation_id: uuid.UUID | None, intent) -> None:
+    if replaces_operation_id is None:
+        return
+    from app.services import operation_service
+
+    result = operation_service.evaluate_replacement_safety(
+        db, organization_id, replaces_operation_id,
+        attempting_integration_identity_id=intent.integration_identity_id,
+        attempting_enforcement_binding_id=intent.enforcement_binding_id,
+    )
+    if not result.safety.startswith("SAFE_"):
+        raise operation_service.ReplacementNotSafeError(replaces_operation_id, result.safety, result.reason)
+
+
+def _link_business_operation_attempt_if_covered(
+    db: Session, organization_id: uuid.UUID, decision, intent, material_action_digest: str | None,
+) -> None:
+    """Closeout pass, section 1: the AUTOMATIC counterpart to
+    `_enforce_replacement_safety_if_linked` above -- that function only
+    ever runs when a caller explicitly supplies replaces_operation_id;
+    this one runs for EVERY "supported integration" submission that
+    declared business_operation_id + intended_destination at Intent
+    submission time, with no dependence on the issuance caller knowing
+    or declaring anything about a prior attempt. Called BEFORE
+    _issue_and_persist -- if a repeated identity's prior attempt is not
+    SAFE_* to replace, this raises ReplacementNotSafeError and no
+    CapabilityToken is ever persisted for this Decision at all, exactly
+    like the explicit path already does.
+
+    `material_action_digest`: defaults to the Intent's own already-
+    computed canonical_action_digest (app/domain/canonical_action.py) --
+    the generic, always-available digest every Adapter-mediated Intent
+    already carries. A caller with a richer, domain-specific materiality
+    contract (e.g. domain/order_action_contract.py's OrderAction, which
+    treats supplier/quantity/buyer_account/delivery_location/unit_price
+    as the material fields, a stricter set than the generic canonical
+    action digest alone would enforce) can override it explicitly --
+    this is what this codebase's own order-domain tests do."""
+    from app.services import operation_service
+
+    if intent.business_operation_id is None:
+        # Contract-enforcement pass, section 1: a defense-in-depth
+        # re-check at the OTHER point section 1 explicitly names
+        # ("before authorization or capability issuance") -- submit_
+        # attested_intent already rejects a LIFECYCLE_REQUIRED
+        # submission missing either field before a Decision is ever
+        # made, so this branch is not expected to be reachable for a
+        # lifecycle-required contract in ordinary operation. It is
+        # checked again here anyway, fail-closed, in case any other
+        # future code path ever constructs an Intent without going
+        # through that gate.
+        if intent.integration_contract_version_id is not None:
+            contract_version = db.get(IntegrationContractVersion, intent.integration_contract_version_id)
+            if contract_version is not None and contract_version.lifecycle_requirement == "LIFECYCLE_REQUIRED":
+                raise operation_service.LifecycleRequirementNotSatisfiedError(intent.id, contract_version.id)
+        return
+
+    existing_operation = db.scalar(select(Operation).where(Operation.decision_id == decision.id))
+    if existing_operation is not None:
+        # A retried issuance call for a Decision that already has its
+        # own Operation (e.g. a second call after a transient failure
+        # downstream of this function, before a Capability was ever
+        # persisted) -- link_business_operation_attempt's own
+        # OperationAlreadyExistsForDecisionError would otherwise fire on
+        # a legitimate retry; nothing further to link.
+        return
+    operation_service.link_business_operation_attempt(
+        db, organization_id, decision, intent, material_action_digest or intent.canonical_action_digest or "",
+    )
 
 
 def issue_capability_for_reviewed_decision(
@@ -256,6 +354,8 @@ def issue_capability_for_reviewed_decision(
     audience: str,
     issued_by: str | None = None,
     ttl_seconds: int = DEFAULT_CAPABILITY_TOKEN_TTL_SECONDS,
+    replaces_operation_id: uuid.UUID | None = None,
+    material_action_digest: str | None = None,
 ) -> IssuedCapability:
     """Trusted Integration Architecture, Phase 5.1, Part B: issues a
     Capability for a HUMAN_REVIEW decision an authorized reviewer has
@@ -291,7 +391,10 @@ def issue_capability_for_reviewed_decision(
         "capability_issuance_basis=POST_REVIEW decision_id=%s resolved_by=%s resolved_by_user_id=%s",
         decision_id, resolution_row.resolved_by, resolution_row.resolved_by_user_id,
     )
-    return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds)
+    _enforce_replacement_safety_if_linked(db, organization_id, replaces_operation_id, intent)
+    precheck = _precheck_issuance(db, organization_id, decision, intent)
+    _link_business_operation_attempt_if_covered(db, organization_id, decision, intent, material_action_digest)
+    return _issue_and_persist(db, organization_id, decision, intent, audience, issued_by, ttl_seconds, precheck)
 
 
 def _existing_capability_or_none(db: Session, decision_id: uuid.UUID) -> CapabilityToken | None:
@@ -381,29 +484,64 @@ def _check_organization_active(db: Session, decision_id: uuid.UUID, organization
     return org
 
 
-def _issue_and_persist(
-    db: Session,
-    organization_id: uuid.UUID,
-    decision,
-    intent: Intent,
-    audience: str,
-    issued_by: str | None,
-    ttl_seconds: int,
-) -> IssuedCapability:
-    """The shared tail every issuance path (ALLOW-direct, post-review)
-    converges on: live fail-closed rechecks, then an idempotency-safe
-    issue-and-persist. Sharing this one implementation, rather than a
-    copy per path, is what section 8 (Agent-direct compatibility) and
-    section 17 (post-review issuance reusing Part A's own invariant)
-    actually mean structurally -- a fix made once here is a fix made
-    everywhere this function is called from, not something that can be
-    forgotten on a second, parallel path."""
+@dataclass(frozen=True)
+class _IssuancePrecheck:
+    """The output of _precheck_issuance -- everything _issue_and_persist
+    used to derive itself, computed once, early, before this decision's
+    business-operation attempt is linked."""
+    integration_identity_id: uuid.UUID | None
+    enforcement_binding_id: uuid.UUID | None
+    integration_contract_version_id: uuid.UUID | None
+    environment: str | None
+    external_operation_id: str | None
+
+
+def _precheck_issuance(db: Session, organization_id: uuid.UUID, decision, intent: Intent) -> _IssuancePrecheck:
+    """Consolidation review finding (critical, confirmed by tracing the
+    actual code, not hypothetical): these live fail-closed rechecks used
+    to run INSIDE _issue_and_persist, i.e. AFTER
+    _link_business_operation_attempt_if_covered had already committed a
+    new Operation and (for a genuine first attempt) advanced the
+    identity's own current_operation_id -- both via their own, separate
+    db.commit() calls. If a recheck here then rejected (e.g. the origin
+    Agent was suspended in the window between Decision and issuance --
+    exactly the ordinary, expected scenario these rechecks exist to
+    catch, not an edge case), issuance raised and no Capability was ever
+    created, but the just-linked Operation was already durable: stuck at
+    execution_stage=AUTHORIZED forever (it can only ever advance via a
+    real Capability's own consumption), with no Capability to claim it
+    and therefore no evidence event ever possible against it (record_
+    claim/record_dispatch_evidence both require a real, consumed
+    Capability first) and no automatic path to
+    TERMINALLY_NOT_COMMITTED or a covering guarantee either. Every
+    SUBSEQUENT, genuinely new attempt at that same business operation
+    (a fresh Intent, the system's own documented retry model) then
+    resolved to this same orphaned operation as its
+    current_operation_id, ran evaluate_replacement_safety against it,
+    found UNSAFE_UNRESOLVED, and was blocked outright -- an ordinary,
+    transient issuance rejection permanently and silently jamming every
+    future legitimate attempt at that business operation, recoverable
+    only by a human manually creating a DestinationDuplicatePrevention
+    Guarantee for an operation nothing was ever actually attempted
+    against.
+
+    Fixed by running every one of these checks -- and the fast existing-
+    capability pre-check, so a genuine retry of an already-issued
+    decision is rejected before touching linking too -- BEFORE
+    _link_business_operation_attempt_if_covered is ever called, so a
+    rejection here can no longer leave a committed, unreachable Operation
+    behind. The narrower, separate race (two concurrent callers both
+    passing this precheck, then racing on the Operation/Capability
+    inserts themselves) is unaffected by this reordering and remains
+    correctly handled by uq_operations_decision / uq_capability_tokens_
+    decision's own DB-level uniqueness, unchanged."""
     decision_id = decision.id
 
     # Fast pre-check: almost always correct, and avoids doing the live
-    # status rechecks and signing work below for a request that's going
-    # to be rejected anyway. NOT the actual safety guarantee -- see the
-    # IntegrityError handling further down for that.
+    # status rechecks, linking, and signing work below for a request
+    # that's going to be rejected anyway. NOT the actual safety
+    # guarantee -- see _issue_and_persist's own IntegrityError handling
+    # for that.
     existing = _existing_capability_or_none(db, decision_id)
     if existing is not None:
         _raise_for_existing_capability(existing)
@@ -414,7 +552,7 @@ def _issue_and_persist(
     # change at any point after its Intent was accepted, independent of
     # any Binding. Phase 6.1: Organization joins this same re-check.
     _check_organization_active(db, decision_id, organization_id, moment="ISSUANCE")
-    agent = _check_agent_active(db, decision_id, intent.agent_id, moment="ISSUANCE")
+    _check_agent_active(db, decision_id, intent.agent_id, moment="ISSUANCE")
 
     # Trusted Integration Architecture, Phase 5: the Phase-2 blanket
     # suppression (CapabilityNotAvailableForIntegrationIntentError) is
@@ -441,6 +579,43 @@ def _issue_and_persist(
         integration_contract_version_id = intent.integration_contract_version_id
         environment = intent.environment
         external_operation_id = intent.external_operation_id
+
+    return _IssuancePrecheck(
+        integration_identity_id=integration_identity_id,
+        enforcement_binding_id=enforcement_binding_id,
+        integration_contract_version_id=integration_contract_version_id,
+        environment=environment,
+        external_operation_id=external_operation_id,
+    )
+
+
+def _issue_and_persist(
+    db: Session,
+    organization_id: uuid.UUID,
+    decision,
+    intent: Intent,
+    audience: str,
+    issued_by: str | None,
+    ttl_seconds: int,
+    precheck: _IssuancePrecheck,
+) -> IssuedCapability:
+    """The shared tail every issuance path (ALLOW-direct, post-review)
+    converges on: an idempotency-safe issue-and-persist, using the live
+    fail-closed rechecks _precheck_issuance already ran (before this
+    decision's business-operation attempt was linked -- see that
+    function's own docstring for why the ordering matters). Sharing this
+    one implementation, rather than a copy per path, is what section 8
+    (Agent-direct compatibility) and section 17 (post-review issuance
+    reusing Part A's own invariant) actually mean structurally -- a fix
+    made once here is a fix made everywhere this function is called
+    from, not something that can be forgotten on a second, parallel
+    path."""
+    decision_id = decision.id
+    integration_identity_id = precheck.integration_identity_id
+    enforcement_binding_id = precheck.enforcement_binding_id
+    integration_contract_version_id = precheck.integration_contract_version_id
+    environment = precheck.environment
+    external_operation_id = precheck.external_operation_id
 
     earliest_evidence = db.scalar(
         select(Evidence).where(Evidence.decision_id == decision.id).order_by(Evidence.created_at.asc()).limit(1)
@@ -679,7 +854,6 @@ def verify_and_consume_capability(
         .where(CapabilityToken.id == row.id, CapabilityToken.consumed_at.is_(None))
         .values(consumed_at=datetime.now(timezone.utc))
     )
-    db.commit()
     if result.rowcount == 0:
         # A second (or racing) presentation of an already-consumed
         # token -- exactly the replay/double-consumption signal
@@ -687,13 +861,89 @@ def verify_and_consume_capability(
         # verification. Never logs the token itself, only its
         # capability_id, which is not secret (the token_hash it's
         # looked up by is a one-way hash, never the bearer artifact).
+        db.rollback()
         logger.warning("capability_consumption_result=ALREADY_CONSUMED capability_id=%s", row.id)
         raise CapabilityTokenAlreadyConsumedError(str(row.id))
 
+    # Product lifecycle vertical slice, hardening pass: an Operation
+    # exists only for callers that explicitly created one via
+    # operation_service.create_operation_for_decision (order-specific
+    # flows; see that service's own module docstring for why creation is
+    # NOT forced onto every capability issuance in this codebase).
+    # Legacy callers with no Operation are explicitly distinguished
+    # below (lifecycle_covered=False) and get EXACTLY the original,
+    # unwrapped commit -- no new failure mode is introduced for them.
+    #
+    # For a lifecycle-covered decision, the CLAIMED transition is
+    # recorded in memory here and committed in the SAME db.commit() as
+    # the capability UPDATE above (still uncommitted at this point) --
+    # one atomic transaction, not two independent best-effort writes.
+    # If recording it raises for any reason, the whole transaction
+    # (including the capability consume) rolls back: a lifecycle-covered
+    # operation whose transition cannot be durably recorded must not
+    # silently leave a capability marked consumed with no matching
+    # Operation state, which is what "fail closed... requiring
+    # reconciliation" means applied here -- the caller gets a clear,
+    # typed OperationRecordingFailedError, and the capability remains
+    # exactly as unconsumed as it was before this call, so a legitimate
+    # retry (once the underlying issue is fixed) is not permanently
+    # blocked by state this call itself already burned.
+    from app.services import operation_service
+
+    operation = db.scalar(select(Operation).where(Operation.decision_id == row.decision_id))
+    lifecycle_covered = operation is not None
+    if lifecycle_covered:
+        try:
+            operation_service.record_claim(db, row.organization_id, operation, row.id)
+            db.commit()
+        except operation_service.OperationSupersededError:
+            # Closeout pass, section 1: distinct from a durability
+            # failure -- this operation was validly issued, but a LATER
+            # attempt at the same business-operation identity has since
+            # become current (facts changed between issuance and
+            # consumption). Rolled back exactly the same way, but
+            # re-raised as-is so a caller can tell "stale authority,
+            # never retry this capability" apart from "durability
+            # failure, retry may succeed."
+            db.rollback()
+            logger.warning(
+                "capability_consumption_result=ROLLED_BACK_OPERATION_SUPERSEDED capability_id=%s decision_id=%s operation_id=%s",
+                row.id, row.decision_id, operation.id,
+            )
+            raise
+        except operation_service.ReplacementSafetyWithdrawnError:
+            # Contract-enforcement pass, section 1: distinct from both of
+            # the above -- this operation IS still current, but the
+            # safety justification that let it replace a prior attempt
+            # (a guarantee, or a terminal-non-commit conclusion) no
+            # longer holds. Rolled back the same way, re-raised as-is so
+            # a caller can tell "the replacement itself was never safe,
+            # do not retry this capability" apart from either of the
+            # other two failure modes.
+            db.rollback()
+            logger.warning(
+                "capability_consumption_result=ROLLED_BACK_REPLACEMENT_SAFETY_WITHDRAWN capability_id=%s decision_id=%s operation_id=%s",
+                row.id, row.decision_id, operation.id,
+            )
+            raise
+        except Exception as e:
+            db.rollback()
+            logger.error(
+                "capability_consumption_result=ROLLED_BACK_LIFECYCLE_RECORDING_FAILED capability_id=%s decision_id=%s operation_id=%s error=%s",
+                row.id, row.decision_id, operation.id, e,
+            )
+            raise operation_service.OperationRecordingFailedError(
+                operation_id=operation.id,
+                reason=f"capability consumption rolled back: could not durably record CLAIMED state ({e})",
+            ) from e
+    else:
+        db.commit()
+
     logger.info(
-        "capability_consumption_result=CONSUMED capability_id=%s decision_id=%s audience=%s",
-        row.id, verified.payload.decision_id, audience,
+        "capability_consumption_result=CONSUMED capability_id=%s decision_id=%s audience=%s lifecycle_covered=%s",
+        row.id, verified.payload.decision_id, audience, lifecycle_covered,
     )
+
     return ConsumedCapability(
         capability_id=row.id, decision_id=verified.payload.decision_id,
         resource=verified.payload.resource, constraints=verified.payload.constraints,

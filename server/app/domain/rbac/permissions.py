@@ -130,6 +130,62 @@ class Permission(str, Enum):
     # lifecycle without holding RUNTIME_POLICY_PUBLISH.
     INTEGRATION_IDENTITY_MANAGE = "integration_identity.manage"
 
+    # Product lifecycle vertical slice (EVIDENCEBOUND-PAYREALITY-RECOVERY-
+    # V01 follow-up): deliberately NOT reusing CAPABILITY_ISSUE,
+    # CAPABILITY_VERIFY, DECISIONS_VIEW, or EVIDENCE_VIEW. This is the
+    # narrowly scoped "recovery credential" the brief's own section 7
+    # requires: read an Operation's state, record a late observation
+    # (append evidence, request reconciliation), and check replacement
+    # safety, for an operation that ALREADY EXISTS -- and structurally
+    # nothing else. Holding this permission alone grants no path to
+    # issue_capability_for_decision, verify_and_consume_capability, or any
+    # Intent-submission endpoint.
+    #
+    # Deliberately NOT granted to Auditor: recording an observation is a
+    # WRITE (it appends evidence and can transition Operation.state),
+    # which would violate that role's own pre-existing, separately
+    # tested invariant (test_auditor_is_strictly_read_only) -- caught by
+    # that real test before this comment was written, not designed
+    # around in advance. Granted to Reviewer instead: a role already
+    # accountable for the human-judgment side of a Decision (AUTHORITY_
+    # REVIEW, DECISIONS_RESOLVE), holding neither CAPABILITY_ISSUE nor
+    # CAPABILITY_VERIFY either -- the same real, testable proof
+    # (test_operation_observe_permission_grants_no_execution_permission)
+    # that observation and execution are genuinely separate credentials,
+    # just anchored on the role this actually fits rather than the one
+    # this milestone reached for first.
+    OPERATION_OBSERVE = "operation.observe"
+
+    # Hardening pass, section 4: deliberately NOT covered by
+    # OPERATION_OBSERVE. Documenting a Destination Duplicate Prevention
+    # Guarantee is not "recording what happened" -- it is a governance
+    # decision that unlocks a specific future replacement attempt as
+    # safe, the same category of decision as publishing a Runtime Policy
+    # or approving an Integration Contract, not as viewing evidence. An
+    # observer must never be able to grant themselves replacement
+    # safety by documenting their own guarantee -- holding OPERATION_
+    # OBSERVE (Reviewer) grants no path to this permission; it is
+    # granted to Governance Administrator alone, the same role that
+    # already holds every other governance-approval permission in this
+    # file (RUNTIME_POLICY_PUBLISH, INTEGRATION_CONTRACT_PUBLISH,
+    # CAPABILITY_ISSUE).
+    OPERATION_SAFETY_APPROVE = "operation.safety_approve"
+
+    # Closeout pass, section 2: a THIRD, separate permission -- an
+    # authorized human explicitly overriding/settling what outcome_
+    # status the automated evidence alone does not resolve
+    # (operation_service.record_manual_adjudication) is a governance
+    # decision, not "recording what happened" (OPERATION_OBSERVE) and
+    # not "documenting a duplicate-prevention guarantee"
+    # (OPERATION_SAFETY_APPROVE) -- three genuinely different kinds of
+    # authority over an Operation, three genuinely different
+    # permissions. Granted to Governance Administrator alone, same
+    # rationale as OPERATION_SAFETY_APPROVE just above: an observer
+    # (Reviewer, holding only OPERATION_OBSERVE) must never be able to
+    # manufacture a terminal conclusion an unsigned relay alone cannot
+    # support.
+    OPERATION_MANUAL_ADJUDICATE = "operation.manual_adjudicate"
+
 
 # The full permission set, used to grant Owner "full platform control"
 # without hand-maintaining a second, parallel list that would drift
@@ -156,6 +212,9 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.CAPABILITY_VERIFY,
             Permission.INTEGRATION_CONTRACT_MANAGE,
             Permission.INTEGRATION_CONTRACT_PUBLISH,
+            Permission.OPERATION_OBSERVE,
+            Permission.OPERATION_SAFETY_APPROVE,
+            Permission.OPERATION_MANUAL_ADJUDICATE,
         }
     ),
     Role.AGENT_ADMIN: frozenset(
@@ -177,6 +236,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.AUTHORITY_REVIEW,
             Permission.DECISIONS_VIEW,
             Permission.DECISIONS_RESOLVE,
+            Permission.OPERATION_OBSERVE,
         }
     ),
     Role.AUDITOR: frozenset(

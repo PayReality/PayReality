@@ -25,6 +25,7 @@ import pytest
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
+from app.config import settings
 from app.db.models import Agent, CapabilityToken, Organization, Principal
 from app.domain.decision import engine as decision_engine
 from app.domain.runtime_policy.conditions import ConditionSet
@@ -53,6 +54,38 @@ def db(SessionLocal):
         yield session
     finally:
         session.close()
+
+
+@pytest.fixture(autouse=True)
+def _point_settings_at_ephemeral_opa(request):
+    """Root-cause fix (postgres-and-opa-fixes pass): this file always
+    passed its own real, ephemeral `opa_url` fixture value explicitly
+    into `deploy_policy(..., opa_url=opa_url)` -- so the just-created
+    policy really was uploaded to the real OPA instance -- but never
+    pointed `settings.opa_url` (default: http://localhost:8181, nothing
+    ever listens there in this environment) at that same instance
+    before calling intent_service.submit_intent, which constructs its
+    own HttpOpaClient() with no explicit base_url and so reads
+    settings.opa_url. Every real query this file's own tests ever made
+    was therefore a connection-refused against a dead port, converted
+    by HttpOpaClient.query's own httpx.HTTPError handling into
+    OPAEvaluationError(code="connection_error"), and by decision_engine.
+    evaluate's own fail-closed handling into Decision(outcome=
+    "HUMAN_REVIEW", reason="opa_error:connection_error") -- never
+    ALLOW. Confirmed directly: a standalone reproduction of this exact
+    sequence, differing only by setting settings.opa_url first,
+    returns ALLOW. This was silently dormant since this whole file has
+    never actually run before (it always skipped: no Postgres was
+    reachable in this environment until this session). The same
+    established pattern already used correctly by every other real-OPA
+    Postgres test file in this suite (test_operation_identity_postgres.py)."""
+    opa_url = request.getfixturevalue("opa_url")
+    original = settings.opa_url
+    settings.opa_url = opa_url
+    try:
+        yield
+    finally:
+        settings.opa_url = original
 
 
 @pytest.fixture()
@@ -168,57 +201,129 @@ def test_migration_downgrade_and_reupgrade_deduplicates_real_pre_existing_rows(d
 
     decision = _allow_decision(db, org.id, opa_url)
     decision_id = decision.id
+    # Root-cause fix, bug 5: captured as a plain value, not read from
+    # `org` again after the downgrade below -- `org` is an ORM object
+    # whose attributes SQLAlchemy expires on commit (default
+    # expire_on_commit=True) and re-fetches lazily on next access, but
+    # by then the downgrade has walked back through EVERY migration
+    # between head and b7d3a4f0e5c2, including unrelated ones that
+    # added columns the CURRENT (head-based) Organization model class
+    # still expects (e.g. `environment`) -- a lazy refresh after the
+    # downgrade fails with UndefinedColumn against the now-missing
+    # column. This is a real, inherent property of downgrading past
+    # more than one migration at once with a single long-lived ORM
+    # session, not specific to any one column; capturing plain values
+    # before the downgrade sidesteps it entirely.
+    org_id = org.id
+    # Root-cause fix, bug 4: SQLAlchemy's own session keeps an implicit
+    # transaction open across reads even after _allow_decision's own
+    # internal commits -- the very next read (decision.id, above) starts
+    # a new one. That open transaction, on the SAME database, holds
+    # locks the migration's own ALTER TABLE DDL (a different connection,
+    # via `engine`) needs ACCESS EXCLUSIVE for -- confirmed directly via
+    # pg_stat_activity during a real hung run: this session sat "idle in
+    # transaction" while the migration's own ALTER TABLE query waited on
+    # a `relation` lock indefinitely. An explicit commit here ends that
+    # transaction before the DDL below ever starts.
+    db.commit()
 
     server_dir = str(list(__import__("pathlib").Path(__file__).resolve().parents)[2])
     cfg = Config(f"{server_dir}/alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", str(engine.url))
+    # Root-cause fix (postgres-and-opa-fixes pass), two independent bugs:
+    #
+    # 1. Plain str(engine.url) renders the password as a literal "***"
+    #    (SQLAlchemy URL.__str__'s own default, hide_password=True).
+    #    render_as_string(hide_password=False) is the real, unmasked
+    #    connection string this test actually needs.
+    #
+    # 2. alembic/env.py's own line 14 unconditionally does
+    #    config.set_main_option("sqlalchemy.url", settings.database_url)
+    #    on EVERY invocation (env.py is re-executed as a script each
+    #    time command.downgrade/upgrade runs) -- so whatever this test
+    #    sets on `cfg` directly is immediately overwritten the moment
+    #    env.py runs. The project's own working precedent
+    #    (conftest.py's postgres_url fixture) never hits this because it
+    #    invokes alembic in a SEPARATE subprocess with DATABASE_URL set
+    #    in that subprocess's own environment, so settings.database_url
+    #    is correct *before* app.config is ever imported there. This
+    #    test calls alembic.command directly, in-process -- the already-
+    #    imported `settings` object needs to be pointed at the real
+    #    throwaway database explicitly, the same way, before either
+    #    call. settings.database_url's own bare default (postgresql+
+    #    psycopg://payreality@localhost:5432/payreality_dev) has NO
+    #    password at all, which is exactly "no password supplied".
+    real_url = engine.url.render_as_string(hide_password=False)
+    cfg.set_main_option("sqlalchemy.url", real_url)
+    original_database_url = settings.database_url
+    settings.database_url = real_url
+    try:
+        # Root-cause fix, bug 3: "-1" downgrades exactly one revision
+        # from wherever head currently is -- when this test was
+        # written, d4e8b1a6f2c9 (which adds the unique constraint this
+        # test is actually about) WAS head, so "-1" reached its own
+        # predecessor correctly. Two more migrations have been added
+        # since (this repo's own product-lifecycle-* work), so "-1" now
+        # only undoes the LATEST of those, never touching the
+        # constraint this test exists to exercise. Target d4e8b1a6f2c9's
+        # own real predecessor explicitly instead -- correct regardless
+        # of how many further migrations accumulate after it.
+        command.downgrade(cfg, "b7d3a4f0e5c2")
 
-    command.downgrade(cfg, "-1")
-
-    consumed_id = uuid.uuid4()
-    unconsumed_id = uuid.uuid4()
-    now = datetime.now(timezone.utc)
-    with engine.begin() as conn:
-        for row_id, consumed_at, issued_at in (
-            (consumed_id, now - timedelta(minutes=5), now - timedelta(minutes=20)),
-            (unconsumed_id, None, now - timedelta(minutes=1)),
-        ):
-            conn.execute(
-                text(
-                    "INSERT INTO capability_tokens "
-                    "(id, organization_id, decision_id, audience, nonce, token_hash, "
-                    " issued_at, expires_at, consumed_at) "
-                    "VALUES (:id, :org_id, :decision_id, 'reference-adapter', :nonce, :hash, "
-                    " :issued_at, :expires_at, :consumed_at)"
-                ),
-                {
-                    "id": row_id, "org_id": org.id, "decision_id": decision_id,
-                    "nonce": uuid.uuid4().hex, "hash": uuid.uuid4().hex,
-                    "issued_at": issued_at, "expires_at": now + timedelta(minutes=5),
-                    "consumed_at": consumed_at,
-                },
-            )
-
-    duplicate_count = list(engine.connect().execute(
-        text("SELECT count(*) FROM capability_tokens WHERE decision_id = :d"), {"d": decision_id}
-    ))[0][0]
-    assert duplicate_count == 2, "setup sanity check: two duplicate rows must exist before the re-upgrade"
-
-    command.upgrade(cfg, "head")
-
-    remaining = list(db.scalars(select(CapabilityToken).where(CapabilityToken.decision_id == decision_id)))
-    assert len(remaining) == 1, f"expected the migration to deduplicate down to one row, found {len(remaining)}"
-    assert remaining[0].id == consumed_id, "the consumed row must be the one preserved, not the unconsumed one"
-
-    with pytest.raises(Exception):
-        # The constraint must be back: a second row for the same
-        # decision_id is rejected at the database level again.
+        consumed_id = uuid.uuid4()
+        unconsumed_id = uuid.uuid4()
+        now = datetime.now(timezone.utc)
         with engine.begin() as conn:
-            conn.execute(
-                text(
-                    "INSERT INTO capability_tokens "
-                    "(id, organization_id, decision_id, audience, nonce, token_hash, issued_at, expires_at) "
-                    "VALUES (:id, :org_id, :decision_id, 'reference-adapter', :nonce, :hash, now(), now())"
-                ),
-                {"id": uuid.uuid4(), "org_id": org.id, "decision_id": decision_id, "nonce": uuid.uuid4().hex, "hash": uuid.uuid4().hex},
-            )
+            for row_id, consumed_at, issued_at in (
+                (consumed_id, now - timedelta(minutes=5), now - timedelta(minutes=20)),
+                (unconsumed_id, None, now - timedelta(minutes=1)),
+            ):
+                conn.execute(
+                    text(
+                        "INSERT INTO capability_tokens "
+                        "(id, organization_id, decision_id, audience, nonce, token_hash, "
+                        " issued_at, expires_at, consumed_at) "
+                        "VALUES (:id, :org_id, :decision_id, 'reference-adapter', :nonce, :hash, "
+                        " :issued_at, :expires_at, :consumed_at)"
+                    ),
+                    {
+                        "id": row_id, "org_id": org_id, "decision_id": decision_id,
+                        "nonce": uuid.uuid4().hex, "hash": uuid.uuid4().hex,
+                        "issued_at": issued_at, "expires_at": now + timedelta(minutes=5),
+                        "consumed_at": consumed_at,
+                    },
+                )
+
+        # Root-cause fix, bug 6: a bare engine.connect() with no context
+        # manager and no explicit close/commit leaves a real, separate
+        # connection "idle in transaction" (confirmed directly via
+        # pg_stat_activity during a real hung run), holding a lock the
+        # very next migration step's own DDL (DROP INDEX, part of the
+        # upgrade back to head) then waited on indefinitely. A `with`
+        # block closes the connection (and its implicit transaction)
+        # deterministically when the block exits.
+        with engine.connect() as conn:
+            duplicate_count = list(conn.execute(
+                text("SELECT count(*) FROM capability_tokens WHERE decision_id = :d"), {"d": decision_id}
+            ))[0][0]
+        assert duplicate_count == 2, "setup sanity check: two duplicate rows must exist before the re-upgrade"
+
+        command.upgrade(cfg, "head")
+
+        remaining = list(db.scalars(select(CapabilityToken).where(CapabilityToken.decision_id == decision_id)))
+        assert len(remaining) == 1, f"expected the migration to deduplicate down to one row, found {len(remaining)}"
+        assert remaining[0].id == consumed_id, "the consumed row must be the one preserved, not the unconsumed one"
+
+        with pytest.raises(Exception):
+            # The constraint must be back: a second row for the same
+            # decision_id is rejected at the database level again.
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO capability_tokens "
+                        "(id, organization_id, decision_id, audience, nonce, token_hash, issued_at, expires_at) "
+                        "VALUES (:id, :org_id, :decision_id, 'reference-adapter', :nonce, :hash, now(), now())"
+                    ),
+                    {"id": uuid.uuid4(), "org_id": org_id, "decision_id": decision_id, "nonce": uuid.uuid4().hex, "hash": uuid.uuid4().hex},
+                )
+    finally:
+        settings.database_url = original_database_url
