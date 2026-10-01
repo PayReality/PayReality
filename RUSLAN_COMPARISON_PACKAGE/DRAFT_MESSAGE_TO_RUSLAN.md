@@ -13,8 +13,9 @@ late-reported commitment after revocation, an unresolved outcome after revocatio
 distinct concurrency scenarios (capability consumption, and first-attempt registration at a new
 business-operation identity).
 
-Everything in the package is real output from real tests against real application code (SQLite and
-Postgres, never mocked) -- I've tried to be explicit throughout about which facts came from
+These traces were generated against real PayReality code using SQLite and a synthetic destination.
+Postgres verification was performed separately, for the broader feature, not reflected in any of
+these specific traces. I've tried to be explicit throughout about which facts came from
 PayReality's own code versus which came from the test harness's synthetic destination standing in
 for a real external system, so nothing here should read as a claim about a real destination system
 we haven't actually integrated against.

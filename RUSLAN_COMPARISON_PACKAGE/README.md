@@ -5,9 +5,10 @@
 
 This package is the sanitized output of PayReality's own consolidation review of the operation
 lifecycle feature (`OPERATION_LIFECYCLE.md`), verified against real code and a real test harness,
-not asserted from a design document. Every trace in `traces/` was produced by actually running the
-named test against real application code (SQLite or Postgres, never mocked) in this session; none
-are hand-written or simulated.
+not asserted from a design document. These traces were generated against real PayReality code
+using SQLite and a synthetic destination. Postgres verification was performed separately (see
+"Database engines" below for exactly what that separate verification covered, and what it did not
+touch). None of the traces in `traces/` are hand-written or simulated.
 
 ## The shared vector
 
