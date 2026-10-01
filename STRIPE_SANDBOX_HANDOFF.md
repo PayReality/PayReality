@@ -119,10 +119,23 @@ account of why this specifically is the thing that would matter).
 
 The adapter and its local-simulation test suite are now implemented -- see
 `STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`'s own "Implementation status" section for what that
-covers and what it does not, including a real flaw found and fixed in a later pass (the identity
-mapping's own "revision 2"). This handoff document's own distinctions (PaymentIntent creation vs.
-confirmation vs. payment success vs. settlement) are what that implementation's tests are built
-around; nothing here is superseded by the implementation, only made concrete.
+covers and what it does not, including two further revisions: "revision 2" (the identity-mapping
+fix for a replacement authorized despite an unresolved outcome) and "revision 3" (the dispatch
+window's own real-first-dispatch anchoring, set-once and race-safe, plus a live Stripe
+account-binding check -- see that document's own "Dispatch window anchoring and Stripe account
+binding" section for the full account, including a concurrency proof run against a real Postgres
+database, not merely asserted). This handoff document's own distinctions (PaymentIntent creation
+vs. confirmation vs. payment success vs. settlement) are what that implementation's tests are
+built around; nothing here is superseded by the implementation, only made concrete.
+
+### External test-mode experiment scope (this pass)
+
+Per this review's own explicit, narrow authorization: an external Stripe test-mode run, if
+credentials are available, is scoped to **PaymentIntent creation only** -- no automatic
+confirmation, capture, or settlement claim. This is step 1 of the four-step distinction this
+document's own top section already draws; it does not change that distinction, it narrows which
+step this specific external run is authorized to reach. See this review's own final report for
+whether credentials were available and what was (or was not) actually executed.
 
 ## Explicitly not done by this handoff
 

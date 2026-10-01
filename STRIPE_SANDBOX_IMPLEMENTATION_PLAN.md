@@ -9,20 +9,41 @@ prove.
 ## Implementation status
 
 **Implemented**: `scripts/stripe_sandbox_adapter.py` (the corrected identity/idempotency mapping
-below, a `RealStripeClient` gated behind a real test-mode key + an explicit execution switch, and
-a `FakeStripeBackend` local simulation modeling Stripe's own documented idempotency/concurrency/
-retention behavior) and `server/tests/integration/test_stripe_sandbox_operation_lifecycle.py` (15
-scenarios, all passing against the real PayReality lifecycle service layer + a real,
-genuinely-generated-and-verified Ed25519 signature for the signed-Adapter reporting path, and the
-local Stripe simulation -- never a real network call).
+below, a durable dispatch-window anchor and Stripe account binding check -- revision 3, see its own
+section below -- a `RealStripeClient` gated behind a real test-mode key + an explicit execution
+switch, and a `FakeStripeBackend` local simulation modeling Stripe's own documented idempotency/
+concurrency/retention behavior) and `server/tests/integration/test_stripe_sandbox_operation_
+lifecycle.py` (19 scenarios, all passing against the real PayReality lifecycle service layer + a
+real, genuinely-generated-and-verified Ed25519 signature for the signed-Adapter reporting path, and
+the local Stripe simulation -- never a real network call).
 
-**A real flaw in the first "corrected" mapping was found and fixed in this pass** (see the mapping
-section below for the full account): the first correction keyed the idempotency key off
+**A real flaw in the first "corrected" mapping was found and fixed in an earlier pass** (see the
+mapping section below for the full account): that correction keyed the idempotency key off
 `Operation.id` alone, which is wrong in exactly one real scenario -- a replacement authorized
 despite the original's own outcome still being UNKNOWN (a human-documented duplicate-prevention
 guarantee, not a proven non-commit). A regression test
 (`test_replacement_authorized_despite_unresolved_outcome_carries_forward_the_same_destination_
 identity`) reproduces the exact failure mode against the pre-fix design and proves the fix directly.
+
+**Two further gaps found and fixed this pass (revision 3)**, both in how that fix was actually
+anchored and scoped -- see "Dispatch window anchoring and Stripe account binding" below for the
+full account:
+1. The dispatch window's own 24h-conservative guard was anchored to `Operation.created_at` (set at
+   capability-issuance time), not the real first-dispatch moment -- a real gap between issuance and
+   an Adapter actually dispatching would make the guard fire too early relative to Stripe's own
+   real window, or (worse, if ever inverted) too late. Fixed with a new, durable, set-once table
+   (`stripe_sandbox_dispatch_windows`) recording the REAL first-dispatch timestamp, never reset by
+   a later replacement or a concurrent racer -- proven race-safe against a real Postgres database
+   (not merely asserted), see "Implementation status" in `STRIPE_SANDBOX_HANDOFF.md`.
+2. Embedding `organization_id`/`integration_id` in the idempotency key (revision 2) is not
+   sufficient on its own to catch a rotated credential that now resolves to a DIFFERENT Stripe
+   account -- Stripe scopes idempotency keys per account, so reusing the same key against a
+   different account does not collide, it silently creates an independent object. Fixed with an
+   explicit, live `retrieve_account()` check inside `dispatch_payment_intent` itself, comparing
+   against the account bound at this destination identity's own first dispatch
+   (`StripeAccountBindingMismatchError` on mismatch) -- plus a structural `livemode` rejection on
+   every PaymentIntent object, independent of and in addition to the existing sk_test_-prefix
+   credential check.
 
 **Not executed, and not attempted, in this session**: any real call to Stripe's own API. No
 `STRIPE_TEST_SECRET_KEY` was configured anywhere in this environment (confirmed directly: no
@@ -33,12 +54,15 @@ Stripe. This is confirmed by its own test
 (`test_real_stripe_client_requires_explicit_test_mode_key_and_execution_switch`), not merely
 asserted in prose.
 
-**What "15 passed" means, precisely**: all fifteen are LOCAL, against `FakeStripeBackend` (or, for
-one test, a plain Python object implementing only the read-only method) -- proof that this
-adapter's own orchestration logic is correct, not proof that real Stripe test mode behaves as
+**What "19 passed" means, precisely**: all nineteen are LOCAL, against `FakeStripeBackend` (or, for
+some, a plain Python object implementing only the read-only method, or no I/O at all) -- proof that
+this adapter's own orchestration logic is correct, not proof that real Stripe test mode behaves as
 documented. The retention/parameter-matching/concurrency facts the simulation models are each
 cited to Stripe's own official documentation (see "Official sources" below); reproducing them
-against a real Stripe test-mode account remains outstanding, blocked on the credential above.
+against a real Stripe test-mode account remains outstanding, blocked on the credential above. The
+dispatch-window concurrency claim specifically is proven separately, against a real Postgres
+database (not SQLite -- see "Dispatch window anchoring" below for why), as a standalone script, not
+as a pytest case.
 
 ## The one action being validated
 
@@ -169,11 +193,104 @@ Verified against Stripe's own official documentation
   correlation metadata legitimately differing between two attempts sharing #4 is never mistaken
   for a mismatch.
 - **Does not rely on the idempotency key past its protection window**: `ensure_dispatch_window_
-  still_valid` blocks a dispatch attempt outright once 24 hours have elapsed since the first
-  dispatch for this #4 chain, if the outcome is still unresolved -- rather than silently
-  dispatching under cover of a key Stripe itself would treat as brand new. Longer-term,
+  still_valid` blocks a dispatch attempt outright once this module's own conservative 24h boundary
+  has elapsed since the *real first dispatch* for this #4 chain (see the next section for why "real
+  first dispatch," not issuance), if the outcome is still unresolved -- rather than silently
+  dispatching under cover of a key Stripe itself may or may not still hold. Longer-term,
   business-level protection against re-attempting a *resolved* operation remains
   `evaluate_replacement_safety`'s job, unchanged, layered underneath this guard.
+
+## Dispatch window anchoring and Stripe account binding (revision 3)
+
+Two further gaps, found and fixed in this pass, in how the revision-2 design above was actually
+*anchored* and *scoped* -- neither is a flaw in the identity mapping itself, both are flaws in what
+feeds it.
+
+### The window must be anchored to the real first dispatch, not capability issuance
+
+`ensure_dispatch_window_still_valid`'s own 24h-conservative boundary is only meaningful if measured
+from the moment Stripe's own idempotency key was actually first created -- i.e. the real first
+dispatch attempt. The adapter itself is deliberately DB/ORM-free (see its own module docstring), so
+it has never stored this timestamp itself; a caller supplies it. The first version of this design
+used `Operation.created_at` (the ROOT operation's own row-creation time) as a disclosed proxy. This
+is wrong in one direction and, if a caller's own data model differed, could be wrong in the other
+too: `Operation.created_at` is set at `capability_service.issue_capability_for_decision`'s own
+`create_operation_for_decision` call -- i.e. at *authorization/issuance* time, which precedes the
+Agent actually consuming the Capability (`record_claim`) and, separately again, actually calling
+the destination. A real gap between issuance and dispatch (an Agent holding a consumed Capability
+briefly before acting, a queued dispatch, anything short of perfectly synchronous execution) means
+measuring from `created_at` anchors the window to *capability issuance*, not *first dispatch* --
+exactly the wrong anchor this review's own task explicitly calls out.
+
+**Fixed**: a new, durable, set-once table, `stripe_sandbox_dispatch_windows`
+(`app/db/stripe_sandbox_models.py`, migration `b8e1f4d6a2c7`), one row per `destination_dispatch_
+identity`, written exactly once -- at the real moment a caller first attempts to dispatch for that
+identity -- via `app/services/stripe_sandbox_dispatch_window_service.get_or_record_dispatch_window`.
+A second call for an identity that already has a row (a genuine retry, a replacement that carries
+the same identity forward via the chain-walk, or a genuinely concurrent racer) reads back exactly
+what the first caller recorded; its own `attempted_at` is silently ignored. This is a SEPARATE
+table from `operations`, not a new column on it -- see that module's own docstring for why (this
+session's own working directory already carries unrelated, uncommitted changes to `models.py` from
+a different in-progress branch; a separate table avoids touching that file at all, a real
+constraint of this specific working environment, not a general design preference).
+
+**Race safety, proven against a real Postgres database, not asserted or merely tested against
+SQLite**: `get_or_record_dispatch_window`'s set-once guarantee rests on the row's own primary-key
+uniqueness constraint (pre-check, insert, catch the loser's `IntegrityError`, re-read the winner's
+row) -- the same pattern this codebase already established for
+`create_operation_for_decision`/`resolve_or_create_business_operation_identity`. This could not be
+proven as a genuine multi-thread race against this test suite's own SQLite in-memory `db` fixture:
+SQLAlchemy's `SingletonThreadPool` gives each THREAD its own private, isolated `:memory:` database
+(confirmed directly this session -- a second thread's connection could not even see a table the
+first thread had just created), so two threads racing against that fixture would each be racing
+against their OWN, separate, empty database, proving nothing. Proven instead as a standalone script
+against a real, throwaway Postgres container: two real threads, each its own SQLAlchemy session
+bound to one real Postgres engine (which has no such per-thread isolation), synchronized on a
+`threading.Barrier` to maximize actual overlap, both racing `get_or_record_dispatch_window` for the
+identical `destination_dispatch_identity` -- exactly one row persisted, the losing thread read back
+the winning thread's own `(attempted_at, account_id)` unchanged. See this review's own final report
+for the exact command and output.
+
+**24 hours is a conservative lower bound, never an exact deletion time** -- corrected throughout
+this module's own docstrings this pass. Stripe's own documentation says a key may be removed "after
+they're at least 24 hours old," which guarantees survival for at least that long but promises
+nothing about exactly when (or whether) pruning happens afterward. `STRIPE_IDEMPOTENCY_KEY_
+RETENTION_HOURS` is used as the EARLIEST point pruning becomes possible, and this module stops
+relying on the key from exactly that point forward -- not because pruning is assumed to have
+happened, but because it can no longer be ruled out either way.
+
+### Account scoping: resolving, binding, and rejecting a mismatch
+
+Embedding `organization_id`/`integration_id` directly in the idempotency key (revision 2) is **not
+sufficient on its own**, per this review's own explicit finding: Stripe scopes idempotency keys
+*per Stripe account*. Reusing the same key string against a *different* account does not collide at
+all -- there is nothing there to collide with -- it silently creates an independent, unrelated
+object, defeating the entire point of carrying a destination identity forward across a replacement.
+A rotated credential (the integration's configured `STRIPE_TEST_SECRET_KEY` changed to point at a
+different Stripe account, without anything about `integration_id` itself changing) could otherwise
+silently redirect what was meant to be a resumption of operation A's own in-flight dispatch into a
+brand-new, independent object on a completely different account.
+
+**Fixed**: `dispatch_payment_intent` now resolves the Stripe account the *currently configured*
+credential actually belongs to, on every call, via `client.retrieve_account()` -- Stripe's own `GET
+/v1/account` (the account associated with the API key used, confirmed via Stripe's own SDKs; e.g.
+`stripe.Account.retrieve()` with no id resolves to this exact endpoint -- distinct from `GET
+/v1/accounts/{id}`, which looks up an already-known Connect-managed account). This is compared
+against `bound_stripe_account_id`, the account recorded in `stripe_sandbox_dispatch_windows` at
+this destination identity's own first dispatch; a mismatch raises `StripeAccountBindingMismatchError`
+and refuses to dispatch, *before* any create/confirm call is attempted. The binding itself is
+set-once, by the same race-safe mechanism as the timestamp above (same table, same function, same
+proof).
+
+**Live-mode rejection, structural and independent of the existing credential-prefix check**: every
+PaymentIntent object this module touches (create, confirm, retrieve) is checked for
+`livemode == true` (`docs.stripe.com/api/payment_intents/object`: "If the object exists in live
+mode, the value is `true`. If the object exists in test mode, the value is `false`.") and rejected
+outright (`LiveModeObjectRejectedError`) if it ever is -- defense in depth alongside, not instead
+of, `RealStripeClient.__init__`'s own refusal to construct with anything other than an `sk_test_`
+key. The Account object itself has no documented `livemode` field (confirmed via
+`docs.stripe.com/api/accounts/object`), so mode enforcement stays at the credential-prefix and
+PaymentIntent-object layers, not duplicated at the account layer where it would not apply.
 
 ## Evidence retrieval and authentication
 
@@ -285,6 +402,17 @@ proof.
   plain GET keyed on an already-known `pi_...` id, no idempotency key accepted or needed, and no
   documented metadata-search recovery path -- directly informs why recovery from a lost create
   response must retry the same call with the same key, never search by metadata.
+- [The PaymentIntent object](https://docs.stripe.com/api/payment_intents/object) -- confirmed the
+  `livemode` (boolean) field and its exact meaning, grounding this revision's structural live-mode
+  rejection.
+- [The Account object](https://docs.stripe.com/api/accounts/object) -- confirmed `id` as the
+  account's own unique identifier and the absence of a `livemode` field on this object (mode
+  enforcement stays at the credential-prefix and PaymentIntent-object layers instead). `GET
+  /v1/account` (the account associated with the current API key, no id required) is confirmed via
+  Stripe's own SDK behavior (`Account.retrieve()` with no argument resolves to this endpoint, per
+  Stripe's own `stripe-node`/`stripe-python` documentation and maintainer discussion) rather than a
+  single, separately browsable reference page at the current docs.stripe.com structure, which now
+  documents the Connect-oriented `GET /v1/accounts/{id}` form most prominently.
 
 ## Explicitly not done by this plan or its implementation
 

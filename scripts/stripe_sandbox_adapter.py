@@ -112,9 +112,17 @@ from typing import Protocol
 # === Facts verified directly against Stripe's own official documentation,
 # not assumed -- sources recorded here so a later reader can re-check them. ===
 STRIPE_IDEMPOTENCY_KEY_RETENTION_HOURS = 24
-"""https://docs.stripe.com/api/idempotent_requests : 'You can remove keys
-from the system automatically after they're at least 24 hours old. We
-generate a new request if a key is reused after the original is pruned.'"""
+"""A conservative LOWER BOUND, not an exact deletion time. Stripe's own
+docs (https://docs.stripe.com/api/idempotent_requests): 'You can remove
+keys from the system automatically after they're at least 24 hours old.
+We generate a new request if a key is reused after the original is
+pruned.' Stripe guarantees a key survives for AT LEAST this long -- it
+never promises pruning happens exactly at 24 hours, and never promises
+protection ends there either (the key may well still exist well past
+this point). This module treats 24 hours as the EARLIEST moment pruning
+becomes possible and stops relying on the key from exactly that point
+forward -- the safe direction for a guard whose job is to stop trusting
+a cache, never to assert that cache has actually been emptied."""
 
 STRIPE_IDEMPOTENCY_KEY_MAX_LENGTH = 255
 """Same source: 'Idempotency keys are up to 255 characters long.'"""
@@ -231,15 +239,18 @@ def build_metadata(
 
 
 class DispatchWindowExpiredError(Exception):
-    """Raised instead of silently dispatching when Stripe's own real
-    24-hour idempotency-key retention window has already elapsed since
-    the FIRST dispatch attempt for this destination_dispatch_identity
-    chain, AND the outcome is still unresolved. Reusing the same
-    (carried-forward) identity past that window would no longer
-    protect against a duplicate (Stripe: 'we generate a new request if
-    a key is reused after the original is pruned') -- dispatching again
-    would silently start a brand new Stripe-level request under cover
-    of what looks like a safe retry. Blocking here, rather than
+    """Raised instead of silently dispatching once this review's own
+    conservative boundary (STRIPE_IDEMPOTENCY_KEY_RETENTION_HOURS, the
+    earliest point Stripe's real pruning could possibly have happened --
+    see that constant's own docstring for why this is a lower bound, not
+    an exact deletion time) has elapsed since the FIRST dispatch attempt
+    for this destination_dispatch_identity chain, AND the outcome is
+    still unresolved. Past this point, whether Stripe's own cached key
+    still exists is simply not knowable from here -- it may or may not
+    have been pruned -- so this module stops relying on it either way
+    rather than gambling that it has (and dispatching into an
+    unprotected brand-new request) or that it hasn't (and treating
+    silence as proof of anything). Blocking here, rather than
     dispatching anyway, is deliberate: resolving this requires actual
     evidence (a real status lookup if the Stripe object id is known) or
     an explicit, informed human decision, not another automatic
@@ -253,11 +264,12 @@ def ensure_dispatch_window_still_valid(*, first_dispatch_attempted_at: datetime,
         if elapsed >= timedelta(hours=STRIPE_IDEMPOTENCY_KEY_RETENTION_HOURS):
             raise DispatchWindowExpiredError(
                 f"{elapsed} has elapsed since the first dispatch attempt for this destination "
-                f"operation (outcome_status={outcome_status!r}, still unresolved) -- Stripe's own "
-                f"idempotency key has already been pruned; dispatching again would not be protected "
-                f"against creating a duplicate. Resolve via a real status lookup (if the Stripe "
-                f"object id is known) or an explicit, evidence-informed human decision, not another "
-                f"automatic attempt."
+                f"operation (outcome_status={outcome_status!r}, still unresolved) -- past the "
+                f"conservative {STRIPE_IDEMPOTENCY_KEY_RETENTION_HOURS}h boundary, whether Stripe's own "
+                f"idempotency key still exists is not knowable from here either way; dispatching again "
+                f"cannot be assumed protected against creating a duplicate. Resolve via a real status "
+                f"lookup (if the Stripe object id is known) or an explicit, evidence-informed human "
+                f"decision, not another automatic attempt."
             )
 
 
@@ -280,6 +292,66 @@ class StripeClient(Protocol):
         """Read-only. Must never create or confirm anything -- this is
         the one method any status-lookup caller is allowed to use."""
         ...
+    def retrieve_account(self) -> dict:
+        """Read-only. Resolves which Stripe account the CURRENTLY
+        configured credential actually belongs to (Stripe's own `GET
+        /v1/account` -- the account associated with the API key used,
+        no account id needed up front; distinct from `GET /v1/accounts/
+        {id}`, which looks up a Connect-managed account by an id already
+        known). Returns an Account object; only `id` (acct_...) is used
+        by this module. This is what makes 'reject an unexpected account'
+        and 'credential rotation cannot silently redirect an unresolved
+        operation to another account' enforceable at all -- see
+        ensure_account_binding_still_valid and dispatch_payment_intent."""
+        ...
+
+
+class StripeAccountBindingMismatchError(Exception):
+    """Raised instead of silently dispatching when the Stripe account the
+    CURRENTLY configured credential resolves to (via retrieve_account)
+    differs from the account bound to this destination_dispatch_identity
+    at its own first dispatch. Embedding organization_id/integration_id
+    in the idempotency key (see idempotency_key's own docstring) is NOT
+    sufficient on its own here: that only prevents a same-key collision
+    AT ONE Stripe account. Stripe scopes idempotency keys per account, so
+    reusing the same key against a DIFFERENT account does not collide at
+    all -- it silently creates an independent, unrelated object, defeating
+    the entire point of carrying a destination identity forward. A
+    rotated credential that now resolves to a different account must
+    refuse to dispatch, not quietly create a second object elsewhere."""
+
+    def __init__(self, destination_dispatch_identity: str, bound_account_id: str, current_account_id: str):
+        self.destination_dispatch_identity = destination_dispatch_identity
+        self.bound_account_id = bound_account_id
+        self.current_account_id = current_account_id
+        super().__init__(
+            f"destination_dispatch_identity={destination_dispatch_identity!r} was first dispatched under "
+            f"Stripe account {bound_account_id!r}, but the integration's currently configured credential "
+            f"resolves to account {current_account_id!r} -- refusing to dispatch under a different account "
+            f"than the one the original attempt used"
+        )
+
+
+class LiveModeObjectRejectedError(Exception):
+    """Raised if Stripe ever returns an object with `livemode=true`
+    (docs.stripe.com/api/payment_intents/object: 'If the object exists
+    in live mode, the value is `true`. If the object exists in test
+    mode, the value is `false`.'). Structural defense in depth, distinct
+    from and in addition to RealStripeClient's own sk_test_-prefix
+    construction-time check: that check rejects an obviously-live KEY;
+    this rejects a live-mode OBJECT even if it somehow arrived despite a
+    test-mode-looking key (e.g. a misconfigured proxy, a key that
+    changed mode server-side) -- this module never proceeds past seeing
+    one, for any reason."""
+
+
+def _reject_if_livemode(obj: dict) -> dict:
+    if obj.get("livemode") is True:
+        raise LiveModeObjectRejectedError(
+            f"Stripe returned a LIVE-mode object (id={obj.get('id')!r}) despite a test-mode-only "
+            f"credential -- refusing to proceed with it for any reason"
+        )
+    return obj
 
 
 class RealStripeClient:
@@ -317,11 +389,11 @@ class RealStripeClient:
 
     def create_payment_intent(self, *, idempotency_key: str, amount: int, currency: str, metadata: dict) -> dict:
         data = {"amount": amount, "currency": currency, "metadata": metadata}
-        return self._request("POST", "/payment_intents", idempotency_key=idempotency_key, data=data)
+        return _reject_if_livemode(self._request("POST", "/payment_intents", idempotency_key=idempotency_key, data=data))
 
     def confirm_payment_intent(self, *, payment_intent_id: str, idempotency_key: str, payment_method: str, metadata: dict) -> dict:
         data = {"payment_method": payment_method, "metadata": metadata}
-        return self._request("POST", f"/payment_intents/{payment_intent_id}/confirm", idempotency_key=idempotency_key, data=data)
+        return _reject_if_livemode(self._request("POST", f"/payment_intents/{payment_intent_id}/confirm", idempotency_key=idempotency_key, data=data))
 
     def retrieve_payment_intent(self, *, payment_intent_id: str) -> dict:
         # GET is idempotent by Stripe's own definition -- no Idempotency-Key
@@ -331,7 +403,19 @@ class RealStripeClient:
         # payment_intents/retrieve: a plain GET, no idempotency semantics,
         # requires already knowing the PaymentIntent id (no metadata-search
         # recovery path exists at this endpoint).
-        return self._request("GET", f"/payment_intents/{payment_intent_id}")
+        return _reject_if_livemode(self._request("GET", f"/payment_intents/{payment_intent_id}"))
+
+    def retrieve_account(self) -> dict:
+        # GET /v1/account (no id in the path) -- the account associated
+        # with the API key used, confirmed via Stripe's own SDKs (e.g.
+        # stripe-python/stripe-node's Account.retrieve() with no
+        # argument resolves to this exact endpoint); distinct from
+        # GET /v1/accounts/{id}, which looks up an already-known
+        # Connect-managed account's id. The Account object itself has no
+        # `livemode` field (docs.stripe.com/api/accounts/object) -- mode
+        # is enforced at the credential-prefix level (__init__ above),
+        # not checked again here.
+        return self._request("GET", "/account")
 
 
 def _flatten_stripe_params(data: dict, prefix: str = "") -> dict:
@@ -388,9 +472,11 @@ class FakeStripeBackend:
       - A concurrent request under the same still-executing key ->
         409 (docs.stripe.com/error-low-level#idempotency, HTTP status
         table: 409 Conflict).
-      - Key pruning after an injectable clock passes the real 24-hour
-        retention window, so tests can exercise expiry without waiting
-        24 real hours.
+      - Key pruning after an injectable clock passes this module's own
+        conservative, at-least-24-hour retention boundary (see
+        STRIPE_IDEMPOTENCY_KEY_RETENTION_HOURS's own docstring for why
+        this is a lower bound, never an exact deletion time), so tests
+        can exercise expiry without waiting 24 real hours.
       - A genuine 'lost response': the underlying mutation actually
         executes and its result is cached (exactly as Stripe documents),
         but the ORIGINAL caller receives a simulated network error
@@ -406,7 +492,7 @@ class FakeStripeBackend:
     test choose succeeded / declined / requires_action / no_response
     independently of the idempotency mechanics above."""
 
-    def __init__(self, *, clock: "_Clock | None" = None, default_outcome: str = "succeeded"):
+    def __init__(self, *, clock: "_Clock | None" = None, default_outcome: str = "succeeded", account_id: str = "acct_sim_default"):
         self._clock = clock or _Clock()
         self._lock = threading.Lock()
         self._cache: dict[str, _CachedResult] = {}
@@ -415,6 +501,30 @@ class FakeStripeBackend:
         self._outcomes: dict[str, str] = {}  # payment_intent_id -> outcome
         self._default_outcome = default_outcome
         self._drop_response_once_keys: set[str] = set()
+        self._account_id = account_id
+        self._force_livemode_once = False
+
+    def set_account_id(self, account_id: str) -> None:
+        """Test-only: simulates a credential rotation that now resolves
+        to a DIFFERENT Stripe account -- the exact scenario
+        ensure_account_binding_still_valid / StripeAccountBindingMismatchError
+        exists to catch. retrieve_account() reflects this new value
+        immediately; whatever was bound to an existing destination_
+        dispatch_identity at its own first dispatch is untouched."""
+        self._account_id = account_id
+
+    def force_livemode_response_once(self) -> None:
+        """Test-only: the very next create/confirm response (fresh
+        execution, not a cache hit) comes back with livemode=True,
+        simulating a live-mode object arriving despite a test-mode-
+        looking credential -- exercises LiveModeObjectRejectedError's
+        own defense-in-depth independently of RealStripeClient's
+        key-prefix check, which this local simulation never goes
+        through at all."""
+        self._force_livemode_once = True
+
+    def retrieve_account(self) -> dict:
+        return {"id": self._account_id, "object": "account"}
 
     def set_default_outcome(self, outcome: str) -> None:
         """Test-only configuration: what ANY PaymentIntent resolves to
@@ -488,9 +598,14 @@ class FakeStripeBackend:
     def create_payment_intent(self, *, idempotency_key: str, amount: int, currency: str, metadata: dict) -> dict:
         def _do():
             pi_id = f"pi_sim_{len(self._payment_intents) + 1:06d}"
+            livemode = False
+            with self._lock:
+                if self._force_livemode_once:
+                    self._force_livemode_once = False
+                    livemode = True
             obj = {
                 "id": pi_id, "object": "payment_intent", "amount": amount, "currency": currency,
-                "status": "requires_payment_method", "metadata": dict(metadata), "livemode": False,
+                "status": "requires_payment_method", "metadata": dict(metadata), "livemode": livemode,
             }
             self._payment_intents[pi_id] = obj
             return dict(obj)
@@ -502,7 +617,7 @@ class FakeStripeBackend:
         # and that difference must never itself trigger a simulated
         # parameter-mismatch error when they otherwise share a carried-
         # forward destination_dispatch_identity and therefore the same key.
-        return self._cached_or_execute(idempotency_key, {"amount": amount, "currency": currency}, _do)
+        return _reject_if_livemode(self._cached_or_execute(idempotency_key, {"amount": amount, "currency": currency}, _do))
 
     def confirm_payment_intent(self, *, payment_intent_id: str, idempotency_key: str, payment_method: str, metadata: dict) -> dict:
         def _do():
@@ -521,8 +636,12 @@ class FakeStripeBackend:
                 obj["status"] = "requires_action"
             else:
                 raise ValueError(f"unknown simulated outcome: {outcome!r}")
+            with self._lock:
+                if self._force_livemode_once:
+                    self._force_livemode_once = False
+                    obj["livemode"] = True
             return dict(obj)
-        return self._cached_or_execute(idempotency_key, {"payment_intent_id": payment_intent_id, "payment_method": payment_method}, _do)
+        return _reject_if_livemode(self._cached_or_execute(idempotency_key, {"payment_intent_id": payment_intent_id, "payment_method": payment_method}, _do))
 
     def retrieve_payment_intent(self, *, payment_intent_id: str) -> dict:
         # Read-only by construction: this method never touches _cache,
@@ -531,13 +650,13 @@ class FakeStripeBackend:
         obj = self._payment_intents.get(payment_intent_id)
         if obj is None:
             raise StripeClientError(404, {"error": {"type": "invalid_request_error", "message": "No such payment_intent"}})
-        return dict(obj)
+        return _reject_if_livemode(dict(obj))
 
 
 class _Clock:
     """Injectable wall-clock, real by default, so tests can simulate
-    the passage of Stripe's own 24-hour idempotency-key retention
-    window without a real 24-hour wait."""
+    the passage of this module's own conservative, at-least-24-hour
+    retention boundary without a real 24-hour wait."""
 
     def __init__(self):
         self._offset = 0.0
@@ -623,16 +742,25 @@ def dispatch_payment_intent(
     client: StripeClient, *, organization_id: str, integration_id: str,
     destination_dispatch_identity: str, business_operation_identity_id: str, operation_id: str,
     capability_nonce: str, amount: int, currency: str, payment_method: str,
-    first_dispatch_attempted_at: datetime, outcome_status: str, now: datetime | None = None,
+    first_dispatch_attempted_at: datetime, outcome_status: str, bound_stripe_account_id: str, now: datetime | None = None,
 ) -> DispatchResult:
     """The ONE effectful path in this module. Checks the dispatch
     window FIRST (raises DispatchWindowExpiredError rather than
     silently proceeding if it has expired with the outcome still
-    unresolved), then create (idempotent, may resume an existing
-    object) and confirm (only if that object is still pending). Never
-    calls retrieve_payment_intent -- status lookup is a structurally
-    separate function (see below)."""
+    unresolved), THEN resolves the account the currently configured
+    credential actually belongs to and refuses to proceed if it differs
+    from `bound_stripe_account_id` (the account recorded at this
+    destination identity's own first dispatch -- see
+    StripeAccountBindingMismatchError's own docstring for why embedding
+    organization_id/integration_id in the idempotency key alone is not
+    sufficient to catch this). Only once both checks pass: create
+    (idempotent, may resume an existing object) and confirm (only if
+    that object is still pending). Never calls retrieve_payment_intent --
+    status lookup is a structurally separate function (see below)."""
     ensure_dispatch_window_still_valid(first_dispatch_attempted_at=first_dispatch_attempted_at, outcome_status=outcome_status, now=now)
+    current_account_id = client.retrieve_account()["id"]
+    if current_account_id != bound_stripe_account_id:
+        raise StripeAccountBindingMismatchError(destination_dispatch_identity, bound_stripe_account_id, current_account_id)
     created = create_or_resume_payment_intent(
         client, organization_id=organization_id, integration_id=integration_id,
         destination_dispatch_identity=destination_dispatch_identity,

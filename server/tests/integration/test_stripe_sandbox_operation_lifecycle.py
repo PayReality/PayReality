@@ -38,6 +38,7 @@ from app.config import settings
 from app.db.models import (
     Agent, Base, BusinessOperationIdentity, CapabilityToken, Decision, Intent, Operation, Organization, Principal,
 )
+import app.db.stripe_sandbox_models  # noqa: F401 -- registers StripeSandboxDispatchWindow on Base.metadata
 from app.domain.auth.signature import verify_request_signature
 from app.domain.decision import engine as decision_engine
 from app.domain.evidence.signing import public_key_b64_from_signing_key_b64
@@ -56,6 +57,7 @@ from app.services import (
     operation_service,
     runtime_policy_service as policy_svc,
     signing_key_service,
+    stripe_sandbox_dispatch_window_service as window_service,
 )
 
 settings.evidence_signing_key_b64 = "1xq9xsxyr3A1bfh7IJGO3Rd32FvkAhr5AnlnjWZlbuI="
@@ -266,25 +268,41 @@ def _destination_identity(db, operation) -> str:
     return adapter.destination_dispatch_identity(str(operation.id), _chain(db, operation))
 
 
-def _first_dispatch_attempted_at(db, operation):
-    """The real system has no explicit 'first dispatch attempted at'
-    timestamp today -- this uses the ROOT operation's own created_at
-    (the operation whose id equals the computed destination_dispatch_
-    identity) as a reasonable, disclosed proxy, exactly as documented in
-    STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md."""
-    root_id = _destination_identity(db, operation)
-    root = db.get(Operation, uuid.UUID(root_id))
-    return root.created_at.replace(tzinfo=timezone.utc) if root.created_at.tzinfo is None else root.created_at
+def _dispatch_window(db, org, operation, backend, *, now=None):
+    """Durable, set-once persistence (app.services.stripe_sandbox_
+    dispatch_window_service) for the REAL first-dispatch moment and
+    bound Stripe account for this operation's own destination_dispatch_
+    identity -- deliberately NOT Operation.created_at (set at issuance,
+    before an Agent has necessarily even consumed the Capability, let
+    alone called the destination -- anchoring the window there is
+    anchored to capability issuance, not first dispatch) and NOT
+    Operation.updated_at (bumped by unrelated later changes). The FIRST
+    call for a given destination identity durably records whatever
+    `now`/the backend's current account resolve to; every later call
+    (a genuine retry, a replacement carrying the same identity forward,
+    or a concurrent racer) reads back exactly that, ignoring its own
+    `now`/account entirely -- see get_or_record_dispatch_window's own
+    docstring for why this is race-safe, not merely sequential."""
+    root_id = uuid.UUID(_destination_identity(db, operation))
+    current_account_id = backend.retrieve_account()["id"]
+    # get_or_record_dispatch_window itself normalizes the returned
+    # timestamp to timezone-aware UTC regardless of backend -- see its
+    # own docstring.
+    return window_service.get_or_record_dispatch_window(
+        db, org.id, root_id, stripe_account_id=current_account_id, attempted_at=now,
+    )
 
 
 def _dispatch_and_confirm(backend, org, integration, operation, nonce, db, *, amount=5000, payment_method="pm_card_visa", now=None):
     boi = db.get(BusinessOperationIdentity, operation.business_operation_identity_id)
+    window = _dispatch_window(db, org, operation, backend, now=now)
     return adapter.dispatch_payment_intent(
         backend, organization_id=str(org.id), integration_id=str(integration.id),
         destination_dispatch_identity=_destination_identity(db, operation),
         business_operation_identity_id=str(boi.id), operation_id=str(operation.id),
         capability_nonce=nonce, amount=amount, currency="usd", payment_method=payment_method,
-        first_dispatch_attempted_at=_first_dispatch_attempted_at(db, operation),
+        first_dispatch_attempted_at=window.first_dispatch_attempted_at,
+        bound_stripe_account_id=window.bound_stripe_account_id,
         outcome_status=operation.outcome_status, now=now,
     )
 
@@ -752,10 +770,17 @@ def test_expired_protection_with_unresolved_outcome_blocks_automatic_recreation(
 
     # This review's own new requirement: the real orchestration function
     # must not even attempt to dispatch past this window while unresolved.
-    now_past_window = _first_dispatch_attempted_at(db, operation) + timedelta(hours=25)
+    # Persist the window's own real anchor at a point 25 (real) hours in
+    # the past -- "persist the original timestamp before dispatch" --
+    # distinct from the FakeStripeBackend-internal clock advance above,
+    # which only exercises Stripe's own simulated cache eviction, not
+    # this module's own durable window bookkeeping.
+    original_attempt_at = datetime.now(timezone.utc) - timedelta(hours=25)
+    window = _dispatch_window(db, org, operation, backend, now=original_attempt_at)
+    assert window.first_dispatch_attempted_at == original_attempt_at
     pre_existing_count = len(backend._payment_intents)
     with pytest.raises(adapter.DispatchWindowExpiredError):
-        _dispatch_and_confirm(backend, org, integration, operation, nonce, db, now=now_past_window)
+        _dispatch_and_confirm(backend, org, integration, operation, nonce, db)
     assert len(backend._payment_intents) == pre_existing_count, "blocked before any further Stripe-side call was even attempted"
 
 
@@ -786,15 +811,17 @@ def test_expired_window_does_not_block_once_outcome_is_resolved(db, opa_url):
     db.refresh(operation)
     assert operation.outcome_status == "TERMINALLY_NOT_COMMITTED"
 
-    now_past_window = _first_dispatch_attempted_at(db, operation) + timedelta(hours=25)
+    window = _dispatch_window(db, org, operation, backend)  # already persisted by the dispatch above -- returns it unchanged
+    now_past_window = window.first_dispatch_attempted_at + timedelta(hours=25)
     # No exception: the guard only blocks an UNRESOLVED outcome past the window.
     adapter.ensure_dispatch_window_still_valid(
-        first_dispatch_attempted_at=_first_dispatch_attempted_at(db, operation),
+        first_dispatch_attempted_at=window.first_dispatch_attempted_at,
         outcome_status=operation.outcome_status, now=now_past_window,
     )
 
 
-# === 10. Wrong account/environment/tenant cannot reuse or redirect an identity ===
+# === 10. Wrong account/environment/tenant cannot reuse or redirect an identity,
+# the dispatch window's own real anchoring, and concurrent-safe persistence ======
 
 
 def test_wrong_tenant_cannot_reuse_or_redirect_an_identity():
@@ -830,6 +857,162 @@ def test_wrong_tenant_cannot_reuse_or_redirect_an_identity():
     # rather than resuming or redirecting org A's.
     other = backend.create_payment_intent(idempotency_key=key_org_b, amount=5000, currency="usd", metadata={})
     assert other["id"] != real["id"]
+
+
+def test_wrong_account_credential_rejected_not_silently_redirected(db, opa_url):
+    """The property the test above proves (org_id/integration_id
+    embedded directly in the key) is NOT sufficient on its own, per this
+    review's own explicit finding: Stripe scopes idempotency keys PER
+    ACCOUNT, so reusing the same key against a DIFFERENT account does
+    not collide at all -- it silently creates an independent, unrelated
+    object, defeating the entire point of carrying a destination
+    identity forward. Reproduces the real scenario: operation A's own
+    create response is lost (Stripe processed it, but PayReality never
+    learned the pi_id); a human authorizes a replacement despite the
+    unresolved outcome; the integration's configured Stripe credential
+    is then rotated to a DIFFERENT account before the replacement
+    dispatches. dispatch_payment_intent's own live retrieve_account()
+    check must refuse this outright, not silently create a second,
+    independent object on the new account."""
+    org = _org(db)
+    identity, signing_key, _cv, binding, agent, integration, principal = _scenario(db, org.id, opa_url)
+    _intent_a, _decision_a, operation_a, _consumed_a, nonce_a = _authorize_and_consume(
+        db, org.id, identity, binding, agent, principal.name,
+        business_operation_id="STRIPE-OP-010B", external_operation_id="ext-010b-a",
+    )
+    backend = adapter.FakeStripeBackend()  # default account_id="acct_sim_default"
+    create_key_a = adapter.idempotency_key(
+        organization_id=str(org.id), integration_id=str(integration.id),
+        destination_dispatch_identity=_destination_identity(db, operation_a), operation_kind=adapter.OPERATION_KIND_CREATE,
+    )
+    backend.drop_next_response_for_key(create_key_a)
+    with pytest.raises(TimeoutError):
+        _dispatch_and_confirm(backend, org, integration, operation_a, nonce_a, db)
+    db.refresh(operation_a)
+    assert operation_a.outcome_status == "UNKNOWN"
+
+    window = _dispatch_window(db, org, operation_a, backend)
+    assert window.bound_stripe_account_id == "acct_sim_default"
+
+    operation_service.record_destination_duplicate_prevention_guarantee(
+        db, org.id, operation_a.id, destination=DESTINATION,
+        scope_description="wrong-account-credential regression test",
+        retention_until=datetime.now(timezone.utc) + timedelta(hours=1), documented_by="governance-admin@example.com",
+    )
+    _intent_b, _decision_b, operation_b, _consumed_b, nonce_b = _authorize_and_consume(
+        db, org.id, identity, binding, agent, principal.name,
+        business_operation_id="STRIPE-OP-010B", external_operation_id="ext-010b-b",
+    )
+
+    # Simulate a credential rotation: the integration's configured
+    # Stripe credential now resolves to a DIFFERENT account. The durably
+    # bound account (acct_sim_default, recorded at A's own first
+    # dispatch) is untouched -- only what retrieve_account() resolves to
+    # NOW has changed.
+    backend.set_account_id("acct_rotated_different_account")
+    pre_existing_count = len(backend._payment_intents)
+
+    with pytest.raises(adapter.StripeAccountBindingMismatchError) as exc_info:
+        _dispatch_and_confirm(backend, org, integration, operation_b, nonce_b, db)
+    assert exc_info.value.bound_account_id == "acct_sim_default"
+    assert exc_info.value.current_account_id == "acct_rotated_different_account"
+    assert len(backend._payment_intents) == pre_existing_count, "refused before any further Stripe-side call was even attempted"
+
+
+def test_live_mode_object_rejected():
+    """Structural defense in depth, independent of and in addition to
+    RealStripeClient's own sk_test_-prefix construction-time check: even
+    if a live-mode object somehow arrived (a misconfigured proxy, a key
+    that changed mode server-side), this module refuses to proceed with
+    it for any reason, rather than only ever checking the credential's
+    own prefix once at construction time."""
+    backend = adapter.FakeStripeBackend()
+    backend.force_livemode_response_once()
+    with pytest.raises(adapter.LiveModeObjectRejectedError):
+        backend.create_payment_intent(idempotency_key="k-livemode-test", amount=5000, currency="usd", metadata={})
+
+
+def test_dispatch_window_anchored_to_first_dispatch_not_issuance_or_replacement(db, opa_url):
+    """The window's own anchor must be the REAL first-dispatch moment --
+    not Operation.created_at (set at issuance/capability-creation time,
+    which this test deliberately lets real time elapse past before ever
+    dispatching) and not a later replacement's own creation time either."""
+    org = _org(db)
+    identity, signing_key, _cv, binding, agent, integration, principal = _scenario(db, org.id, opa_url)
+    _intent, _decision, operation, consumed, nonce = _authorize_and_consume(
+        db, org.id, identity, binding, agent, principal.name,
+        business_operation_id="STRIPE-OP-010C", external_operation_id="ext-010c-a",
+    )
+    issuance_time = operation.created_at.replace(tzinfo=timezone.utc) if operation.created_at.tzinfo is None else operation.created_at
+
+    backend = adapter.FakeStripeBackend()
+    # A real gap between authorization (Operation created, Capability
+    # consumed) and the Adapter actually dispatching -- exactly the gap
+    # anchoring on capability issuance would miss entirely.
+    real_first_dispatch_at = issuance_time + timedelta(hours=2)
+    _dispatch_and_confirm(backend, org, integration, operation, nonce, db, now=real_first_dispatch_at)
+
+    window = _dispatch_window(db, org, operation, backend)
+    assert window.first_dispatch_attempted_at == real_first_dispatch_at
+    assert window.first_dispatch_attempted_at != issuance_time, "must not be anchored to capability issuance (Operation.created_at)"
+
+    # Carried forward across a replacement authorized via a guarantee --
+    # NOT reset to the replacement's own (later) creation time.
+    operation_service.record_destination_duplicate_prevention_guarantee(
+        db, org.id, operation.id, destination=DESTINATION,
+        scope_description="window-anchoring regression test",
+        retention_until=datetime.now(timezone.utc) + timedelta(hours=1), documented_by="governance-admin@example.com",
+    )
+    _intent_b, _decision_b, operation_b, _consumed_b, nonce_b = _authorize_and_consume(
+        db, org.id, identity, binding, agent, principal.name,
+        business_operation_id="STRIPE-OP-010C", external_operation_id="ext-010c-b",
+    )
+    assert operation_b.id != operation.id
+    much_later = real_first_dispatch_at + timedelta(hours=1)
+    window_b = _dispatch_window(db, org, operation_b, backend, now=much_later)
+    assert window_b.first_dispatch_attempted_at == real_first_dispatch_at, (
+        "the replacement must read back the SAME original anchor, not a fresh one from its own (later) attempt"
+    )
+
+
+def test_concurrent_first_dispatch_cannot_reset_the_window(db, opa_url):
+    """Genuine multi-thread concurrency against this suite's own SQLite
+    in-memory `db` fixture is not meaningful here: SQLAlchemy's
+    SingletonThreadPool gives each THREAD a private, isolated :memory:
+    database (confirmed directly this session -- a second thread's
+    connection cannot even see a table the first thread created), so a
+    real race could never actually contend for the same row. Genuine,
+    independent-connection concurrency for get_or_record_dispatch_window
+    is instead proven against a REAL Postgres database as a standalone
+    script (see this review's own final report for the exact command
+    and output: two real threads, each its own SQLAlchemy session bound
+    to a real Postgres engine -- which has no such per-thread isolation --
+    synchronized on a barrier to maximize actual overlap, racing to
+    record the same destination_dispatch_identity; exactly one row
+    persisted, the loser read back the winner's own value unchanged).
+
+    This test instead proves the same function's own set-once semantics
+    on this session's single connection: a second call for an identity
+    that already has a window ignores its own (different) attempted_at/
+    account entirely, returning the first caller's value unchanged --
+    the property the real race above relies on to be safe."""
+    org = _org(db)
+    identity, signing_key, _cv, binding, agent, integration, principal = _scenario(db, org.id, opa_url)
+    _intent, _decision, operation, consumed, nonce = _authorize_and_consume(
+        db, org.id, identity, binding, agent, principal.name,
+        business_operation_id="STRIPE-OP-010D", external_operation_id="ext-010d",
+    )
+    root_id = uuid.UUID(_destination_identity(db, operation))
+
+    first_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    first = window_service.get_or_record_dispatch_window(db, org.id, root_id, stripe_account_id="acct_first", attempted_at=first_at)
+    assert first.first_dispatch_attempted_at == first_at
+    assert first.bound_stripe_account_id == "acct_first"
+
+    later_at = first_at + timedelta(hours=5)
+    second = window_service.get_or_record_dispatch_window(db, org.id, root_id, stripe_account_id="acct_second_should_be_ignored", attempted_at=later_at)
+    assert second.first_dispatch_attempted_at == first_at
+    assert second.bound_stripe_account_id == "acct_first", "a later caller's own account must never overwrite the first-recorded binding"
 
 
 # === 11. Status lookup returning an unresolved result =============================

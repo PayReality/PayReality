@@ -77,12 +77,20 @@ assurance=REPORTED_UNVERIFIED`) but never promoted to a terminal `outcome_status
 
 ## Prior validation: full suite, clean worktree
 
-**1,147 passed, 0 failed** -- this branch's own committed test suite only, run from an isolated
-git worktree containing exclusively this branch's committed history (excluding an unrelated,
-uncommitted branch's own ~90 tests that inflated an earlier, informal count), at commit `f612e2f`,
-2026-09-30. Cited as prior evidence, not re-run for this publication: no production code,
-migration, or test file has changed since that commit (confirmed: `git diff --name-only
-f612e2f..HEAD` touches only documentation, one new utility script, and regenerated trace data).
+**1,166 passed, 0 failed (1 confirmed-flaky timeout, not reproducing in isolation)** -- re-run this
+pass specifically because production code changed (the new `stripe_sandbox_dispatch_windows` table,
+its model and service module, and the migration that creates it -- see "Dispatch window anchoring"
+in `STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`): run from a freshly re-synced isolated git worktree
+containing exclusively this branch's own committed history, at commit `43388fb` plus this session's
+own uncommitted additions, 2026-10-01. One test (`test_simulator_warns_instead_of_silently_guessing_
+when_no_counterparty_given`) failed under the full run with an OPA HTTP timeout and passed cleanly
+when re-run in isolation immediately after -- an environmental flake under the full run's resource
+contention (an ephemeral OPA server per test), unrelated to anything in this pass (that test touches
+policy simulation, not Operations/dispatch windows), not a real regression.
+
+Superseded citation, no longer the operative baseline: **1,147 passed, 0 failed** at commit
+`f612e2f`, 2026-09-30 (this branch's own committed history only, excluding an unrelated,
+uncommitted branch's own ~90 tests that inflated an earlier, informal count).
 
 ## Subsequent focused reproduction checks
 
@@ -96,16 +104,19 @@ all passed.
 ## Remaining limitations and outstanding work
 
 - Not yet validated against a real destination system. A Stripe test-mode sandbox adapter
-  (`scripts/stripe_sandbox_adapter.py`) and its local-simulation test suite (15 tests,
+  (`scripts/stripe_sandbox_adapter.py`) and its local-simulation test suite (19 tests,
   `test_stripe_sandbox_operation_lifecycle.py`) are now implemented and passing, including a
   revised identity/idempotency-key mapping (`STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`) that fixes a
   real duplicate-effect gap found in an earlier pass's own "corrected" design -- a replacement
   authorized despite an unresolved (not proven-failed) original now correctly carries the original
-  destination identity forward instead of minting an unrelated one, closing the one scenario where
-  the earlier design could still create a duplicate PaymentIntent. No real Stripe API call has been
-  made or attempted anywhere in this work: no test-mode credential was ever configured in this
-  environment, and the adapter refuses to reach Stripe without both a real key and an explicit
-  execution switch. Real-Stripe validation remains outstanding.
+  destination identity forward instead of minting an unrelated one -- plus (revision 3) a durable,
+  race-safe dispatch-window anchor (proven against a real Postgres database, not just SQLite) fixing
+  an anchoring gap (the window was measured from capability-issuance time, not the real first
+  dispatch), and a live Stripe account-binding check closing a gap where a rotated credential could
+  have silently redirected an unresolved operation to a different Stripe account. No real Stripe API
+  call has been made or attempted anywhere in this work: no test-mode credential was ever configured
+  in this environment, and the adapter refuses to reach Stripe without both a real key and an
+  explicit execution switch. Real-Stripe validation remains outstanding.
 - No shutdown cleanup of the shared OPA HTTP client (disclosed, low-risk, unrelated to this
   feature's own correctness -- `OPA_TIMEOUT_RELIABILITY.md`).
 - The Adapter-mediated router endpoint's own signature-verification dependency has never been
