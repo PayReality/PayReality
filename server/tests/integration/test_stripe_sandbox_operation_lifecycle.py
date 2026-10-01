@@ -5,10 +5,17 @@ service-layer code, a real Ed25519 signature genuinely generated and
 verified for the signed-Adapter reporting path) and a LOCAL SIMULATION
 of Stripe (FakeStripeBackend, in `stripe_sandbox_adapter.py` itself --
 never a real network call, never presented as a real Stripe test-mode
-run). A test requiring a real Stripe test-mode credential would be a
-separate, explicitly-labeled, skipped-unless-configured test; none
-exist in this file, since test-mode access was never confirmed for
-this session (see this review's own final report).
+run), for every test except one.
+
+The one exception, clearly labeled and skipped unless real test-mode
+credentials are actually configured (`test_real_stripe_payment_intent_
+creation_only_against_live_test_mode_api`, in its own section at the
+end of this file): the ONLY test in this file that makes a genuine
+network call to Stripe's own test-mode API, scoped exactly to this
+review's own explicit authorization -- PaymentIntent CREATION ONLY, no
+automatic confirmation, capture, or settlement claim. See this review's
+own final report for whether it actually ran in this session and what
+it found.
 
 Imports the adapter module directly via importlib (no existing
 precedent for importing from scripts/ in this test suite otherwise --
@@ -27,6 +34,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from dotenv import load_dotenv
 import nacl.signing
 import pytest
 from sqlalchemy import create_engine, select
@@ -62,6 +70,17 @@ from app.services import (
 
 settings.evidence_signing_key_b64 = "1xq9xsxyr3A1bfh7IJGO3Rd32FvkAhr5AnlnjWZlbuI="
 decision_engine.evaluate.__defaults__ = (5000,)
+
+# Loads server/.env into the REAL process environment (never printed,
+# never read by this module beyond this call) -- the only mechanism
+# that makes STRIPE_TEST_SECRET_KEY/STRIPE_SANDBOX_EXECUTE, if a
+# developer has genuinely configured them locally, visible to os.
+# environ at all; load_dotenv's own default never overrides a value
+# already present in the real environment. A no-op, returning False, if
+# the file does not exist -- this is the normal case in CI/most
+# developer environments, and every other test in this file is wholly
+# unaffected either way.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[3] / "scripts" / "stripe_sandbox_adapter.py"
 _spec = importlib.util.spec_from_file_location("stripe_sandbox_adapter", _SCRIPT_PATH)
@@ -580,7 +599,7 @@ def test_concurrent_attempts_at_the_same_idempotency_key_never_both_mutate(db, o
     created = backend.create_payment_intent(
         idempotency_key=adapter.idempotency_key(organization_id=str(org.id), integration_id=str(integration.id), destination_dispatch_identity=destination_identity, operation_kind=adapter.OPERATION_KIND_CREATE),
         amount=5000, currency="usd",
-        metadata=adapter.build_metadata(organization_id=str(org.id), integration_id=str(integration.id), business_operation_identity_id=str(boi.id), destination_dispatch_identity=destination_identity, operation_id=str(operation.id), capability_nonce=nonce),
+        metadata=adapter.build_metadata(organization_id=str(org.id), integration_id=str(integration.id), business_operation_identity_id=str(boi.id), destination_dispatch_identity=destination_identity),
     )
     backend.set_outcome(created["id"], "succeeded")
 
@@ -637,7 +656,7 @@ def test_changed_material_parameters_rejected_not_silently_processed(db, opa_url
     backend = adapter.FakeStripeBackend()
     boi = db.get(BusinessOperationIdentity, operation.business_operation_identity_id)
     destination_identity = _destination_identity(db, operation)
-    metadata = adapter.build_metadata(organization_id=str(org.id), integration_id=str(integration.id), business_operation_identity_id=str(boi.id), destination_dispatch_identity=destination_identity, operation_id=str(operation.id), capability_nonce=nonce)
+    metadata = adapter.build_metadata(organization_id=str(org.id), integration_id=str(integration.id), business_operation_identity_id=str(boi.id), destination_dispatch_identity=destination_identity)
     key = adapter.idempotency_key(organization_id=str(org.id), integration_id=str(integration.id), destination_dispatch_identity=destination_identity, operation_kind=adapter.OPERATION_KIND_CREATE)
     backend.create_payment_intent(idempotency_key=key, amount=5000, currency="usd", metadata=metadata)
     with pytest.raises(adapter.StripeClientError) as exc_info:
@@ -753,7 +772,7 @@ def test_expired_protection_with_unresolved_outcome_blocks_automatic_recreation(
     backend = adapter.FakeStripeBackend()
     boi = db.get(BusinessOperationIdentity, operation.business_operation_identity_id)
     destination_identity = _destination_identity(db, operation)
-    metadata = adapter.build_metadata(organization_id=str(org.id), integration_id=str(integration.id), business_operation_identity_id=str(boi.id), destination_dispatch_identity=destination_identity, operation_id=str(operation.id), capability_nonce=nonce)
+    metadata = adapter.build_metadata(organization_id=str(org.id), integration_id=str(integration.id), business_operation_identity_id=str(boi.id), destination_dispatch_identity=destination_identity)
     key = adapter.idempotency_key(organization_id=str(org.id), integration_id=str(integration.id), destination_dispatch_identity=destination_identity, operation_kind=adapter.OPERATION_KIND_CREATE)
     first = backend.create_payment_intent(idempotency_key=key, amount=5000, currency="usd", metadata=metadata)
 
@@ -1103,11 +1122,12 @@ def test_distinct_operations_with_identical_material_fields_do_not_collide(db, o
 def test_real_stripe_client_requires_explicit_test_mode_key_and_execution_switch(monkeypatch):
     """No real Stripe call is ever made in this file. This test only
     confirms the double-gate itself: build_real_client_from_env returns
-    None (never a client) unless BOTH a real-looking test-mode secret
-    key AND the explicit execution switch are present, and
+    None (never a client) unless BOTH a real-looking test-mode
+    credential AND the explicit execution switch are present, and
     RealStripeClient refuses construction outright with anything that
-    isn't an sk_test_ key -- rejecting a live-mode key even if one were
-    (incorrectly) supplied."""
+    isn't test-mode -- rejecting a live-mode key even if one were
+    (incorrectly) supplied, and a publishable key (never valid for
+    server-side use at all)."""
     monkeypatch.delenv("STRIPE_TEST_SECRET_KEY", raising=False)
     monkeypatch.delenv("STRIPE_SANDBOX_EXECUTE", raising=False)
     assert adapter.build_real_client_from_env() is None
@@ -1121,3 +1141,149 @@ def test_real_stripe_client_requires_explicit_test_mode_key_and_execution_switch
 
     with pytest.raises(ValueError, match="live"):
         adapter.RealStripeClient("sk_live_this_must_be_rejected")
+    with pytest.raises(ValueError, match="live"):
+        adapter.RealStripeClient("rk_live_this_must_be_rejected")
+    with pytest.raises(ValueError):
+        adapter.RealStripeClient("pk_test_a_publishable_key_is_never_valid_here")
+
+
+def test_real_stripe_client_accepts_a_restricted_test_mode_key(monkeypatch):
+    """A Stripe RESTRICTED key (rk_test_...) is a legitimate, and per
+    Stripe's own current guidance, RECOMMENDED credential type for
+    server-side use (docs.stripe.com/keys: 'We recommend generating
+    restricted API keys for your server-side code to limit the damage...
+    if your keys are ever exposed') -- confirmed accepted here, not just
+    the older, unrestricted sk_test_ full secret key."""
+    monkeypatch.setenv("STRIPE_TEST_SECRET_KEY", "rk_test_fake_restricted_key_for_this_assertion_only")
+    monkeypatch.setenv("STRIPE_SANDBOX_EXECUTE", "true")
+    client = adapter.build_real_client_from_env()
+    assert isinstance(client, adapter.RealStripeClient)
+
+
+_REAL_STRIPE_CREDENTIALS_AVAILABLE = adapter.build_real_client_from_env() is not None
+
+
+@pytest.mark.skipif(
+    not _REAL_STRIPE_CREDENTIALS_AVAILABLE,
+    reason="STRIPE_TEST_SECRET_KEY and STRIPE_SANDBOX_EXECUTE=true are not both set -- "
+           "real Stripe test-mode execution is not configured in this environment",
+)
+def test_real_stripe_payment_intent_creation_only_against_live_test_mode_api(db, opa_url):
+    """THE ONLY test in this entire file that makes a genuine network
+    call to Stripe. Skipped (never faked, never substituted with
+    simulation) unless a real test-mode credential is actually
+    configured -- see this review's own final report for whether it ran
+    in this session.
+
+    Scoped EXACTLY to this review's own explicit, narrow authorization:
+    PaymentIntent CREATION ONLY. Calls create_or_resume_payment_intent
+    and retrieve_status directly -- NEVER confirm_payment_intent_if_
+    pending or the full dispatch_payment_intent orchestration (which
+    would also confirm). No payment is ever confirmed, captured, or
+    claimed to have succeeded; a created PaymentIntent proves object
+    creation on Stripe's own side, nothing about payment, order
+    completion, or settlement (see STRIPE_SANDBOX_HANDOFF.md's own
+    four-step distinction).
+
+    Exercises the REAL, supported PayReality lifecycle end to end (real
+    Decision/Capability/Operation service-layer code, exactly like
+    every other test in this file) with the REAL Stripe client
+    substituted for FakeStripeBackend -- never calling Stripe directly
+    while bypassing PayReality. Only synthetic, PayReality-internal
+    identifiers (organization/integration/operation/capability-nonce
+    UUIDs) are ever sent as metadata; no real customer information
+    anywhere in the request.
+
+    Covers this review's own numbered scenario list against the real
+    API:
+      1. Normal creation and read-only retrieval.
+      2-4. Recovery: a SECOND, independently-authorized attempt (a new
+         Capability/Operation, via a real DestinationDuplicatePrevention
+         Guarantee, exactly like the local SAFE_DUPLICATE_PREVENTION_
+         GUARANTEED regression test) carries the SAME destination
+         identity forward, deriving the IDENTICAL idempotency key --
+         proven against Stripe's own REAL idempotency cache (not
+         simulated): the second create call returns the SAME real
+         PaymentIntent id, never a second object. This is the honest
+         equivalent of 'recover after a lost response' achievable
+         against a real, external API without being able to force a
+         deterministic network failure mid-flight -- disclosed as such,
+         not described as a literal injected network drop.
+      5. Read-only recovery after execution authority is revoked: the
+         Agent is revoked, a NEW submission is correctly rejected
+         (runtime_svc.IntegrationRejectionError), and a real, genuine
+         retrieve_status call against the SAME PaymentIntent still
+         succeeds -- read-only observation authority is structurally
+         separate from execution authority."""
+    client = adapter.build_real_client_from_env()
+    assert client is not None  # guaranteed by the skipif above; re-asserted for clarity
+
+    org = _org(db)
+    identity, signing_key, _cv, binding, agent, integration, principal = _scenario(db, org.id, opa_url)
+
+    # === 1. Normal creation and read-only retrieval ===
+    _intent_a, _decision_a, operation_a, _consumed_a, nonce_a = _authorize_and_consume(
+        db, org.id, identity, binding, agent, principal.name,
+        business_operation_id="STRIPE-LIVE-TEST-001", external_operation_id="live-ext-001",
+    )
+    boi_a = db.get(BusinessOperationIdentity, operation_a.business_operation_identity_id)
+    destination_identity_a = _destination_identity(db, operation_a)
+    current_account_id = client.retrieve_account()["id"]
+    window_service.get_or_record_dispatch_window(
+        db, org.id, uuid.UUID(destination_identity_a), stripe_account_id=current_account_id,
+    )
+
+    created_a = adapter.create_or_resume_payment_intent(
+        client, organization_id=str(org.id), integration_id=str(integration.id),
+        destination_dispatch_identity=destination_identity_a,
+        business_operation_identity_id=str(boi_a.id), operation_id=str(operation_a.id),
+        capability_nonce=nonce_a, amount=5000, currency="usd",
+    )
+    assert created_a["id"].startswith("pi_")
+    assert created_a["status"] == "requires_payment_method", "creation only -- never confirmed"
+    assert created_a["livemode"] is False
+
+    retrieved_a = adapter.retrieve_status(client, payment_intent_id=created_a["id"])
+    assert retrieved_a["id"] == created_a["id"]
+    assert retrieved_a["status"] == "requires_payment_method"
+
+    # === 2-4. Recovery: new capability/attempt, same destination identity,
+    # same real PaymentIntent, proven against Stripe's own real cache =====
+    operation_service.record_destination_duplicate_prevention_guarantee(
+        db, org.id, operation_a.id, destination=DESTINATION,
+        scope_description="real Stripe test-mode creation-only experiment -- recovery leg",
+        retention_until=datetime.now(timezone.utc) + timedelta(hours=1), documented_by="governance-admin@example.com",
+    )
+    _intent_b, _decision_b, operation_b, _consumed_b, nonce_b = _authorize_and_consume(
+        db, org.id, identity, binding, agent, principal.name,
+        business_operation_id="STRIPE-LIVE-TEST-001", external_operation_id="live-ext-001-b",
+    )
+    destination_identity_b = _destination_identity(db, operation_b)
+    assert destination_identity_b == destination_identity_a, "the replacement must carry the SAME destination identity forward"
+    boi_b = db.get(BusinessOperationIdentity, operation_b.business_operation_identity_id)
+
+    created_b = adapter.create_or_resume_payment_intent(
+        client, organization_id=str(org.id), integration_id=str(integration.id),
+        destination_dispatch_identity=destination_identity_b,
+        business_operation_identity_id=str(boi_b.id), operation_id=str(operation_b.id),
+        capability_nonce=nonce_b, amount=5000, currency="usd",
+    )
+    assert created_b["id"] == created_a["id"], (
+        "the recovery attempt (new capability/attempt, same destination identity) must resolve to "
+        "the SAME real PaymentIntent via Stripe's own idempotency cache, never create a second one"
+    )
+
+    # === 5. Read-only recovery after execution authority is revoked ===
+    agent_service.revoke_agent(db, agent.id, reason="real-Stripe creation-only experiment -- post-creation revocation leg")
+    with pytest.raises(runtime_svc.IntegrationRejectionError):
+        runtime_svc.submit_attested_intent(
+            db, identity, enforcement_binding_id=binding.id, origin_agent_id=agent.id,
+            source_operation=SOURCE_OPERATION, action=ACTION, resource=SUPPLIER_RESOURCE,
+            amount=5000, currency="USD", counterparty=None, context={},
+            requested_at=datetime.now(timezone.utc), nonce=uuid.uuid4().hex, correlation_id=None,
+            external_operation_id="live-ext-001-c", business_operation_id="STRIPE-LIVE-TEST-001-RETRY",
+            intended_destination=DESTINATION,
+        )
+    retrieved_after_revocation = adapter.retrieve_status(client, payment_intent_id=created_a["id"])
+    assert retrieved_after_revocation["id"] == created_a["id"]
+    assert retrieved_after_revocation["status"] == "requires_payment_method"

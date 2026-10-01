@@ -103,20 +103,23 @@ all passed.
 
 ## Remaining limitations and outstanding work
 
-- Not yet validated against a real destination system. A Stripe test-mode sandbox adapter
-  (`scripts/stripe_sandbox_adapter.py`) and its local-simulation test suite (19 tests,
-  `test_stripe_sandbox_operation_lifecycle.py`) are now implemented and passing, including a
-  revised identity/idempotency-key mapping (`STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`) that fixes a
-  real duplicate-effect gap found in an earlier pass's own "corrected" design -- a replacement
-  authorized despite an unresolved (not proven-failed) original now correctly carries the original
-  destination identity forward instead of minting an unrelated one -- plus (revision 3) a durable,
-  race-safe dispatch-window anchor (proven against a real Postgres database, not just SQLite) fixing
-  an anchoring gap (the window was measured from capability-issuance time, not the real first
-  dispatch), and a live Stripe account-binding check closing a gap where a rotated credential could
-  have silently redirected an unresolved operation to a different Stripe account. No real Stripe API
-  call has been made or attempted anywhere in this work: no test-mode credential was ever configured
-  in this environment, and the adapter refuses to reach Stripe without both a real key and an
-  explicit execution switch. Real-Stripe validation remains outstanding.
+- **Partially validated against a real destination system now** -- a Stripe test-mode sandbox
+  adapter (`scripts/stripe_sandbox_adapter.py`) and its test suite (21 scenarios,
+  `test_stripe_sandbox_operation_lifecycle.py`: 20 local-simulation, 1 against Stripe's real
+  test-mode API) are implemented and passing, including a revised identity/idempotency-key mapping
+  (`STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`) that fixes a real duplicate-effect gap found in an
+  earlier pass's own "corrected" design, a durable race-safe dispatch-window anchor (proven against
+  a real Postgres database), and a live Stripe account-binding check. **A genuine, real PaymentIntent
+  CREATION call ran against Stripe's test-mode API this pass**, once the user securely configured a
+  real `rk_test_...` credential -- scoped exactly to creation only, no confirmation/capture/
+  settlement. That run itself found and fixed two real bugs no local simulation had caught (a
+  metadata key exceeding Stripe's real 40-character limit; metadata that varied per attempt and
+  broke the exact carried-forward-key recovery scenario this design exists to make safe) -- see
+  `STRIPE_SANDBOX_IMPLEMENTATION_PLAN.md`'s own "External execution: what actually ran" section for
+  the full, separated account. PaymentIntent confirmation, decline/3-D-Secure handling, and the
+  account-binding/window-expiry guards against genuinely different real accounts/elapsed time remain
+  unverified against the real API -- disclosed under "Remaining unverified behavior" in that same
+  document, not claimed as proven.
 - No shutdown cleanup of the shared OPA HTTP client (disclosed, low-risk, unrelated to this
   feature's own correctness -- `OPA_TIMEOUT_RELIABILITY.md`).
 - The Adapter-mediated router endpoint's own signature-verification dependency has never been

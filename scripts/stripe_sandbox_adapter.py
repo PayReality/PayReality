@@ -215,27 +215,83 @@ def idempotency_key(*, organization_id: str, integration_id: str, destination_di
 
 def build_metadata(
     *, organization_id: str, integration_id: str, business_operation_identity_id: str,
-    destination_dispatch_identity: str, operation_id: str, capability_nonce: str,
+    destination_dispatch_identity: str,
 ) -> dict[str, str]:
     """Every field PayReality wants correlatable on the Stripe side, each
-    its own distinct metadata key -- capability nonce, attempt id
-    (Operation.id), and the logical destination identity are NEVER
-    merged into one field. Metadata is for correlation only -- it is
-    never what PREVENTS a duplicate (the idempotency key is); see this
+    its own distinct metadata key. Metadata is for correlation only -- it
+    is never what PREVENTS a duplicate (the idempotency key is); see this
     module's own top-of-file docstring. Stripe's own docs recommend
     exactly this correlation pattern: 'send in a local identifier with
     the metadata when creating new resources... That identifier appears
     in the metadata field of an object going out through a webhook,
     even if the webhook is generated later as part of reconciliation'
-    (docs.stripe.com/error-low-level#server-errors)."""
-    return {
+    (docs.stripe.com/error-low-level#server-errors).
+
+    DELIBERATELY DOES NOT include Operation.id or the capability nonce
+    -- a real, load-bearing correction found the hard way, against
+    Stripe's own live test-mode API, not simulated or merely reasoned
+    about. Earlier revisions included both, reasoning 'more correlation
+    detail is more audit value.' That is true for a destination identity
+    that is NEVER carried forward -- but destination_dispatch_identity
+    IS deliberately carried forward across a replacement authorized
+    despite an unresolved outcome (this module's own central design,
+    see destination_dispatch_identity's own docstring), meaning the SAME
+    idempotency key gets reused by a LATER call whose own Operation.id
+    and capability nonce are necessarily different from the first call's.
+    Stripe's real parameter-matching check compares the FULL request,
+    metadata included, not just amount/currency -- confirmed directly:
+    a second create call reusing a carried-forward key, with identical
+    amount/currency but a different payreality_operation_id/payreality_
+    capability_nonce, was rejected with a genuine `idempotency_error`
+    ('Keys for idempotent requests can only be used with the same
+    parameters they were first used with'), not silently resumed as
+    intended. Every field sent alongside a given key must therefore stay
+    IDENTICAL across every call that shares it -- this function only
+    ever includes fields that are stable for the lifetime of a
+    destination_dispatch_identity (org/integration/business-operation/
+    destination-identity scoping); Operation.id and the capability nonce
+    are exactly the two fields that are NOT stable across a carried-
+    forward replacement, by this module's own design, and are tracked
+    instead in PayReality's own database (every Operation row, chained
+    via previous_attempt_operation_id, already carries this detail --
+    destination_dispatch_identity is enough for anyone on the Stripe
+    side to correlate back to that chain).
+
+    Key NAMES (not values) are kept under Stripe's real, documented
+    40-character metadata-key limit -- also found the hard way:
+    `FakeStripeBackend` never validated this, so every local test passed
+    while `payreality_business_operation_identity_id` (41 characters)
+    would have failed, and did fail, on a genuine create call --
+    `{'error': {'message': "Metadata keys can have up to 40 characters,
+    but you passed in a key that is 41 characters...", 'type':
+    'invalid_request_error'}}`. Shortened with margin, not trimmed to
+    the exact boundary."""
+    metadata = {
         "payreality_organization_id": str(organization_id),
         "payreality_integration_id": str(integration_id),
-        "payreality_business_operation_identity_id": str(business_operation_identity_id),
-        "payreality_destination_dispatch_identity": str(destination_dispatch_identity),
-        "payreality_operation_id": str(operation_id),
-        "payreality_capability_nonce": str(capability_nonce),
+        "payreality_biz_operation_identity_id": str(business_operation_identity_id),
+        "payreality_destination_dispatch_id": str(destination_dispatch_identity),
     }
+    _validate_stripe_metadata(metadata)
+    return metadata
+
+
+STRIPE_METADATA_KEY_MAX_LENGTH = 40
+STRIPE_METADATA_VALUE_MAX_LENGTH = 500
+"""docs.stripe.com/api/metadata and the real error this review's own
+live test-mode run produced directly: 'Metadata keys can have up to 40
+characters.' Checked here, at build time, so a key-length regression is
+caught locally (FakeStripeBackend reuses this same check -- see its own
+create/confirm) BEFORE a real API call is ever attempted, not only when
+one happens to run against the live API."""
+
+
+def _validate_stripe_metadata(metadata: dict[str, str]) -> None:
+    for key, value in metadata.items():
+        if len(key) > STRIPE_METADATA_KEY_MAX_LENGTH:
+            raise ValueError(f"metadata key {key!r} is {len(key)} characters, exceeding Stripe's {STRIPE_METADATA_KEY_MAX_LENGTH}-character limit")
+        if len(str(value)) > STRIPE_METADATA_VALUE_MAX_LENGTH:
+            raise ValueError(f"metadata value for key {key!r} is {len(str(value))} characters, exceeding Stripe's {STRIPE_METADATA_VALUE_MAX_LENGTH}-character limit")
 
 
 class DispatchWindowExpiredError(Exception):
@@ -357,17 +413,34 @@ def _reject_if_livemode(obj: dict) -> dict:
 class RealStripeClient:
     """Thin wrapper over Stripe's real REST API (api.stripe.com),
     TEST MODE ONLY. Refuses construction with anything that isn't a
-    real sk_test_ secret key -- a caller cannot accidentally point this
+    real test-mode credential -- a caller cannot accidentally point this
     at live mode even by misconfiguring an environment variable, since
-    the key's own prefix is checked before any request is ever made."""
+    the key's own prefix is checked before any request is ever made.
+
+    Accepts BOTH `sk_test_...` (a full, unrestricted secret key) and
+    `rk_test_...` (a restricted key, scoped to whichever permissions
+    were granted when it was created). Confirmed via Stripe's own docs
+    (docs.stripe.com/keys): 'Sandbox keys start with pk_test_ for
+    publishable keys, rk_test_ for restricted keys, and sk_test_ for
+    secret keys' -- and Stripe's own current guidance actively
+    RECOMMENDS restricted keys over secret keys for server-side
+    integrations ('limit the damage... if your keys are ever exposed');
+    refusing rk_test_ here would push a caller toward the LESS secure
+    credential type. A restricted key lacking the specific permission a
+    given call needs (e.g. write access to PaymentIntents) surfaces as
+    Stripe's own real authorization error at call time -- this class
+    does not, and cannot, know a key's own granted permissions up
+    front, and never pretends to."""
 
     _BASE_URL = "https://api.stripe.com/v1"
+    _TEST_MODE_PREFIXES = ("sk_test_", "rk_test_")
 
     def __init__(self, secret_key: str):
-        if not secret_key.startswith("sk_test_"):
+        if not secret_key.startswith(self._TEST_MODE_PREFIXES):
             raise ValueError(
-                "refusing to construct RealStripeClient with a non-test-mode secret key -- "
-                "only sk_test_... keys are accepted; live-mode credentials are rejected outright"
+                "refusing to construct RealStripeClient with a non-test-mode credential -- "
+                "only sk_test_... or rk_test_... keys are accepted; live-mode credentials "
+                "(sk_live_/rk_live_) and publishable keys are rejected outright"
             )
         self._secret_key = secret_key
 
@@ -388,10 +461,12 @@ class RealStripeClient:
             raise StripeClientError(e.code, json.loads(e.read())) from e
 
     def create_payment_intent(self, *, idempotency_key: str, amount: int, currency: str, metadata: dict) -> dict:
+        _validate_stripe_metadata(metadata)  # fail locally before spending a real API call
         data = {"amount": amount, "currency": currency, "metadata": metadata}
         return _reject_if_livemode(self._request("POST", "/payment_intents", idempotency_key=idempotency_key, data=data))
 
     def confirm_payment_intent(self, *, payment_intent_id: str, idempotency_key: str, payment_method: str, metadata: dict) -> dict:
+        _validate_stripe_metadata(metadata)
         data = {"payment_method": payment_method, "metadata": metadata}
         return _reject_if_livemode(self._request("POST", f"/payment_intents/{payment_intent_id}/confirm", idempotency_key=idempotency_key, data=data))
 
@@ -596,6 +671,14 @@ class FakeStripeBackend:
                 self._in_flight.discard(key)
 
     def create_payment_intent(self, *, idempotency_key: str, amount: int, currency: str, metadata: dict) -> dict:
+        # Validated BEFORE the cache/in-flight bookkeeping below, matching
+        # the real API's own behavior: a request Stripe would reject
+        # never gets far enough to be cached or treated as "in flight."
+        try:
+            _validate_stripe_metadata(metadata)
+        except ValueError as e:
+            raise StripeClientError(400, {"error": {"type": "invalid_request_error", "message": str(e)}}) from e
+
         def _do():
             pi_id = f"pi_sim_{len(self._payment_intents) + 1:06d}"
             livemode = False
@@ -620,6 +703,11 @@ class FakeStripeBackend:
         return _reject_if_livemode(self._cached_or_execute(idempotency_key, {"amount": amount, "currency": currency}, _do))
 
     def confirm_payment_intent(self, *, payment_intent_id: str, idempotency_key: str, payment_method: str, metadata: dict) -> dict:
+        try:
+            _validate_stripe_metadata(metadata)
+        except ValueError as e:
+            raise StripeClientError(400, {"error": {"type": "invalid_request_error", "message": str(e)}}) from e
+
         def _do():
             outcome = self._outcomes.get(payment_intent_id, self._default_outcome)
             if outcome == "no_response":
@@ -696,12 +784,18 @@ def create_or_resume_payment_intent(
     whatever object already exists -- which may already be past
     'requires_payment_method'. See confirm_payment_intent_if_pending,
     the separate function that decides whether confirming is still
-    appropriate; this function never makes that decision itself."""
+    appropriate; this function never makes that decision itself.
+
+    `operation_id`/`capability_nonce` are accepted (kept in this
+    function's own signature for the caller's own audit/logging use and
+    API stability) but deliberately NOT forwarded to build_metadata --
+    see that function's own docstring for the real-Stripe finding this
+    corrects: a field that varies per attempt cannot safely accompany a
+    key that gets reused across attempts."""
     metadata = build_metadata(
         organization_id=organization_id, integration_id=integration_id,
         business_operation_identity_id=business_operation_identity_id,
         destination_dispatch_identity=destination_dispatch_identity,
-        operation_id=operation_id, capability_nonce=capability_nonce,
     )
     key = idempotency_key(
         organization_id=organization_id, integration_id=integration_id,
@@ -721,14 +815,15 @@ def confirm_payment_intent_if_pending(
     dispatch_identity) already confirmed it, returns it UNCHANGED --
     'a retry that finds an existing object must not automatically
     proceed to confirmation.' Returns (payment_intent, confirm_key,
-    confirmation_skipped)."""
+    confirmation_skipped). `operation_id`/`capability_nonce`: see
+    create_or_resume_payment_intent's own docstring -- same reasoning,
+    not forwarded to build_metadata here either."""
     if payment_intent["status"] != "requires_payment_method":
         return payment_intent, None, True
     metadata = build_metadata(
         organization_id=organization_id, integration_id=integration_id,
         business_operation_identity_id=business_operation_identity_id,
         destination_dispatch_identity=destination_dispatch_identity,
-        operation_id=operation_id, capability_nonce=capability_nonce,
     )
     key = idempotency_key(
         organization_id=organization_id, integration_id=integration_id,

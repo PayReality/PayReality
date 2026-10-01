@@ -13,9 +13,11 @@ below, a durable dispatch-window anchor and Stripe account binding check -- revi
 section below -- a `RealStripeClient` gated behind a real test-mode key + an explicit execution
 switch, and a `FakeStripeBackend` local simulation modeling Stripe's own documented idempotency/
 concurrency/retention behavior) and `server/tests/integration/test_stripe_sandbox_operation_
-lifecycle.py` (19 scenarios, all passing against the real PayReality lifecycle service layer + a
+lifecycle.py` (21 scenarios: 20 run purely against the real PayReality lifecycle service layer + a
 real, genuinely-generated-and-verified Ed25519 signature for the signed-Adapter reporting path, and
-the local Stripe simulation -- never a real network call).
+the local Stripe simulation -- never a real network call; the 21st makes a genuine call to Stripe's
+real test-mode API, gated on real credentials actually being configured -- see "External execution"
+below for what it found and fixed).
 
 **A real flaw in the first "corrected" mapping was found and fixed in an earlier pass** (see the
 mapping section below for the full account): that correction keyed the idempotency key off
@@ -45,24 +47,114 @@ full account:
    every PaymentIntent object, independent of and in addition to the existing sk_test_-prefix
    credential check.
 
-**Not executed, and not attempted, in this session**: any real call to Stripe's own API. No
-`STRIPE_TEST_SECRET_KEY` was configured anywhere in this environment (confirmed directly: no
-`STRIPE_*` environment variable exists here), and per this review's own explicit instruction,
-real Stripe execution requires both that key and `STRIPE_SANDBOX_EXECUTE=true` to be set --
-neither is, so `build_real_client_from_env()` returns `None` and nothing in the adapter can reach
-Stripe. This is confirmed by its own test
-(`test_real_stripe_client_requires_explicit_test_mode_key_and_execution_switch`), not merely
-asserted in prose.
+**Real Stripe test-mode execution has now run, for the first time this session**, once a genuine
+test-mode credential was securely configured (never pasted into chat -- see "External execution:
+what actually ran" below for the full account, including two real bugs this uncovered that no
+amount of local simulation had caught). The sections below separate LOCAL simulation evidence from
+ACTUAL external evidence explicitly -- never blended, per this review's own requirement.
 
-**What "19 passed" means, precisely**: all nineteen are LOCAL, against `FakeStripeBackend` (or, for
-some, a plain Python object implementing only the read-only method, or no I/O at all) -- proof that
-this adapter's own orchestration logic is correct, not proof that real Stripe test mode behaves as
-documented. The retention/parameter-matching/concurrency facts the simulation models are each
-cited to Stripe's own official documentation (see "Official sources" below); reproducing them
-against a real Stripe test-mode account remains outstanding, blocked on the credential above. The
-dispatch-window concurrency claim specifically is proven separately, against a real Postgres
-database (not SQLite -- see "Dispatch window anchoring" below for why), as a standalone script, not
-as a pytest case.
+### Local simulation
+
+`server/tests/integration/test_stripe_sandbox_operation_lifecycle.py`: **20 of 21 tests** run
+purely against `FakeStripeBackend` (or, for a few, no I/O at all) -- proof that this adapter's own
+orchestration logic is correct, not proof that real Stripe test mode behaves as documented. The
+21st (`test_real_stripe_payment_intent_creation_only_against_live_test_mode_api`) is the one
+exception -- see below.
+
+### External execution: what actually ran
+
+**A real, genuine network call to Stripe's own test-mode API happened in this session**, scoped
+exactly to this review's own narrow authorization: PaymentIntent **creation only**, no automatic
+confirmation, capture, or settlement claim. Credential: a Stripe **restricted key** (`rk_test_...`,
+Stripe's own currently-recommended credential type over a full `sk_test_...` secret key), configured
+by the user directly in `server/.env` (gitignored, confirmed) -- never pasted into this
+conversation (an earlier, mistakenly-pasted key was identified, never used, and the user rotated it
+before any real credential was accepted).
+
+`test_real_stripe_payment_intent_creation_only_against_live_test_mode_api` -- the ONE test in the
+suite that makes a real call, `@pytest.mark.skipif`-gated on real credentials actually being
+present, run via: `pytest tests/integration/test_stripe_sandbox_operation_lifecycle.py::test_real_stripe_payment_intent_creation_only_against_live_test_mode_api -v` -- **PASSED**, after fixing two
+real bugs this run itself exposed (neither caught by 20 passing local-simulation tests):
+
+1. **Metadata key length.** `payreality_business_operation_identity_id` (41 characters) exceeds
+   Stripe's real, documented 40-character metadata-key limit. The real API's own rejection:
+   `{'error': {'message': "Metadata keys can have up to 40 characters, but you passed in a key that
+   is 41 characters. Invalid key: payreality_business_operation_identity_id", 'type':
+   'invalid_request_error'}}`. `FakeStripeBackend` never validated this at all. Fixed: keys
+   shortened with margin (`payreality_biz_operation_identity_id`, `payreality_destination_dispatch_
+   id`), plus a new, shared `_validate_stripe_metadata` check Stripe's own length limits, now
+   enforced identically by `build_metadata` (fails before any call is attempted, real or simulated),
+   `FakeStripeBackend` (so local simulation would now catch this class of bug), and `RealStripeClient`
+   (fails locally before spending a real API call).
+2. **Metadata stability across a carried-forward key -- a real, load-bearing design flaw, not a
+   formatting issue.** The SECOND create call in this test (the "recovery" leg, reusing the SAME key
+   via a carried-forward `destination_dispatch_identity`, exactly revision 2's own central design)
+   was rejected by Stripe's own REAL idempotency-error check: `"Keys for idempotent requests can
+   only be used with the same parameters they were first used with."` The local simulation's own
+   parameter-mismatch fingerprint deliberately excluded metadata (reasoned, at the time, that
+   metadata legitimately differs per attempt and should never trigger a false mismatch) --
+   **confirmed wrong against the real API**: Stripe's own matching compares the FULL request,
+   metadata included. `build_metadata` previously included `payreality_operation_id` and
+   `payreality_capability_nonce`, both of which differ between the original attempt and a
+   replacement BY DESIGN -- meaning the exact "recovery" scenario this whole design exists to make
+   safe was itself broken by its own metadata. Fixed: `build_metadata` no longer sends either field
+   -- only values that are genuinely stable for the lifetime of a `destination_dispatch_identity`
+   (org/integration/business-operation/destination-identity scoping) are ever sent alongside a
+   key-bearing request; per-attempt detail (`Operation.id`, capability nonce) stays in PayReality's
+   own database, already fully queryable via the `previous_attempt_operation_id` chain. Re-run after
+   the fix: the SAME real PaymentIntent id came back from the second create call, proving the
+   recovery mechanism actually works against the real API, not merely against its own simulation of
+   itself.
+
+All five of this review's own required scenarios ran, against the real API, in one test:
+1. Normal creation + read-only retrieval -- a real `pi_...` object created, `livemode: false`
+   confirmed, then independently re-retrieved.
+2-4. Recovery (new capability/attempt, same destination identity, same idempotency identity):
+   proven via Stripe's own real idempotency cache, not a simulated one -- the second create call,
+   under the carried-forward key, returned the IDENTICAL real PaymentIntent id; no second object
+   was created. Disclosed honestly: this is the real equivalent of "recover after a lost response,"
+   not a literal injected network failure -- a real, deterministic mid-flight network drop against
+   an external API is not something this test can force; what IS proven is the mechanism the
+   recovery design depends on (the same key reliably resolves to the same object), which is the
+   load-bearing claim.
+5. Read-only recovery after execution authority is revoked: the Agent was revoked, a NEW submission
+   was correctly rejected (`IntegrationRejectionError`, before any Decision/Capability was even
+   reached), and a real, genuine `retrieve_status` call against the SAME PaymentIntent still
+   succeeded -- read-only observation authority confirmed structurally separate from execution
+   authority, against the real API.
+
+No confirmation, capture, or settlement call was made anywhere in this session -- only
+`create_or_resume_payment_intent` and `retrieve_status` were ever called against the real client.
+No real customer information was ever sent; only synthetic, PayReality-internal UUIDs as metadata.
+Stripe resources created: real test-mode PaymentIntent object(s) (`pi_...`, visible via each
+response's own `request_log_url`, e.g. `dashboard.stripe.com/acct_.../test/workbench/logs?...`) --
+test-mode objects with no real money involved and no cost; left as-is, no cleanup performed or
+needed (Stripe provides no delete operation for a PaymentIntent, and test-mode data carries no
+retention concern).
+
+### Remaining unverified behavior
+
+Everything this review's own narrow authorization did NOT cover, still genuinely unverified against
+the real API: PaymentIntent **confirmation** (a test card actually being charged in test mode),
+**decline** handling, **requires_action** (3-D Secure-style) handling, the expired-window guard
+(`DispatchWindowExpiredError`) against a real elapsed 24h window (verified only via the FakeStripe
+Backend's own injectable clock), the account-binding mismatch check
+(`StripeAccountBindingMismatchError`) against two genuinely different real Stripe accounts (verified
+only with `FakeStripeBackend.set_account_id`), and the restricted key's own granted-permissions
+boundary (this session's `rk_test_` key evidently had PaymentIntent create/read access; a
+differently-scoped restricted key could still fail with a real Stripe authorization error this
+adapter has never exercised). None of these are described as proven; all remain exactly as
+disclosed before this session -- outstanding, not completed.
+
+**What "20 (local) + 1 (real)" means, precisely**: the 20 LOCAL tests run against `FakeStripeBackend`
+(or, for some, a plain Python object implementing only the read-only method, or no I/O at all) --
+proof that this adapter's own orchestration logic is correct, not proof that real Stripe test mode
+behaves as documented; two places that proof turned out to be wrong were found and fixed only once
+the 21st, real test actually ran (see "External execution" above). The retention/parameter-matching/
+concurrency facts the simulation models are each cited to Stripe's own official documentation (see
+"Official sources" below). The dispatch-window concurrency claim specifically is proven separately,
+against a real Postgres database (not SQLite -- see "Dispatch window anchoring" below for why), as a
+standalone script, not as a pytest case.
 
 ## The one action being validated
 
@@ -416,7 +508,10 @@ proof.
 
 ## Explicitly not done by this plan or its implementation
 
-No real Stripe API call made, no PaymentIntent created against a real Stripe account, no external
-resource created, no live payment executed. The adapter and its local-simulation tests ARE
-implemented (see "Implementation status" above); what remains is the real-Stripe-test-mode
-execution, blocked on the credential/switch described there.
+**No live payment executed, no confirmation/capture call made, no real customer information ever
+sent, no live-mode object or credential ever accepted.** A real, test-mode-only PaymentIntent
+CREATION call now has run (see "External execution: what actually ran" above) -- narrower claims
+from earlier in this document's own history ("no real Stripe API call made") are superseded by
+that section, not still true; this line is corrected here so the two are never left to
+contradict each other. Still genuinely not done: PaymentIntent confirmation, decline/3-D-Secure
+handling, and every item listed under "Remaining unverified behavior" above.
