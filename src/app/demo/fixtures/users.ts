@@ -89,23 +89,5 @@ export const demoCurrentUser: CurrentUser = {
     "integration_contract.manage",
     "integration_contract.publish",
     "integration_identity.manage",
-    // Decision Intelligence (server/app/domain/rbac/permissions.py's own
-    // di_* namespace): added alongside the feature's own nav entry --
-    // Owner's real ROLE_PERMISSIONS entry is the full Permission enum,
-    // so every one of these belongs here the same way every permission
-    // above already does; omitting them would have silently hidden the
-    // new nav item for this fixture, the exact drift this file's own
-    // comment above warns against.
-    "di_workflow.manage",
-    "di_case.manage",
-    "di_case.view",
-    "di_pattern.manage",
-    "di_question.manage",
-    "di_question.view",
-    "di_answer.submit",
-    "di_answer.approve",
-    "di_rule.manage",
-    "di_replay.run",
-    "di_report.view",
   ],
 };

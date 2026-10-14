@@ -128,27 +128,6 @@ export const router = createBrowserRouter([
           { path: "evidence", lazy: () => import("./live/pages/LiveEvidence").then((m) => ({ Component: m.LiveEvidence })) },
           { path: "assurance", lazy: () => import("./live/pages/LiveAssurance").then((m) => ({ Component: m.LiveAssurance })) },
 
-          // Decision Intelligence: discovers the smallest, highest-value set
-          // of questions a workflow needs answered to resolve recurring
-          // uncertainty (Workflow -> Cases -> Patterns -> Priority Questions
-          // -> Answers -> Decision Rules -> Replay). Rules and Replays are
-          // their own top-level routes (not nested under a workflow slug)
-          // since the backend itself models them that way (rules.py/
-          // replays.py key by rule_id/replay_run_id alone, never a nested
-          // workflow path segment), even though every rule/replay still
-          // carries its own workflow_id and links back to it.
-          { path: "decision-intelligence", lazy: () => import("./decision-intelligence/WorkflowsListPage").then((m) => ({ Component: m.WorkflowsListPage })) },
-          { path: "decision-intelligence/workflows/:workflowId", lazy: () => import("./decision-intelligence/WorkflowDetailPage").then((m) => ({ Component: m.WorkflowDetailPage })) },
-          { path: "decision-intelligence/workflows/:workflowId/cases", lazy: () => import("./decision-intelligence/CasesPage").then((m) => ({ Component: m.CasesPage })) },
-          { path: "decision-intelligence/workflows/:workflowId/cases/:caseId", lazy: () => import("./decision-intelligence/CaseDetailPage").then((m) => ({ Component: m.CaseDetailPage })) },
-          { path: "decision-intelligence/workflows/:workflowId/patterns", lazy: () => import("./decision-intelligence/PatternsPage").then((m) => ({ Component: m.PatternsPage })) },
-          { path: "decision-intelligence/workflows/:workflowId/patterns/:patternId", lazy: () => import("./decision-intelligence/PatternDetailPage").then((m) => ({ Component: m.PatternDetailPage })) },
-          { path: "decision-intelligence/workflows/:workflowId/questions", lazy: () => import("./decision-intelligence/QuestionsPage").then((m) => ({ Component: m.QuestionsPage })) },
-          { path: "decision-intelligence/workflows/:workflowId/questions/:questionId", lazy: () => import("./decision-intelligence/QuestionDetailPage").then((m) => ({ Component: m.QuestionDetailPage })) },
-          { path: "decision-intelligence/rules/:ruleId", lazy: () => import("./decision-intelligence/RuleDetailPage").then((m) => ({ Component: m.RuleDetailPage })) },
-          { path: "decision-intelligence/replays/new", lazy: () => import("./decision-intelligence/ReplayPage").then((m) => ({ Component: m.ReplayPage })) },
-          { path: "decision-intelligence/replays/:replayId", lazy: () => import("./decision-intelligence/ReplayPage").then((m) => ({ Component: m.ReplayPage })) },
-
           { path: "organization", lazy: () => import("./organization/OrganizationSettingsPage").then((m) => ({ Component: m.OrganizationSettingsPage })) },
           { path: "organization/users", lazy: () => import("./organization/UsersPage").then((m) => ({ Component: m.UsersPage })) },
           { path: "organization/platform", lazy: () => import("./organization/PlatformOrganizationsPage").then((m) => ({ Component: m.PlatformOrganizationsPage })) },

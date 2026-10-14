@@ -31,8 +31,7 @@ export type ResourceKind =
   | "decisions"
   | "evidence"
   | "organization"
-  | "integrations"
-  | "decision-intelligence";
+  | "integrations";
 
 const STORAGE_KEY_PREFIX = "pr:resource-changed:";
 

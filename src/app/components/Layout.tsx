@@ -15,7 +15,6 @@ import {
   Sun,
   PanelLeftClose,
   PanelLeftOpen,
-  Lightbulb,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -28,11 +27,6 @@ import { HelpPanel } from "../help/HelpPanel";
 import { page as trackPage } from "../services/analytics";
 import { DEMO_MODE } from "../demo/config";
 import { DemoBanner } from "./DemoBanner";
-import { PrototypeBanner } from "./PrototypeBanner";
-
-// Set only for the isolated Decision Intelligence prototype deployment's
-// build; never set for the real demo or dashboard builds.
-const PROTOTYPE_MODE = import.meta.env.VITE_PROTOTYPE_MODE === "true";
 import { TourProvider } from "../demo/tour/TourProvider";
 import { getTheme, setTheme, type Theme } from "../lib/theme";
 import { getSidebarCollapsed, setSidebarCollapsed } from "../lib/sidebarPreference";
@@ -69,11 +63,6 @@ export const navItems: { path: string; label: string; icon: typeof Bot; permissi
   { path: "/agents", label: "Agents", icon: Bot, permission: "agent.view", group: "workspace" },
   { path: "/governance", label: "Governance", icon: ScrollText, permission: "runtime_policy.view", group: "workspace" },
   { path: "/decisions", label: "Decisions", icon: FlaskConical, permission: "decisions.view", group: "workspace" },
-  // Decision Intelligence: gated on the narrowest real view permission
-  // its own pages actually depend on (Permission.DI_CASE_VIEW,
-  // server/app/domain/rbac/permissions.py -- cross-checked, not
-  // guessed, same discipline this array's own comment above requires).
-  { path: "/decision-intelligence", label: "Decision Intelligence", icon: Lightbulb, permission: "di_case.view", group: "workspace" },
   { path: "/evidence", label: "Evidence", icon: Database, permission: "evidence.view", group: "trust" },
   { path: "/assurance", label: "Assurance", icon: Building2, permission: "assurance.view", group: "trust" },
   { path: "/organization", label: "Organisation Settings", icon: Settings, permission: "settings.view" },
@@ -547,7 +536,6 @@ function LayoutInner() {
         Skip to main content
       </a>
       {DEMO_MODE && <DemoBanner />}
-      {PROTOTYPE_MODE && <PrototypeBanner />}
       <div className="flex flex-1 min-h-0" style={{ backgroundColor: "var(--pr-bg-primary)" }}>
       {/* Sidebar (desktop). Section 12: collapse is a desktop-only
           concept -- isMobile already routes to a completely separate
