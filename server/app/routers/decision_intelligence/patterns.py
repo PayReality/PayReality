@@ -73,6 +73,32 @@ def get_pattern(pattern_id: UUID, organization: Organization = Depends(get_curre
         raise HTTPException(status_code=404, detail="pattern_not_found")
 
 
+@router.get(
+    "/{pattern_id}/cases", response_model=list[UUID],
+    dependencies=[Depends(require_permission(Permission.DI_CASE_VIEW))],
+)
+def list_pattern_cases(
+    pattern_id: UUID, organization: Organization = Depends(get_current_organization), db: Session = Depends(get_db)
+):
+    """Frontend integration fix: `di_pattern_service.list_linked_cases`
+    already existed (written alongside `link_case`/`unlink_case` below)
+    but was never wired to a router endpoint, so a Pattern's own linked
+    Cases -- its evidence, per DIPatternCase's own model docstring ("a
+    Pattern with no linked Cases is an unsupported assertion, not
+    evidence") -- were write-only: a caller could link/unlink a case but
+    never list which ones were actually linked. DIQuestion already has
+    the read-side equivalent (QuestionDetailResponse.case_ids, via
+    di_question_service.list_linked_cases); this closes the same gap for
+    DIPattern using the identical, already-tested service function and
+    permission (DI_CASE_VIEW, matching list_patterns/get_pattern above),
+    zero new service-layer code.
+    """
+    try:
+        return di_pattern_service.list_linked_cases(db, pattern_id, organization.id)
+    except PatternNotFoundError:
+        raise HTTPException(status_code=404, detail="pattern_not_found")
+
+
 @router.patch(
     "/{pattern_id}", response_model=PatternResponse,
     dependencies=[Depends(require_permission(Permission.DI_PATTERN_MANAGE))],
