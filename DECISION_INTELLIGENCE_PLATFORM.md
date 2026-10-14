@@ -125,14 +125,32 @@ implementing agents.)
   passes 2/2 in isolation, a pre-existing full-suite-load flake, not a regression.
 - `npm run build` (real Vite production build): succeeds, every new page ships as its own
   lazy-loaded chunk.
-- **Not run**: a real `alembic upgrade head` against Postgres (Docker was unavailable in the
-  implementing agent's sandbox). Mitigated by running only the new migration, in isolation, against
-  a SQLite database stamped at the prior head revision (`upgrade` then `downgrade` then `upgrade`
-  all verified, all 13 new tables and FKs confirmed present via `sqlalchemy.inspect`), and by a
-  `Base.metadata.create_all()` run including the new models. This is a real gap in verification
-  evidence, not a claim that the migration is untested; it just wasn't run against the real target
-  database engine. **Before this branch is merged, run the actual migration against a real Postgres
-  instance and confirm it end to end.**
+- **Now run for real against real Postgres** (2026-10-14, this session): `docker compose up -d
+  postgres opa`, Postgres 16.15 (`postgres:16-alpine`, confirmed via `SELECT version();`:
+  `PostgreSQL 16.15 on x86_64-pc-linux-musl ... Alpine 15.2.0`), healthcheck green.
+  - Fresh empty `payreality_dev` database, `alembic upgrade head` from nothing: succeeded, no
+    errors, landed on `f3a7c1e9b5d2 (head)`. `\dt` showed 65 tables total, 13 of them `di_*`.
+  - Reset to empty again. `alembic upgrade e2c4b6d8f1a3` (the revision immediately before the DI
+    migration, found via the DI migration file's own `down_revision`): succeeded, 39 migrations ran
+    in order, landed on `e2c4b6d8f1a3`, zero `di_*` tables present yet. Then one more
+    `alembic upgrade head`: succeeded, ran exactly one migration
+    (`e2c4b6d8f1a3 -> f3a7c1e9b5d2, decision intelligence module: ...`), landed on `f3a7c1e9b5d2`.
+  - Inspected via `psql`: all 13 `di_*` tables present (`di_workflows`, `di_cases`, `di_patterns`,
+    `di_pattern_cases`, `di_questions`, `di_question_patterns`, `di_question_cases`, `di_answers`,
+    `di_decision_rules`, `di_rule_versions`, `di_replay_runs`, `di_replay_case_results`,
+    `di_audit_events`), with `information_schema.table_constraints` confirming every expected FK
+    (including the circular `di_decision_rules.current_version_id` <-> `di_rule_versions.rule_id`
+    pair), every join table's uniqueness constraint (`uq_di_pattern_cases_pattern_case`,
+    `uq_di_question_patterns_question_pattern`, `uq_di_question_cases_question_case`,
+    `uq_di_rule_versions_rule_version`), and every PK.
+  - Checked downgrade convention first: every single migration file in `server/alembic/versions/`
+    (all 40, including the DI one) implements a real, non-stub `downgrade()`, so the DI migration
+    was held to that same bar, not a stricter one invented for this pass.
+  - `alembic downgrade -1` from head: succeeded, ran the DI migration's real `downgrade()`, landed
+    back on `e2c4b6d8f1a3`, and `\dt di_*` confirmed all 13 tables were actually dropped (not just
+    the alembic version row changing). `alembic upgrade head` afterward re-applied cleanly, back to
+    `f3a7c1e9b5d2`, which is the state the browser walkthrough in Part 2 below was run against.
+  - No failures, no manual intervention, no SQLite substitution anywhere in this sequence.
 - **Not run**: a browser-based end-to-end journey (sign in, create workflow, case, pattern,
   question, answer, rule, replay, report). No browser automation was available to either
   implementing agent. The component/integration tests above cover the same logic at a lower level,
