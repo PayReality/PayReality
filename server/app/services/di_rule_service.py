@@ -16,11 +16,11 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import DIAnswer, DICase, DIDecisionRule, DIRuleVersion
+from app.db.models import DIAnswer, DIDecisionRule, DIRuleVersion
 from app.domain.decision_intelligence.rule_evaluator import EvaluationResult, evaluate_rule
 from app.domain.decision_intelligence.rule_schema import RuleSchema
-from app.domain.decision_intelligence.validation import RuleValidationError, validate_rule_version
-from app.services import di_answer_service, di_audit_service, di_case_service, di_question_service, di_workflow_service
+from app.domain.decision_intelligence.validation import validate_rule_version
+from app.services import di_audit_service, di_case_service, di_question_service, di_workflow_service
 
 
 class RuleNotFoundError(Exception):

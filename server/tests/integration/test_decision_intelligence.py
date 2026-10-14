@@ -32,6 +32,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db.models import Base, DIAuditEvent, Organization, User, UserSession
 from app.dependencies import require_permission
 from app.domain.decision_intelligence.rule_schema import Condition, RuleAction, RuleSchema
+from app.domain.decision_intelligence.validation import RuleValidationError
 from app.domain.rbac.permissions import Permission, Role, has_permission
 from app.services import (
     di_answer_service,
@@ -45,7 +46,7 @@ from app.services import (
 from app.services.di_answer_service import InvalidAnswerTransitionError, SeparationOfDutiesError
 from app.services.di_case_service import CaseNotFoundError
 from app.services.di_question_service import QuestionNotFoundError
-from app.services.di_rule_service import RuleValidationError, SourceAnswerNotApprovedError
+from app.services.di_rule_service import SourceAnswerNotApprovedError
 from app.services.di_workflow_service import WorkflowNotFoundError
 
 
