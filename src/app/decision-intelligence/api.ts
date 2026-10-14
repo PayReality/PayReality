@@ -112,6 +112,9 @@ export const decisionIntelligenceApi = {
       review_status: string;
     }>
   ) => apiClient.patch<Pattern>(`${BASE}/patterns/${patternId}`, body).then((r) => { notifyResourceChanged("decision-intelligence"); return r; }),
+  // Backend fix-forward (patterns.py): was write-only (link/unlink) with
+  // no way to list what's actually linked -- see that commit's message.
+  listPatternCases: (patternId: string) => apiClient.get<string[]>(`${BASE}/patterns/${patternId}/cases`),
   linkPatternCase: (patternId: string, caseId: string) =>
     apiClient.post<{ linked: boolean }>(`${BASE}/patterns/${patternId}/cases`, { case_id: caseId })
       .then((r) => { notifyResourceChanged("decision-intelligence"); return r; }),

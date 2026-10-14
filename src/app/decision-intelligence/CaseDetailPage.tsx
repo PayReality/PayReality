@@ -4,7 +4,7 @@ import { decisionIntelligenceApi } from "./api";
 import { CaseStatusBadge } from "./components/StatusBadges";
 import { describeApiError } from "../live/format";
 import { useResourceSync } from "../services/resourceSync";
-import type { Case, Question } from "./types";
+import type { Case, Pattern, Question } from "./types";
 import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
@@ -12,7 +12,7 @@ import { Select } from "../components/ui/select";
 import { PageHeader } from "../components/ui/page-header";
 import { EmptyState } from "../components/ui/empty-state";
 import { Skeleton } from "../components/ui/skeleton";
-import { HelpCircle } from "lucide-react";
+import { HelpCircle, ListTree } from "lucide-react";
 
 function JsonBlock({ value }: { value: unknown }) {
   if (value === null || value === undefined || (typeof value === "object" && Object.keys(value as object).length === 0)) {
@@ -28,22 +28,21 @@ function JsonBlock({ value }: { value: unknown }) {
   );
 }
 
-// Cap how many questions in this case's workflow get resolved to check
-// for a case-link: the backend exposes no reverse "questions linked to
-// this case" endpoint (di_question_service.list_linked_cases only reads
-// one direction, question -> case_ids), so this page resolves it the
-// only way the real API allows -- list the workflow's own questions
-// (deliberately meant to be a small, curated set, scoring.py's own
-// design brief) and check each one's own case_ids. Patterns have no
-// such path at all (patterns.py exposes no GET for a pattern's own
-// linked cases either), so "linked patterns" isn't shown here; see this
-// page's own note below instead of guessing.
-const MAX_QUESTIONS_TO_CHECK = 50;
+// Neither Patterns nor Questions expose a reverse "which of these
+// reference this case" endpoint -- each only reads forward (a
+// Question's own case_ids, or, since this feature's own fix-forward
+// commit, a Pattern's own GET .../cases). This page resolves "linked
+// to THIS case" the only way the real API allows: list the workflow's
+// own patterns/questions (both deliberately meant to be small, curated
+// sets by this product's own design) and check each one's own case
+// list. Capped to bound the number of requests this makes.
+const MAX_TO_CHECK = 50;
 
 export function CaseDetailPage() {
   const { workflowId, caseId } = useParams();
   const [theCase, setTheCase] = useState<Case | null>(null);
   const [linkedQuestions, setLinkedQuestions] = useState<Question[] | null>(null);
+  const [linkedPatterns, setLinkedPatterns] = useState<Pattern[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -75,7 +74,7 @@ export function CaseDetailPage() {
   useEffect(() => {
     if (!workflowId || !caseId) return;
     decisionIntelligenceApi
-      .listQuestions({ workflow_id: workflowId, limit: MAX_QUESTIONS_TO_CHECK })
+      .listQuestions({ workflow_id: workflowId, limit: MAX_TO_CHECK })
       .then((page) =>
         Promise.all(page.questions.map((q) => decisionIntelligenceApi.getQuestion(q.id).catch(() => null)))
       )
@@ -86,6 +85,24 @@ export function CaseDetailPage() {
         setLinkedQuestions(matches);
       })
       .catch(() => setLinkedQuestions([]));
+  }, [workflowId, caseId]);
+
+  useEffect(() => {
+    if (!workflowId || !caseId) return;
+    decisionIntelligenceApi
+      .listPatterns({ workflow_id: workflowId, limit: MAX_TO_CHECK })
+      .then((page) =>
+        Promise.all(
+          page.patterns.map((p) =>
+            decisionIntelligenceApi
+              .listPatternCases(p.id)
+              .then((caseIds) => (caseIds.includes(caseId) ? p : null))
+              .catch(() => null)
+          )
+        )
+      )
+      .then((matches) => setLinkedPatterns(matches.filter((p): p is NonNullable<typeof p> => p !== null)))
+      .catch(() => setLinkedPatterns([]));
   }, [workflowId, caseId]);
 
   async function handleSave() {
@@ -251,14 +268,22 @@ export function CaseDetailPage() {
         ))}
       </Card>
 
-      <p style={{ fontSize: 12, color: "var(--pr-text-disabled)" }}>
-        Patterns linked to this case aren't shown here: the backend doesn't yet expose which Patterns reference a given
-        Case (only the reverse, a Pattern's own linked cases, is written but never listed back). See{" "}
-        <Link to={`/decision-intelligence/workflows/${workflowId}/patterns`} style={{ color: "var(--pr-authority-blue)" }}>
-          this workflow's Patterns
-        </Link>{" "}
-        instead.
-      </p>
+      <Card>
+        <div className="flex items-center gap-1.5 mb-3">
+          <h2 className="text-sm font-medium" style={{ color: "var(--pr-text-primary)" }}>Linked patterns</h2>
+        </div>
+        {linkedPatterns === null && <p style={{ fontSize: 13, color: "var(--pr-text-muted)" }}>Checking linked patterns...</p>}
+        {linkedPatterns?.length === 0 && (
+          <EmptyState icon={ListTree} title="No pattern cites this case yet" description="A reviewer can link this case as evidence from the pattern's own detail page." />
+        )}
+        {linkedPatterns?.map((p) => (
+          <div key={p.id} className="py-1.5" style={{ borderTop: "1px solid var(--pr-overlay-05)", fontSize: 13 }}>
+            <Link to={`/decision-intelligence/workflows/${workflowId}/patterns/${p.id}`} style={{ color: "var(--pr-authority-blue)" }}>
+              {p.name}
+            </Link>
+          </div>
+        ))}
+      </Card>
     </div>
   );
 }
