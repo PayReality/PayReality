@@ -117,16 +117,53 @@ comments, and frontend copy.
 (Independently re-run and confirmed by the orchestrating session, not only claimed by the
 implementing agents.)
 
-- Backend: `server/.venv/Scripts/python.exe -m pytest`. New Decision Intelligence unit and
-  integration tests: **61/61 passed** (38 unit: scoring, rule evaluator, validation; 23 integration:
-  lifecycle, RBAC, tenant isolation, audit events). Full repo suite after the change: **1101 passed,
-  23 skipped, 0 failed** (baseline before any change was 1040 passed, 23 skipped, i.e. exactly
-  baseline plus 61 new tests, zero regressions).
-- Frontend: `npx vitest run src/app/decision-intelligence`: **10/10 passed**. Full repo suite
-  (`npm test`): **153 passed, 2 failed** on one run; the 2 failures are in
-  `src/app/ai-authority-builder/CorpusReviewPage.test.tsx`, a file this work never touched
-  (confirmed via `git diff origin/main --stat` showing zero changes to that directory) and which
-  passes 2/2 in isolation, a pre-existing full-suite-load flake, not a regression.
+- Backend DI-specific subset (`tests/unit/test_di_scoring.py tests/unit/test_di_rule_evaluator.py
+  tests/unit/test_di_validation.py tests/integration/test_decision_intelligence.py`): **61/61
+  passed**, re-confirmed this session after this session's own `QuestionDetailPage`/`ReplayPage`
+  fixes (neither of which touches backend code, so this was a sanity check, not expected to move).
+- Backend full repo suite (`server/.venv/Scripts/python.exe -m pytest -q`, this session, against the
+  real Postgres from the migration validation above): **1119 passed, 5 failed, 3 warnings, in
+  869.76s**. All 5 failures are in `tests/integration/test_action_vocabulary_precision.py`,
+  `tests/integration/test_authorization_freshness_postgres.py` (2 tests), and
+  `tests/integration/test_capability_issuance_idempotency_postgres.py` (2 tests), none of them
+  Decision Intelligence (confirmed zero diff vs. `origin/main` on those test files or on any service
+  they import, via `git diff origin/main --stat`). Both `_postgres` files' own module docstrings say
+  they depend on a `postgres_url` fixture that "skips cleanly" when no real Postgres is reachable,
+  which is exactly the implementing agents' own disclosed environment gap: **this is the first time
+  this session (or apparently ever, for this repo) these specific tests have actually executed
+  instead of skipping.** Re-running just those 5 in isolation (no other load on the machine):
+  1 passed, 4 still failed, each on a real assertion (`assert decision.outcome == "ALLOW"`, actually
+  getting `"HUMAN_REVIEW"`), not a timeout. This is a genuine, newly-surfaced, pre-existing issue in
+  the Runtime Authority / Trusted Integration Architecture subsystem, entirely unrelated to and
+  untouched by this branch, previously invisible only because no prior environment had real Postgres
+  to stop these tests from skipping. Flagged here for separate investigation; fixing it is out of
+  this pass's scope (different subsystem, zero relation to Decision Intelligence).
+- Frontend DI-specific subset (`npx vitest run src/app/decision-intelligence`): **12/12 passed**
+  (the original 10 plus this session's 2 new regression tests).
+- Frontend full repo suite (`npm test`), investigated properly per instructions rather than taking
+  the prior report at face value, **5 runs total**:
+  - 1 run performed while a full backend `pytest` run was also executing concurrently on the same
+    machine: vitest's own worker pool failed to even start workers for 3 files (`DraftWithAIPanel`,
+    `DemoNarrative`, `DecisionDetailPage`) plus a 4th failure in `RuleDetailPage.test.tsx`
+    (`[vitest-pool-runner]: Timeout waiting for worker to respond`), a real resource-contention
+    symptom, but from **this session's own simultaneous heavy pytest run**, not an inherent property
+    of `npm test` alone, and not the two tests the prior report named.
+  - 4 further runs, standalone, nothing else running on the machine (stray leftover Chromium
+    processes from this session's own Playwright walkthrough were first confirmed and killed): 3 of
+    4 were fully clean, **157 passed, 0 failed**. The 4th showed **148 passed, 9 failed** across
+    multiple files, confirmed to include `src/app/integrations/IntegrationDetailPage.test.tsx`
+    (`TypeError: Cannot read properties of undefined (reading 'dispatchEvent')`, a real runtime
+    error from a DOM query returning nothing, not a timeout); the complete file list for that one run
+    was lost to a `tail` truncation in the capture command and could not be recovered, a mistake in
+    this session's own tooling, disclosed rather than glossed over.
+  - **`src/app/ai-authority-builder/CorpusReviewPage.test.tsx`, the file the prior report specifically
+    named, passed in all 5 runs, including the contention-heavy one.** The prior report's specific
+    claim ("the 2 failures are in `CorpusReviewPage.test.tsx`... a pre-existing full-suite-load
+    flake") does not reproduce under this session's testing; it is not confirmed, and this document
+    no longer repeats it as fact. What this session did confirm instead: this frontend suite does
+    have a real, intermittent, load-independent-looking flake, just evidently not that specific file,
+    and not something this pass fixed (same reasoning as the backend finding above: a different
+    subsystem's test, not touched by this branch, not weakened or worked around here).
 - `npm run build` (real Vite production build): succeeds, every new page ships as its own
   lazy-loaded chunk.
 - **Now run for real against real Postgres** (2026-10-14, this session): `docker compose up -d
@@ -400,6 +437,22 @@ permission.
   automation to trip, since several of this module's pages fire multiple parallel `GET`s per mount.
   Noted here only so a future automated test suite against this module budgets for it; a real person
   clicking through the UI will not come close to it.
+- **A pre-existing, unrelated backend issue surfaced for the first time this session**: 5 integration
+  tests in the Runtime Authority / Trusted Integration Architecture subsystem
+  (`test_action_vocabulary_precision.py`, `test_authorization_freshness_postgres.py`,
+  `test_capability_issuance_idempotency_postgres.py`), none of them Decision Intelligence and none
+  touched by this branch, were previously always skipped (their own fixture "skips cleanly" with no
+  real Postgres, which no prior environment had) and now fail for real against the real Postgres this
+  session set up. See "Testing performed" above for the exact numbers and evidence. Flagged for
+  separate investigation; not fixed here, since it is a different subsystem entirely.
+- **A real, intermittent, load-independent-looking flake exists somewhere in the frontend test
+  suite**, confirmed this session (one of five standalone runs: 9 failures across several files,
+  including a real runtime `TypeError` in `IntegrationDetailPage.test.tsx`, not a timeout). This
+  session could not isolate which exact file(s) reliably reproduce it (one run's full failure list
+  was lost to its own tooling mistake, disclosed above) and did not attempt a fix, since it is outside
+  Decision Intelligence and the file(s) involved were not touched by this branch. The previously
+  reported, more specific claim about `CorpusReviewPage.test.tsx` did not reproduce in this session's
+  5 runs (0 failures for that file across all of them).
 
 ## Before this is mergeable
 
