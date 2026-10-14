@@ -30,6 +30,7 @@ export function CasesPage() {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [externalRef, setExternalRef] = useState("");
   const [factsJson, setFactsJson] = useState("{}");
+  const [humanDecisionJson, setHumanDecisionJson] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -57,12 +58,25 @@ export function CasesPage() {
       setCreateError("Facts must be valid JSON (e.g. {\"amount\": 1200}).");
       return;
     }
+    let humanDecision: Record<string, unknown> | undefined;
+    try {
+      humanDecision = humanDecisionJson.trim() ? JSON.parse(humanDecisionJson) : undefined;
+    } catch {
+      setCreateError("Human decision must be valid JSON (e.g. {\"decision\": \"approve\"}).");
+      return;
+    }
     setCreating(true);
     setCreateError(null);
     try {
-      await decisionIntelligenceApi.createCase({ workflow_id: workflowId, external_ref: externalRef || undefined, facts });
+      await decisionIntelligenceApi.createCase({
+        workflow_id: workflowId,
+        external_ref: externalRef || undefined,
+        facts,
+        human_decision: humanDecision,
+      });
       setExternalRef("");
       setFactsJson("{}");
+      setHumanDecisionJson("");
       setShowCreateForm(false);
       load();
     } catch (e) {
@@ -126,6 +140,20 @@ export function CasesPage() {
                 value={factsJson}
                 onChange={(e) => setFactsJson(e.target.value)}
                 rows={3}
+                className="w-full px-3 py-2 rounded-lg border text-sm font-mono"
+                style={{ backgroundColor: "var(--pr-bg-hover)", borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-primary)" }}
+              />
+            </div>
+            <div>
+              <label htmlFor={`${formId}-human-decision`} className="block text-xs font-medium mb-1.5" style={{ color: "var(--pr-text-muted)" }}>
+                Human decision (baseline) <span style={{ fontWeight: 400, color: "var(--pr-text-disabled)" }}>(optional JSON: the real, already-made decision a later Replay compares a proposed rule against)</span>
+              </label>
+              <textarea
+                id={`${formId}-human-decision`}
+                value={humanDecisionJson}
+                onChange={(e) => setHumanDecisionJson(e.target.value)}
+                rows={2}
+                placeholder='{"decision": "approve"}'
                 className="w-full px-3 py-2 rounded-lg border text-sm font-mono"
                 style={{ backgroundColor: "var(--pr-bg-hover)", borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-primary)" }}
               />

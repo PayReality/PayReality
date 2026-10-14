@@ -62,6 +62,11 @@ vi.mock("./api", () => ({
     getQuestion: () => Promise.resolve(DETAIL),
     listAnswers: () => Promise.resolve([currentAnswer]),
     listRules: () => Promise.resolve(EMPTY_RULES),
+    // Evidence-linking selectors (patterns/cases to link to this question)
+    // load the workflow's full lists on mount, same as PatternDetailPage's
+    // own case-linking selector already did before this test existed.
+    listPatterns: () => Promise.resolve({ patterns: [], total: 0, limit: 200, offset: 0 }),
+    listCases: () => Promise.resolve({ cases: [], total: 0, limit: 200, offset: 0 }),
   },
 }));
 vi.mock("../organization/api", () => ({

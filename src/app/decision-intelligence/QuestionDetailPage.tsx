@@ -8,11 +8,12 @@ import { describeApiError } from "../live/format";
 import { useAuth } from "../auth/AuthContext";
 import { usersApi } from "../organization/api";
 import { useResourceSync } from "../services/resourceSync";
-import type { Answer, DecisionRule, QuestionDetail, RuleSchema } from "./types";
+import type { Answer, Case, DecisionRule, Pattern, QuestionDetail, RuleSchema } from "./types";
+import { Select } from "../components/ui/select";
+import { ConfirmButton } from "../components/ui/confirm-button";
 import { Card } from "../components/ui/card";
 import { Alert } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
-import { ConfirmButton } from "../components/ui/confirm-button";
 import { PageHeader } from "../components/ui/page-header";
 import { EmptyState } from "../components/ui/empty-state";
 import { Skeleton } from "../components/ui/skeleton";
@@ -40,6 +41,19 @@ export function QuestionDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+
+  // Evidence linking: this question's own case_ids/patterns are read-only
+  // above (the full case/pattern objects aren't refetched here), so the
+  // workflow's full lists are loaded separately to drive the "link"
+  // selectors below -- the same API the backend already exposes
+  // (linkQuestionPattern/linkQuestionCase, api.ts) and PatternDetailPage
+  // already wires up for linking a case to a Pattern.
+  const [workflowPatterns, setWorkflowPatterns] = useState<Pattern[]>([]);
+  const [workflowCases, setWorkflowCases] = useState<Case[]>([]);
+  const [patternToLink, setPatternToLink] = useState("");
+  const [caseToLink, setCaseToLink] = useState("");
+  const [linkingPattern, setLinkingPattern] = useState(false);
+  const [linkingCase, setLinkingCase] = useState(false);
 
   // Dimension-score editing (scoring.py: five independently-judged 0-100
   // inputs; each stays blank/untouched here rather than defaulting to 0,
@@ -100,6 +114,12 @@ export function QuestionDetailPage() {
     decisionIntelligenceApi.listRules({ workflow_id: workflowId, limit: 200 }).then((p) => setRules(p.rules)).catch(() => {});
   }, [workflowId]);
 
+  useEffect(() => {
+    if (!workflowId) return;
+    decisionIntelligenceApi.listPatterns({ workflow_id: workflowId, limit: 200 }).then((p) => setWorkflowPatterns(p.patterns)).catch(() => {});
+    decisionIntelligenceApi.listCases({ workflow_id: workflowId, limit: 200 }).then((p) => setWorkflowCases(p.cases)).catch(() => {});
+  }, [workflowId]);
+
   const approvedAnswer = useMemo(() => answers?.find((a) => a.status === "approved") ?? null, [answers]);
   const ruleForApprovedAnswer = useMemo(
     () => (approvedAnswer ? rules.find((r) => r.source_answer_id === approvedAnswer.id) ?? null : null),
@@ -128,6 +148,58 @@ export function QuestionDetailPage() {
       setMessage(describeApiError(e, "Save scores"));
     } finally {
       setSavingScores(false);
+    }
+  }
+
+  async function handleLinkPattern() {
+    if (!questionId || !patternToLink) return;
+    setLinkingPattern(true);
+    setMessage(null);
+    try {
+      await decisionIntelligenceApi.linkQuestionPattern(questionId, patternToLink);
+      setPatternToLink("");
+      load();
+    } catch (e) {
+      setMessage(describeApiError(e, "Link pattern"));
+    } finally {
+      setLinkingPattern(false);
+    }
+  }
+
+  async function handleUnlinkPattern(patternId: string) {
+    if (!questionId) return;
+    setMessage(null);
+    try {
+      await decisionIntelligenceApi.unlinkQuestionPattern(questionId, patternId);
+      load();
+    } catch (e) {
+      setMessage(describeApiError(e, "Unlink pattern"));
+    }
+  }
+
+  async function handleLinkCase() {
+    if (!questionId || !caseToLink) return;
+    setLinkingCase(true);
+    setMessage(null);
+    try {
+      await decisionIntelligenceApi.linkQuestionCase(questionId, caseToLink);
+      setCaseToLink("");
+      load();
+    } catch (e) {
+      setMessage(describeApiError(e, "Link case"));
+    } finally {
+      setLinkingCase(false);
+    }
+  }
+
+  async function handleUnlinkCase(caseId: string) {
+    if (!questionId) return;
+    setMessage(null);
+    try {
+      await decisionIntelligenceApi.unlinkQuestionCase(questionId, caseId);
+      load();
+    } catch (e) {
+      setMessage(describeApiError(e, "Unlink case"));
     }
   }
 
@@ -328,24 +400,69 @@ export function QuestionDetailPage() {
         ) : (
           <div className="flex flex-col gap-1 mb-3">
             {patterns.map((p) => (
-              <Link key={p.id} to={`/decision-intelligence/workflows/${workflowId}/patterns/${p.id}`} style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
-                {p.name}
-              </Link>
+              <div key={p.id} className="flex items-center justify-between" style={{ fontSize: 13 }}>
+                <Link to={`/decision-intelligence/workflows/${workflowId}/patterns/${p.id}`} style={{ color: "var(--pr-authority-blue)" }}>
+                  {p.name}
+                </Link>
+                <ConfirmButton size="sm" variant="ghost" confirmLabel="Unlink" onConfirm={() => handleUnlinkPattern(p.id)}>
+                  Unlink
+                </ConfirmButton>
+              </div>
             ))}
           </div>
         )}
+        <div className="flex items-center gap-2 mb-4">
+          <Select
+            value={patternToLink}
+            onChange={(e) => setPatternToLink(e.target.value)}
+            aria-label="Select a pattern to link"
+            className="px-3 py-2 rounded-lg border text-sm flex-1"
+            style={{ backgroundColor: "var(--pr-bg-hover)", borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-primary)" }}
+          >
+            <option value="">Link a pattern...</option>
+            {workflowPatterns.filter((p) => !patterns.some((linked) => linked.id === p.id)).map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </Select>
+          <Button size="sm" disabled={!patternToLink || linkingPattern} pending={linkingPattern} onClick={handleLinkPattern}>
+            {linkingPattern ? "Linking..." : "Link"}
+          </Button>
+        </div>
+
         <p className="text-xs font-medium mb-2" style={{ color: "var(--pr-text-muted)" }}>Linked cases ({case_ids.length})</p>
         {case_ids.length === 0 ? (
           <p style={{ fontSize: 13, color: "var(--pr-text-disabled)", fontStyle: "italic" }}>No cases linked yet.</p>
         ) : (
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1 mb-3">
             {case_ids.map((id) => (
-              <Link key={id} to={`/decision-intelligence/workflows/${workflowId}/cases/${id}`} style={{ color: "var(--pr-authority-blue)", fontSize: 13 }}>
-                {id.slice(0, 8)}
-              </Link>
+              <div key={id} className="flex items-center justify-between" style={{ fontSize: 13 }}>
+                <Link to={`/decision-intelligence/workflows/${workflowId}/cases/${id}`} style={{ color: "var(--pr-authority-blue)" }}>
+                  {id.slice(0, 8)}
+                </Link>
+                <ConfirmButton size="sm" variant="ghost" confirmLabel="Unlink" onConfirm={() => handleUnlinkCase(id)}>
+                  Unlink
+                </ConfirmButton>
+              </div>
             ))}
           </div>
         )}
+        <div className="flex items-center gap-2">
+          <Select
+            value={caseToLink}
+            onChange={(e) => setCaseToLink(e.target.value)}
+            aria-label="Select a case to link"
+            className="px-3 py-2 rounded-lg border text-sm flex-1"
+            style={{ backgroundColor: "var(--pr-bg-hover)", borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-primary)" }}
+          >
+            <option value="">Link a case...</option>
+            {workflowCases.filter((c) => !case_ids.includes(c.id)).map((c) => (
+              <option key={c.id} value={c.id}>{c.external_ref || c.id.slice(0, 8)}</option>
+            ))}
+          </Select>
+          <Button size="sm" disabled={!caseToLink || linkingCase} pending={linkingCase} onClick={handleLinkCase}>
+            {linkingCase ? "Linking..." : "Link"}
+          </Button>
+        </div>
       </Card>
 
       <Card className="mb-6">

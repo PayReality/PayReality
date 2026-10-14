@@ -51,6 +51,7 @@ export function CaseDetailPage() {
   const [outcome, setOutcome] = useState("");
   const [outcomeEvidence, setOutcomeEvidence] = useState("");
   const [escalationReason, setEscalationReason] = useState("");
+  const [humanDecisionJson, setHumanDecisionJson] = useState("");
   const [saving, setSaving] = useState(false);
 
   function load() {
@@ -64,6 +65,7 @@ export function CaseDetailPage() {
         setOutcome(c.outcome ?? "");
         setOutcomeEvidence(c.outcome_evidence ?? "");
         setEscalationReason(c.escalation_reason ?? "");
+        setHumanDecisionJson(c.human_decision ? JSON.stringify(c.human_decision, null, 2) : "");
       })
       .catch((e) => setLoadError(describeApiError(e, "Loading case")));
   }
@@ -107,6 +109,15 @@ export function CaseDetailPage() {
 
   async function handleSave() {
     if (!theCase) return;
+    let humanDecision: Record<string, unknown> | undefined;
+    if (humanDecisionJson.trim()) {
+      try {
+        humanDecision = JSON.parse(humanDecisionJson);
+      } catch {
+        setMessage("Human decision must be valid JSON (e.g. {\"decision\": \"approve\"}).");
+        return;
+      }
+    }
     setSaving(true);
     setMessage(null);
     try {
@@ -115,6 +126,7 @@ export function CaseDetailPage() {
         outcome: outcome || undefined,
         outcome_evidence: outcomeEvidence || undefined,
         escalation_reason: escalationReason || undefined,
+        human_decision: humanDecision,
       });
       setTheCase(updated);
       setEditing(false);
@@ -203,6 +215,19 @@ export function CaseDetailPage() {
                 value={escalationReason}
                 onChange={(e) => setEscalationReason(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg border text-sm"
+                style={{ backgroundColor: "var(--pr-bg-hover)", borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-primary)" }}
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--pr-text-muted)" }}>
+                Human decision (baseline) <span style={{ fontWeight: 400, color: "var(--pr-text-disabled)" }}>(JSON: what a later Replay compares a proposed rule against)</span>
+              </label>
+              <textarea
+                value={humanDecisionJson}
+                onChange={(e) => setHumanDecisionJson(e.target.value)}
+                rows={2}
+                placeholder='{"decision": "approve"}'
+                className="w-full px-3 py-2 rounded-lg border text-sm font-mono"
                 style={{ backgroundColor: "var(--pr-bg-hover)", borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-primary)" }}
               />
             </div>
