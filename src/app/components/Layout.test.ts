@@ -53,7 +53,7 @@ describe("selectVisibleNavItems", () => {
     // test passes the same way under both the demo and production builds.
     const overviewPath = navItems.find((item) => item.label === "Overview")!.path;
     expect(paths).toEqual(
-      ["/agents", "/assurance", "/decisions", "/evidence", "/governance", "/organization", overviewPath].sort()
+      ["/agents", "/assurance", "/decision-intelligence", "/decisions", "/evidence", "/governance", "/organization", overviewPath].sort()
     );
   });
 });
