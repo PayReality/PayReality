@@ -181,19 +181,15 @@ def score_question(
 
 
 # --- Lifecycle transitions ------------------------------------------------
-
-_ALLOWED_TRANSITIONS: dict[str, set[str]] = {
-    "proposed": {"in_analysis", "awaiting_answer"},
-    "in_analysis": {"awaiting_answer"},
-    "awaiting_answer": {"answer_submitted"},
-    "answer_submitted": {"approved", "awaiting_answer"},  # awaiting_answer: answer rejected, back to square one
-    "approved": {"logic_drafted"},
-    "logic_drafted": {"logic_validated", "logic_drafted"},  # a new rule version re-enters "drafted"
-    "logic_validated": {"replay_completed", "logic_drafted"},
-    "replay_completed": {"ready_for_review", "logic_drafted"},
-    "ready_for_review": {"approved_for_operational_use", "logic_drafted"},
-    "approved_for_operational_use": set(),
-}
+#
+# The full status vocabulary's path: proposed/in_analysis -> awaiting_answer
+# (submit_for_review, below) -> answer_submitted -> approved (both driven by
+# di_answer_service) -> logic_drafted -> logic_validated (both driven by
+# di_rule_service) -> replay_completed (driven by di_replay_service) ->
+# ready_for_review -> approved_for_operational_use (both below). Only the
+# first and last two steps are human-invoked directly against the question
+# itself; every step in between is a side effect of progress on the
+# question's own answer/rule/replay -- see _apply_status's own docstring.
 
 
 def _apply_status(db: Session, question: DIQuestion, new_status: str) -> DIQuestion:
