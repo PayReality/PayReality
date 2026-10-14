@@ -309,8 +309,11 @@ export interface ReplayRun {
   completed_at: string | null;
   // Aggregate per-outcome_category counts, computed once at completion
   // from the real DIReplayCaseResult rows this run wrote -- never
-  // estimated. Shape: { [outcome_category]: count }.
-  summary: Record<string, number> | null;
+  // estimated. Real shape, matching di_replay_service.py's own
+  // `replay_run.summary = {"total_cases": len(cases), "counts": counts}`
+  // (this was previously typed as a flat Record<string, number>, which
+  // never matched what the backend actually serializes).
+  summary: { total_cases: number; counts: Record<string, number> } | null;
   created_by_user_id: string;
   created_at: string;
 }

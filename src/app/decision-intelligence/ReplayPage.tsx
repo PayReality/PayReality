@@ -188,8 +188,8 @@ function ReplayResultsView({ replayId }: { replayId: string }) {
     );
   }
 
-  const summary = run.summary ?? {};
-  const summaryTotal = Object.values(summary).reduce((sum, n) => sum + n, 0);
+  const summary = run.summary?.counts ?? {};
+  const summaryTotal = run.summary?.total_cases ?? Object.values(summary).reduce((sum, n) => sum + n, 0);
 
   return (
     <div className="p-8 max-w-5xl" style={{ backgroundColor: "var(--pr-bg-primary)", minHeight: "100vh" }}>
