@@ -28,6 +28,11 @@ import { HelpPanel } from "../help/HelpPanel";
 import { page as trackPage } from "../services/analytics";
 import { DEMO_MODE } from "../demo/config";
 import { DemoBanner } from "./DemoBanner";
+import { PrototypeBanner } from "./PrototypeBanner";
+
+// Set only for the isolated Decision Intelligence prototype deployment's
+// build; never set for the real demo or dashboard builds.
+const PROTOTYPE_MODE = import.meta.env.VITE_PROTOTYPE_MODE === "true";
 import { TourProvider } from "../demo/tour/TourProvider";
 import { getTheme, setTheme, type Theme } from "../lib/theme";
 import { getSidebarCollapsed, setSidebarCollapsed } from "../lib/sidebarPreference";
@@ -542,6 +547,7 @@ function LayoutInner() {
         Skip to main content
       </a>
       {DEMO_MODE && <DemoBanner />}
+      {PROTOTYPE_MODE && <PrototypeBanner />}
       <div className="flex flex-1 min-h-0" style={{ backgroundColor: "var(--pr-bg-primary)" }}>
       {/* Sidebar (desktop). Section 12: collapse is a desktop-only
           concept -- isMobile already routes to a completely separate
