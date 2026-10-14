@@ -56,6 +56,7 @@ const EMPTY_RULES: RuleListPage = { rules: [], total: 0, limit: 200, offset: 0 }
 
 let currentAnswer: Answer;
 let currentUserId: string;
+let scoreQuestionResult: Question = QUESTION;
 
 // A queue of controllable getQuestion() responses, consumed in call
 // order, so a test can resolve two overlapping requests out of order --
@@ -81,7 +82,7 @@ vi.mock("./api", () => ({
     listPatterns: () => Promise.resolve({ patterns: [], total: 0, limit: 200, offset: 0 }),
     listCases: () => Promise.resolve({ cases: [], total: 0, limit: 200, offset: 0 }),
     updateQuestion: () => Promise.resolve(QUESTION),
-    scoreQuestion: () => Promise.resolve(QUESTION),
+    scoreQuestion: () => Promise.resolve(scoreQuestionResult),
   },
 }));
 vi.mock("../organization/api", () => ({
@@ -99,6 +100,7 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   getQuestionQueue = [];
+  scoreQuestionResult = QUESTION;
 });
 
 afterEach(() => {
@@ -165,65 +167,125 @@ describe("QuestionDetailPage: approver cannot equal author", () => {
 });
 
 // Found while validating Decision Intelligence end to end against a real
-// backend: load() is fire-and-forget after every mutation on this page
-// (score saves, pattern/case linking, answer actions), with no guarantee
-// those GET /questions/{id} requests resolve in the order they were
-// issued. A slow, now-stale response from an earlier load() resolving
-// after a newer one used to overwrite the dimension-score inputs back to
-// whatever they were before the user's latest save, with no error shown
-// -- confirmed via a direct DB read after a UI flow that had reported
-// success. Fixed with a per-request epoch guard; this locks that down.
-describe("QuestionDetailPage: stale background refetch cannot clobber a newer one", () => {
-  it("keeps the most recently issued load()'s data even if an earlier one resolves later", async () => {
+// backend: load() is called, unawaited, by several different actions on
+// this same page (linking a pattern/case, an answer action, a score
+// save), with no guard against one of them resolving late and clobbering
+// something newer. Two distinct real failure modes were confirmed via a
+// direct DB read after a UI flow that had reported success:
+//
+//  1. A reviewer starts entering dimension scores while an earlier
+//     action's load() (e.g. one kicked off by linking a case moments
+//     before) is still in flight. That load() resolving while they are
+//     mid-entry used to reset the five score inputs back to blank,
+//     discarding what they had just typed before they ever got to click
+//     Save -- so the save that followed persisted empty values.
+//  2. Even once scores reach the server, handleSaveScores used to trust
+//     a separate, unawaited load() to resync the inputs afterward,
+//     rather than the save's own response -- a slower, unrelated load()
+//     resolving in between could still win that race.
+//
+// Fixed with two complementary guards: scoresDirtyRef stops load() from
+// touching the five score inputs while the reviewer has unsaved local
+// edits in them, and handleSaveScores now applies its own
+// updateQuestion/scoreQuestion response directly instead of waiting on
+// load(). The epoch guard (loadEpochRef) is additional defense in depth,
+// ensuring only the most recently issued load() can ever apply at all.
+describe("QuestionDetailPage: scoring survives an unrelated, slower background refetch", () => {
+  it("does not lose an in-progress, unsaved score edit to an earlier action's load() resolving late", async () => {
     currentAnswer = answerWithAuthor("user-author-x");
     currentUserId = "user-different-reviewer";
 
-    // Call #1 (mount): resolves immediately with all scores unset.
-    // Call #2 (a later load(), simulating one kicked off by an earlier
-    // action still in flight): deliberately held open, to be resolved
-    // AFTER call #3.
-    // Call #3 (the most recently issued load(), e.g. after a score save):
-    // resolves first, with real scores set.
-    let resolveCall2!: (d: QuestionDetail) => void;
-    const call2Promise = new Promise<QuestionDetail>((resolve) => {
-      resolveCall2 = resolve;
+    // Simulates a load() kicked off moments earlier by an unrelated
+    // action still in flight when the reviewer starts typing a score.
+    // Real-world trigger for a second load() beyond the one at mount:
+    // useResourceSync's own cross-tab "storage" event listener (the
+    // same mechanism a pattern/case link, or another tab, uses) -- fired
+    // here directly so this held-open queue item is a genuine in-flight
+    // request the component actually issued, not an unconnected promise.
+    let resolveEarlierLoad!: (d: QuestionDetail) => void;
+    const earlierLoadPromise = new Promise<QuestionDetail>((resolve) => {
+      resolveEarlierLoad = resolve;
     });
-    const scoredDetail: QuestionDetail = {
-      question: { ...QUESTION, reach_score: 70, impact_score: 55, risk_score: 40, answerability_score: 80, decision_sensitivity_score: 35, priority_score: 57, scoring_version: "v1" },
-      patterns: [],
-      case_ids: [],
-    };
-
     getQuestionQueue = [
-      { resolve: () => {}, promise: Promise.resolve(DETAIL) }, // call #1: mount
-      { resolve: resolveCall2, promise: call2Promise }, // call #2: held open
-      { resolve: () => {}, promise: Promise.resolve(scoredDetail) }, // call #3: resolves immediately
+      { resolve: () => {}, promise: Promise.resolve(DETAIL) }, // mount
+      { resolve: resolveEarlierLoad, promise: earlierLoadPromise }, // held open
     ];
 
     await renderPage();
 
-    // Trigger call #2 (still unset scores) and call #3 (now scored) via
-    // the real "Save scores" action, exactly as the real race occurred:
-    // one save in flight, a second one issued and resolving first.
-    const saveButton = Array.from(container.querySelectorAll("button")).find((b) => /Save scores/.test(b.textContent ?? ""));
     await act(async () => {
-      saveButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await new Promise((r) => setTimeout(r, 10));
-    });
-    await act(async () => {
-      saveButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      window.dispatchEvent(new StorageEvent("storage", { key: "pr:resource-changed:decision-intelligence" }));
       await new Promise((r) => setTimeout(r, 10));
     });
 
-    // Now let the STALE call #2 resolve, after the newer call #3 already
-    // landed -- this is the exact out-of-order arrival the epoch guard
-    // must survive.
+    const reachInput = Array.from(container.querySelectorAll("label"))
+      .find((l) => l.textContent?.trim() === "Reach")
+      ?.nextElementSibling as HTMLInputElement | undefined;
+    expect(reachInput).toBeTruthy();
+
     await act(async () => {
-      resolveCall2(DETAIL);
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+      setter.call(reachInput, "70");
+      reachInput!.dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    expect(reachInput!.value).toBe("70");
+
+    // The earlier, unrelated load() now resolves with pre-edit (null)
+    // data. It must not blank out the score the reviewer just typed.
+    await act(async () => {
+      resolveEarlierLoad(DETAIL);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(reachInput!.value).toBe("70");
+  });
+
+  it("shows the save's own result immediately, without depending on a separate load()", async () => {
+    currentAnswer = answerWithAuthor("user-author-x");
+    currentUserId = "user-different-reviewer";
+
+    const scoredQuestion: Question = {
+      ...QUESTION,
+      reach_score: 70,
+      impact_score: 55,
+      risk_score: 40,
+      answerability_score: 80,
+      decision_sensitivity_score: 35,
+      priority_score: 57,
+      scoring_version: "v1",
+    };
+
+    // The save's own trailing load() is held open -- the assertion below
+    // must hold before it ever resolves.
+    let resolveTrailingLoad!: (d: QuestionDetail) => void;
+    const trailingLoadPromise = new Promise<QuestionDetail>((resolve) => {
+      resolveTrailingLoad = resolve;
+    });
+    getQuestionQueue = [
+      { resolve: () => {}, promise: Promise.resolve(DETAIL) }, // mount
+      { resolve: resolveTrailingLoad, promise: trailingLoadPromise }, // held open
+    ];
+    scoreQuestionResult = scoredQuestion;
+
+    await renderPage();
+
+    const saveButton = Array.from(container.querySelectorAll("button")).find((b) => /Save scores/.test(b.textContent ?? ""));
+    await act(async () => {
+      saveButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await new Promise((r) => setTimeout(r, 20));
     });
 
     expect(container.textContent).toContain("57.00");
     expect(container.textContent).not.toContain("Not yet assessed");
+
+    // Letting the trailing load() resolve afterward (with consistent,
+    // post-save data, as it would for real against this single-database
+    // stack) must not disturb anything.
+    await act(async () => {
+      resolveTrailingLoad({ question: scoredQuestion, patterns: [], case_ids: [] });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(container.textContent).toContain("57.00");
   });
 });

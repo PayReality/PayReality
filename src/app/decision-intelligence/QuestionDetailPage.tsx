@@ -80,6 +80,17 @@ export function QuestionDetailPage() {
   const [supersedingAnswerId, setSupersedingAnswerId] = useState<string | null>(null);
   const [supersedeContent, setSupersedeContent] = useState("");
 
+  // Set the moment the reviewer types into any of the five dimension
+  // inputs, cleared right after those fields are known to be in sync
+  // with the server (a successful save, or the very first load after
+  // mount). While dirty, load() leaves the five score inputs alone --
+  // see its own comment below for why this matters: load() can be
+  // triggered by something else entirely on this same page (linking a
+  // pattern/case, an answer action), and a slow one of those resolving
+  // while the reviewer is mid-entry would otherwise blank out whatever
+  // they had just typed, before they ever got to click Save.
+  const scoresDirtyRef = useRef(false);
+
   // `load()` is called, unawaited, after every mutation on this page
   // (score saves, pattern/case linking, answer actions, and the
   // cross-tab/tab-refocus resourceSync below) -- there is no guarantee
@@ -106,11 +117,13 @@ export function QuestionDetailPage() {
       .then((d) => {
         if (epoch !== loadEpochRef.current) return;
         setDetail(d);
-        setReach(d.question.reach_score?.toString() ?? "");
-        setImpact(d.question.impact_score?.toString() ?? "");
-        setRisk(d.question.risk_score?.toString() ?? "");
-        setAnswerability(d.question.answerability_score?.toString() ?? "");
-        setDecisionSensitivity(d.question.decision_sensitivity_score?.toString() ?? "");
+        if (!scoresDirtyRef.current) {
+          setReach(d.question.reach_score?.toString() ?? "");
+          setImpact(d.question.impact_score?.toString() ?? "");
+          setRisk(d.question.risk_score?.toString() ?? "");
+          setAnswerability(d.question.answerability_score?.toString() ?? "");
+          setDecisionSensitivity(d.question.decision_sensitivity_score?.toString() ?? "");
+        }
       })
       .catch((e) => {
         if (epoch !== loadEpochRef.current) return;
@@ -164,7 +177,27 @@ export function QuestionDetailPage() {
         answerability_score: answerability === "" ? undefined : Number(answerability),
         decision_sensitivity_score: decisionSensitivity === "" ? undefined : Number(decisionSensitivity),
       });
-      await decisionIntelligenceApi.scoreQuestion(questionId);
+      const scored = await decisionIntelligenceApi.scoreQuestion(questionId);
+      // Apply this save's own response directly, rather than trusting a
+      // separate, unawaited load() to eventually resync the five
+      // dimension inputs. Found while validating this module end to end:
+      // load() is also fired by unrelated actions on this same page
+      // (linking a pattern or case), and a slow, still-in-flight one of
+      // those could resolve between this save's two requests above and
+      // this point, legitimately looking like "the latest issued load()"
+      // to the epoch guard, and resync these inputs back to their
+      // pre-save (still-null) values from a moment before this save ever
+      // happened -- a real, confirmed data-loss path (the UI reported
+      // success while the DB still had the old, unsaved values). Using
+      // this call's own response removes that dependency entirely for
+      // the one flow that actually persists these fields.
+      scoresDirtyRef.current = false;
+      setReach(scored.reach_score?.toString() ?? "");
+      setImpact(scored.impact_score?.toString() ?? "");
+      setRisk(scored.risk_score?.toString() ?? "");
+      setAnswerability(scored.answerability_score?.toString() ?? "");
+      setDecisionSensitivity(scored.decision_sensitivity_score?.toString() ?? "");
+      setDetail((prev) => (prev ? { ...prev, question: scored } : prev));
       load();
     } catch (e) {
       setMessage(describeApiError(e, "Save scores"));
@@ -383,7 +416,7 @@ export function QuestionDetailPage() {
                 min={0}
                 max={100}
                 value={f.value}
-                onChange={(e) => f.set(e.target.value)}
+                onChange={(e) => { scoresDirtyRef.current = true; f.set(e.target.value); }}
                 placeholder="0-100"
                 className="w-full px-2 py-1.5 rounded-lg border text-sm"
                 style={{ backgroundColor: "var(--pr-bg-hover)", borderColor: "var(--pr-overlay-10)", color: "var(--pr-text-primary)" }}
