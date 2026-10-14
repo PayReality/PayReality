@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { decisionIntelligenceApi } from "./api";
 import { AnswerStatusBadge } from "./components/StatusBadges";
@@ -80,12 +80,31 @@ export function QuestionDetailPage() {
   const [supersedingAnswerId, setSupersedingAnswerId] = useState<string | null>(null);
   const [supersedeContent, setSupersedeContent] = useState("");
 
+  // `load()` is called, unawaited, after every mutation on this page
+  // (score saves, pattern/case linking, answer actions, and the
+  // cross-tab/tab-refocus resourceSync below) -- there is no guarantee
+  // those GET /questions/{id} requests resolve in the order they were
+  // issued. Without a guard, a slow, now-stale response from an EARLIER
+  // load() (e.g. one kicked off by linking a case) can resolve AFTER a
+  // newer one and overwrite the dimension-score inputs back to whatever
+  // they were before the user's latest edit, discarding a just-saved
+  // score with no error or warning. loadEpochRef makes only the most
+  // recently ISSUED request's response allowed to update state; any
+  // response that resolves after a newer request has already started is
+  // simply ignored. Found while validating this module end to end: a
+  // rapid pattern/case-link-then-score sequence could silently drop the
+  // first one or two dimension scores entered, confirmed via a direct
+  // DB read showing a save that the UI itself had reported succeeding.
+  const loadEpochRef = useRef(0);
+
   function load() {
     if (!questionId) return;
+    const epoch = ++loadEpochRef.current;
     setLoadError(null);
     decisionIntelligenceApi
       .getQuestion(questionId)
       .then((d) => {
+        if (epoch !== loadEpochRef.current) return;
         setDetail(d);
         setReach(d.question.reach_score?.toString() ?? "");
         setImpact(d.question.impact_score?.toString() ?? "");
@@ -93,7 +112,10 @@ export function QuestionDetailPage() {
         setAnswerability(d.question.answerability_score?.toString() ?? "");
         setDecisionSensitivity(d.question.decision_sensitivity_score?.toString() ?? "");
       })
-      .catch((e) => setLoadError(describeApiError(e, "Loading question")));
+      .catch((e) => {
+        if (epoch !== loadEpochRef.current) return;
+        setLoadError(describeApiError(e, "Loading question"));
+      });
   }
 
   function loadAnswers() {
