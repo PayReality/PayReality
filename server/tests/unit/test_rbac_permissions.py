@@ -89,12 +89,19 @@ def test_reviewer_cannot_manage_facts_or_issue_capabilities():
 
 
 def test_auditor_is_strictly_read_only():
+    """Decision Intelligence: Auditor additionally gained DI_CASE_VIEW/
+    DI_QUESTION_VIEW/DI_REPORT_VIEW -- still strictly view-only, so the
+    "read only" invariant this test actually guards is unchanged, only
+    the exact set of view permissions it holds grew."""
     view_permissions = {
         Permission.EVIDENCE_VIEW,
         Permission.DECISIONS_VIEW,
         Permission.RUNTIME_POLICY_VIEW,
         Permission.AGENT_VIEW,
         Permission.ASSURANCE_VIEW,
+        Permission.DI_CASE_VIEW,
+        Permission.DI_QUESTION_VIEW,
+        Permission.DI_REPORT_VIEW,
     }
     assert set(permissions_for_role(Role.AUDITOR)) == {p.value for p in view_permissions}
     for permission in Permission:
@@ -102,8 +109,18 @@ def test_auditor_is_strictly_read_only():
             assert not has_permission(Role.AUDITOR, permission)
 
 
-def test_executive_has_only_assurance_view():
-    assert permissions_for_role(Role.EXECUTIVE) == [Permission.ASSURANCE_VIEW.value]
+def test_executive_has_only_view_permissions():
+    """Decision Intelligence: Executive additionally gained DI_CASE_VIEW/
+    DI_QUESTION_VIEW/DI_REPORT_VIEW, so this no longer asserts a single-
+    element list -- but every permission it holds is still a view-only
+    one, which is the invariant this test actually guards."""
+    view_permissions = {
+        Permission.ASSURANCE_VIEW,
+        Permission.DI_CASE_VIEW,
+        Permission.DI_QUESTION_VIEW,
+        Permission.DI_REPORT_VIEW,
+    }
+    assert set(permissions_for_role(Role.EXECUTIVE)) == {p.value for p in view_permissions}
 
 
 def test_unknown_role_has_no_permissions():

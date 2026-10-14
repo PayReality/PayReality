@@ -130,6 +130,34 @@ class Permission(str, Enum):
     # lifecycle without holding RUNTIME_POLICY_PUBLISH.
     INTEGRATION_IDENTITY_MANAGE = "integration_identity.manage"
 
+    # Decision Intelligence (module prefix `DI`): a deliberately parallel
+    # product module alongside Runtime Authority above -- discovering the
+    # smallest set of questions a business needs to answer to resolve
+    # recurring uncertainty, not enforcing a live AI action. Its own
+    # permission namespace (di_*) rather than reusing RUNTIME_POLICY_*/
+    # DECISIONS_*/AGENT_* for the same reason the two domains don't share
+    # tables: "a Workflow/Case/Pattern/Question/Answer/DecisionRule" is a
+    # different kind of thing from "a RuntimePolicy/Decision", even where
+    # the English words sound alike, and granting one implicitly would
+    # blur a boundary this module's own brief requires staying explicit.
+    DI_WORKFLOW_MANAGE = "di_workflow.manage"
+    DI_CASE_MANAGE = "di_case.manage"
+    DI_CASE_VIEW = "di_case.view"
+    DI_PATTERN_MANAGE = "di_pattern.manage"
+    DI_QUESTION_MANAGE = "di_question.manage"
+    DI_QUESTION_VIEW = "di_question.view"
+    # Separation of duties (this module's own brief): submitting an answer
+    # is deliberately NOT sufficient to approve one -- DI_ANSWER_SUBMIT and
+    # DI_ANSWER_APPROVE are two different permissions so a role (Reviewer)
+    # can hold the first without the second, enforced again in code (never
+    # relying on RBAC alone) by answer_service's own author != approver
+    # check.
+    DI_ANSWER_SUBMIT = "di_answer.submit"
+    DI_ANSWER_APPROVE = "di_answer.approve"
+    DI_RULE_MANAGE = "di_rule.manage"
+    DI_REPLAY_RUN = "di_replay.run"
+    DI_REPORT_VIEW = "di_report.view"
+
 
 # The full permission set, used to grant Owner "full platform control"
 # without hand-maintaining a second, parallel list that would drift
@@ -156,6 +184,16 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.CAPABILITY_VERIFY,
             Permission.INTEGRATION_CONTRACT_MANAGE,
             Permission.INTEGRATION_CONTRACT_PUBLISH,
+            Permission.DI_WORKFLOW_MANAGE,
+            Permission.DI_CASE_MANAGE,
+            Permission.DI_CASE_VIEW,
+            Permission.DI_PATTERN_MANAGE,
+            Permission.DI_QUESTION_MANAGE,
+            Permission.DI_QUESTION_VIEW,
+            Permission.DI_ANSWER_APPROVE,
+            Permission.DI_RULE_MANAGE,
+            Permission.DI_REPLAY_RUN,
+            Permission.DI_REPORT_VIEW,
         }
     ),
     Role.AGENT_ADMIN: frozenset(
@@ -177,6 +215,9 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.AUTHORITY_REVIEW,
             Permission.DECISIONS_VIEW,
             Permission.DECISIONS_RESOLVE,
+            Permission.DI_CASE_VIEW,
+            Permission.DI_QUESTION_VIEW,
+            Permission.DI_ANSWER_SUBMIT,
         }
     ),
     Role.AUDITOR: frozenset(
@@ -186,9 +227,19 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.RUNTIME_POLICY_VIEW,
             Permission.AGENT_VIEW,
             Permission.ASSURANCE_VIEW,
+            Permission.DI_CASE_VIEW,
+            Permission.DI_QUESTION_VIEW,
+            Permission.DI_REPORT_VIEW,
         }
     ),
-    Role.EXECUTIVE: frozenset({Permission.ASSURANCE_VIEW}),
+    Role.EXECUTIVE: frozenset(
+        {
+            Permission.ASSURANCE_VIEW,
+            Permission.DI_CASE_VIEW,
+            Permission.DI_QUESTION_VIEW,
+            Permission.DI_REPORT_VIEW,
+        }
+    ),
 }
 
 
