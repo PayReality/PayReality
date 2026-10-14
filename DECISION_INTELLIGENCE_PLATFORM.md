@@ -9,11 +9,15 @@ highest-value set of questions a business needs to answer to resolve recurring u
 many decisions.
 
 Built on branch `feature/decision-intelligence-platform` (based on `origin/main` @ `90e41df`), in
-an isolated git worktree, never merged, never pushed, never deployed. The existing Runtime
-Authority tables, routers, and frontend pages were not modified except for one backend router
-addition (`GET /v1/decision-intelligence/patterns/{id}/cases`, added during frontend integration,
-see Known limitations) and two stale frontend fixtures that would otherwise have silently broken
-(`Layout.test.ts`'s known-nav-set assertion, `demo/fixtures/users.ts`'s demo permission list).
+an isolated git worktree, never merged, never pushed. The existing Runtime Authority tables,
+routers, and frontend pages were not modified except for one backend router addition
+(`GET /v1/decision-intelligence/patterns/{id}/cases`, added during frontend integration, see Known
+limitations), two stale frontend fixtures that would otherwise have silently broken
+(`Layout.test.ts`'s known-nav-set assertion, `demo/fixtures/users.ts`'s demo permission list), and
+two real defects found and fixed during this session's end-to-end validation (`ReplayPage.tsx`'s and
+`types.ts`'s `ReplayRun.summary` shape; `QuestionDetailPage.tsx`'s score-input race guards; see
+"Defects found and fixed this session"). Validated this session against real Postgres and a real
+Chromium browser; still never deployed.
 
 This document is the honest status record. It does not claim anything that was not actually run and
 observed to pass.
@@ -151,10 +155,195 @@ implementing agents.)
     the alembic version row changing). `alembic upgrade head` afterward re-applied cleanly, back to
     `f3a7c1e9b5d2`, which is the state the browser walkthrough in Part 2 below was run against.
   - No failures, no manual intervention, no SQLite substitution anywhere in this sequence.
-- **Not run**: a browser-based end-to-end journey (sign in, create workflow, case, pattern,
-  question, answer, rule, replay, report). No browser automation was available to either
-  implementing agent. The component/integration tests above cover the same logic at a lower level,
-  but a real end-to-end click-through has not been performed.
+- **Now run for real, end to end, in a real Chromium browser** (2026-10-14, this session), driven
+  by a Playwright script (`playwright` package, headless Chromium) against the real FastAPI server
+  (`server/.venv/Scripts/python.exe -m uvicorn app.main:app --port 8000`) and the real Vite dev
+  server (`npm run dev`, port 5173), both pointed at the same real Postgres from the migration
+  validation above. See "Real browser walkthrough" and "Fictional demonstration" below for the full
+  account, including two real defects this walkthrough found and fixed, and an honest list of what
+  still isn't verified.
+
+## Real browser walkthrough
+
+Performed as a real, logged-in user clicking through the real UI (not API calls dressed up as a
+UI test), with console errors and failed network requests captured for the whole session.
+
+1. Claimed the bootstrapped Owner via `POST /v1/auth/setup-owner` (Operator Key, read from
+   `server/.env`, plus an explicit `X-PayReality-Organization-Id`, per Milestone 2's own design) with
+   a fictional email, then logged in through the real `/login` page. All further steps are through
+   the UI unless stated otherwise.
+2. Created a workflow named `FICTIONAL: Customer Refund Requests (Demo)`, with a description stating
+   up front that it is fictional prototype data.
+3. Recorded ten cases (`CasesPage`'s real "New case" form, including the `65521cd` human-decision
+   baseline field), shaped exactly per the mix in "Fictional demonstration" below.
+4. Created a Pattern ("Unclear whether photo evidence is required under $500," category
+   `unclear_policy`) and linked two of the cases as evidence from the Pattern's own detail page.
+5. Created a Question, linked the Pattern and four cases as evidence from `QuestionDetailPage`
+   (the `65521cd` linking UI), then scored four of its five priority dimensions and saved: the
+   priority score correctly rendered "Not yet assessed" (confirmed via a direct `GET` of the
+   question, not just a UI read) while the fifth (`decision_sensitivity`) stayed genuinely unset.
+   Saving the fifth dimension produced a real computed priority score (`57.00`, `scoring_version
+   "v1"`), confirmed both via a direct API read and in the reloaded UI. Submitted the question for
+   review.
+6. Drafted an Answer as the Owner (its author), submitted it for approval.
+7. Confirmed separation of duties for real, not just by inspection: with the author still signed in,
+   the Approve button was disabled with the explanatory separation-of-duties copy visible, **and** a
+   direct `fetch` call to `POST /v1/decision-intelligence/answers/{id}/approve` using that same
+   author's own real session token was rejected with a real `403`
+   (`"user ... authored answer ... and cannot also approve it"`), not merely hidden in the UI.
+8. Created a second user (`FICTIONAL Jordan Reviewer`, role `governance_admin`, the role that
+   actually holds `DI_ANSWER_APPROVE` per `ROLE_PERMISSIONS`) through the real "Add a user" flow on
+   `/organization/users`, captured the one-time temporary password from the real API response, logged
+   out of the Owner session, and logged in as the new user.
+9. Approved the Answer for real as the second user. Confirmed via a direct API read that the
+   Answer's `approver_user_id` is the second user's id, distinct from `author_user_id`.
+10. Created a Decision Rule from the approved Answer. First typed deliberately invalid JSON into the
+    condition-tree textarea and submitted it: this produced a real, user-visible UI error ("Schema
+    must be valid JSON."), not a silent failure or a crash, confirming the deliberate-failure path
+    actually works. Then submitted a real, valid v1 schema (`amount <= 500` -> `approve`,
+    `human_review_required: false`).
+11. Used "Test this rule" against one real case (`REFUND-1001`) before validating: it returned
+    `matched: true, decision: "approve"`, with the matched condition text shown.
+12. Validated the rule version for real (`DI_RULE_MANAGE`), then ran a Replay against every case in
+    the workflow. The results page rendered the per-category summary with real proportional bars and
+    a real per-case baseline/proposed comparison table, with no `NaN` anywhere (see "Defects fixed"
+    below for why that specific check mattered) and real percentage labels. A hard reload of the
+    results page re-read the same, correct summary straight from the database.
+13. Created a second rule version (v2: `amount <= 500 AND photo_evidence_provided == true` ->
+    `approve`, `human_review_required: true`), validated it, and ran a second Replay. See "Fictional
+    demonstration" below for both runs' real category breakdowns.
+14. Marked the question "ready for review" and then "approved for operational use" (both real,
+    permission-gated transitions, the second behind a real confirm step), as the second user.
+15. Hard-reloaded (full browser reload, not a client-side route change) the Pattern detail page, the
+    Rule detail page, and the Question detail page: the Pattern still showed both linked cases, the
+    Rule still showed both versions (v1 and v2), and the Question still showed
+    "approved for operational use" with the Answer's correct author/approver, all read fresh from
+    Postgres, not from any client-side cache.
+16. Created a brand-new, otherwise-empty workflow (`FICTIONAL: Empty Workflow (Demo, empty-state
+    check only)`) purely to confirm a real empty state: its Cases page genuinely rendered
+    "No cases yet," not a blank screen or an error.
+17. **Cross-organization isolation, at the API level**: created a second, entirely separate
+    organization via `POST /v1/organizations` (Operator Key), logged in as its owner, and attempted
+    to read the first organization's workflow, case, question, rule, and pattern by id using the
+    second organization's own real session token. All five came back `404` with a specific
+    `"..._not_found"` detail (e.g. `workflow_not_found`), never an empty `200` and never a `403` that
+    would leak the record's existence. This matches the documented design (Security and governance,
+    above) and is now confirmed for Decision Intelligence specifically, across every resource type
+    touched in this walkthrough, not just the one the implementing agents' own integration test
+    covered.
+18. Console/network capture across the whole session: the only console errors seen were the
+    deliberate `403` from the self-approve attempt (step 7, expected) and a handful of `403`s from
+    `QuestionDetailPage`'s own `usersApi.list()` call, used only to map user ids to display names in
+    the Answer lifecycle section. `governance_admin` does not hold `USERS_MANAGE`
+    (`ROLE_PERMISSIONS`), so that call is expected to fail for that role; the page already catches it
+    silently (`.catch(() => {})`) and falls back to showing a truncated user id instead of a name, so
+    this is graceful degradation, not a crash or a broken screen, confirmed by actually watching it
+    happen rather than just reading the `.catch()` in the source. No unexplained console errors, no
+    unexplained failed requests.
+
+Separately noticed, unrelated to Decision Intelligence: this app's existing, pre-dating global
+per-client rate limit (`app/security.py`, 120 requests/60s) is easy for a scripted walkthrough moving
+this fast to trip, since a single page mount here routinely fires several parallel `GET`s. Pacing the
+script's own actions avoided it. A real person clicking through the same screens at a human pace would
+not come close to this limit; this is a note about validating quickly via automation, not a product
+defect.
+
+## Fictional demonstration
+
+Reused the browser walkthrough's own data, shaped to cover every required case category. **All of
+this is fabricated for this validation pass.** It is not a real customer, not real decisions, and
+must never be read as evidence of commercial demand or customer validation, only as a demonstration
+that the mechanism (Case -> Pattern -> Question -> Answer -> Rule -> Replay) functions correctly
+against real infrastructure.
+
+Ten cases, all under the fictional workflow:
+
+| Case | Facts | Recorded baseline | Why it's in the mix |
+|---|---|---|---|
+| `REFUND-1001` | amount 120, photo evidence provided, damaged item | approve | Clean, in-scope case |
+| `REFUND-1002` | amount 90, **no** photo evidence, damaged item | approve | Policy-gap pair (with 1003): approved despite no photo evidence |
+| `REFUND-1003` | amount 95, **no** photo evidence, damaged item | deny | Policy-gap pair (with 1002): denied despite near-identical facts |
+| `REFUND-1004` | amount 60, photo evidence provided, wrong item | approve | Clean, in-scope case |
+| `REFUND-2001` | `amount` field entirely absent (simulated dropped field) | none recorded | Technical/missing-information case, distinct from the policy-gap pair |
+| `REFUND-2002` | amount 150, `photo_evidence_provided` field absent | none recorded | Missing-information case on a different field; genuinely unresolved (no baseline), not force-fit |
+| `REFUND-3001` | amount 450, photo evidence provided, standard tier | approve | Still needs individual judgement under the proposed rule (see Replay v2) |
+| `REFUND-3002` | amount 480, photo evidence provided, goodwill gesture, VIP tier | approve | Same as above: an edge case a simple rule should not auto-decide |
+| `REFUND-4001` | amount 5000, wrong item | deny | Falls entirely outside the proposed rule's scope |
+| `REFUND-4002` | amount 3000, fraud suspected | deny | Falls entirely outside the proposed rule's scope |
+
+The proposed rule's own missing data condition (`photo_evidence_provided`) is exactly the Pattern's
+subject: the organisation never formally decided whether photo evidence is required for refunds
+under $500, and `REFUND-1002`/`REFUND-1003` show two reviewers resolving that same ambiguity in
+opposite directions on near-identical facts.
+
+Two rule versions were validated and replayed against all ten cases:
+
+- **v1** (`amount <= 500` -> `approve`, no mandatory human review): `agrees_with_baseline: 5`,
+  `disagrees_with_baseline: 3`, `missing_data: 1`, `resolved_automatically: 1`,
+  `requires_human_review: 0`. A real spread across four of the six defined outcome categories in one
+  run. `REFUND-1002` (baseline approve) landed in `agrees_with_baseline`; `REFUND-1003` (baseline
+  deny, otherwise identical facts) landed in `disagrees_with_baseline`, exactly surfacing the policy
+  gap the Pattern names. `REFUND-4001`/`REFUND-4002` (far outside the rule's amount threshold) also
+  landed in `disagrees_with_baseline`, which is this codebase's real, current semantics for "the rule
+  does not even apply here" (see Known limitations: there is no separate "not applicable" category in
+  the fixed vocabulary).
+- **v2** (adds `AND photo_evidence_provided == true`, `human_review_required: true`):
+  `requires_human_review: 4`, `disagrees_with_baseline: 2`, `missing_data: 4`,
+  `agrees_with_baseline: 0`, `resolved_automatically: 0`. `REFUND-1001`/`1004`/`3001`/`3002` (facts
+  satisfy the tightened condition) all land in `requires_human_review`, which is the real,
+  architectural reason a second rule version was needed at all: `RuleAction.human_review_required`
+  is a single flag for the whole action, so within one rule version every matching case gets routed
+  to a human or none do; there is no way for some matching cases to be fully automatic and others to
+  require a human within a single version. That is disclosed here as a real, now-understood
+  constraint of the rule language, not a defect (see Known limitations).
+  `REFUND-4001`/`4002` moved from `disagrees_with_baseline` (v1) to `missing_data` (v2): the
+  evaluator deliberately evaluates every leaf condition with no short-circuiting
+  (`rule_evaluator.py`'s own documented behaviour, "so a human inspecting a rule's test/replay result
+  wants to see every condition's own verdict"), so even though `amount` alone already fails these
+  cases, the AND condition's other leaf (`photo_evidence_provided`, genuinely absent from these two
+  cases' facts) is still evaluated and contributes a real `missing_data` classification. Confirmed
+  correct, not a bug, once the evaluator's own no-short-circuit design was understood.
+
+Across the two runs together, five of the six defined outcome categories were produced for real
+(`error` was correctly never produced, since no malformed rule was ever submitted). Agreement with a
+recorded baseline is reported throughout as agreement, never as a claim that the baseline, the rule,
+or either version was actually correct, including in this document.
+
+## Defects found and fixed this session
+
+Found through code review and the real browser walkthrough above, each fixed with a focused
+regression test that fails without the fix (verified by reverting the fix and re-running):
+
+1. **`ReplayRun.summary` read in the wrong shape** (`ReplayPage.tsx`, `types.ts`). The real backend
+   (`di_replay_service.py`) stores and returns `summary` as `{"total_cases": N, "counts": {category:
+   count}}`, confirmed by its own integration test. The frontend type and `ReplayPage.tsx` treated it
+   as a flat `{category: count}` map, and the page's own pre-existing test mocked that same wrong
+   flat shape, so it passed while never matching what the real API actually returns. Every real
+   replay would have rendered `NaN`-width summary bars (`Object.values` summing a number and a nested
+   object). Fixed the type, the page's read (`run.summary?.counts`, `run.summary?.total_cases`), and
+   the test's mock; confirmed live in the browser walkthrough above (no `NaN`, real percentages).
+2. **`QuestionDetailPage`'s dimension-score inputs could lose an edit or a save to an unrelated
+   background refresh.** `load()` is called, unawaited, after every mutation on this page (a score
+   save, linking a pattern/case, an answer action), with nothing guaranteeing those `GET
+   /questions/{id}` requests resolved in the order they were issued. Two distinct, confirmed failure
+   modes:
+   - A reviewer starting to enter scores while an earlier action's `load()` (e.g. one kicked off by
+     linking a case moments before) was still in flight could have that `load()` resolve mid-entry
+     and reset the five score inputs to blank before they ever reached Save.
+   - `handleSaveScores` trusted a separate, unawaited `load()` to resync the inputs after a save,
+     rather than its own `updateQuestion`/`scoreQuestion` response; a slower, unrelated `load()`
+     resolving in between could still win that race.
+
+   Both were caught live: a UI flow that reported a successful save, followed by a direct database
+   read, showed two of five dimension scores had not actually persisted. Fixed with a per-request
+   epoch guard (`loadEpochRef`, so only the most recently issued `load()` can ever apply) and a
+   dirty-edit guard (`scoresDirtyRef`, so `load()` never touches the five score inputs while the
+   reviewer has an unsaved edit in them), plus applying a save's own response directly instead of
+   depending on a follow-up `load()`. Three regression tests reproduce these races (two fail without
+   the fix, confirmed by reverting it) and now pass.
+
+Both fixes are scoped to the files the bug was in; neither changes any API contract, schema, or
+permission.
 
 ## Known limitations, explicitly out of scope for this pass
 
@@ -178,12 +367,47 @@ implementing agents.)
   which was added for real.
 - **Not deployed anywhere.** No production hosting, DNS, or database changes were made. This is a
   feature branch in a worktree, reviewed and tested locally only.
+- **A rule version's `human_review_required` is one flag for the whole action, not per-condition.**
+  Confirmed by the real replay walkthrough above: getting both a fully-automatic outcome and a
+  requires-human-review outcome out of matching cases requires two separate rule versions (as done
+  in the fictional demonstration), never one. This is a real constraint of the current rule language
+  (`rule_schema.py`), not a bug; whether the product should eventually support per-branch review
+  requirements is a product decision, not something this pass changed.
+- **"Outside the rule's scope" and "the rule disagreed" share one outcome category.** A case whose
+  facts simply do not satisfy a rule's root condition (so the rule produces no decision at all) is
+  classified `disagrees_with_baseline` whenever that case has a recorded baseline, identically to a
+  case the rule actually evaluated and reached a different decision for. The fixed, six-value outcome
+  vocabulary (enforced by a database `CHECK` constraint) has no separate "not applicable" category.
+  Confirmed live in the fictional demonstration (`REFUND-4001`/`4002`, both far outside the proposed
+  rule's amount threshold, both `disagrees_with_baseline`). Disclosed, not changed: redefining the
+  outcome vocabulary is a schema/product decision, not something to fix silently inside this pass.
+- **A replay case with no recorded baseline and no missing data, whose facts simply do not match the
+  rule, is classified `resolved_automatically`** (`replay_executor.py::classify_outcome`), even
+  though no decision was actually produced for it (`decision: null`). This specific combination
+  (unmatched, no missing fields, no baseline) was not hit by the fictional demonstration above (every
+  case was designed to land unambiguously), and has no backend unit test covering it either; this is
+  disclosed as an untested, arguably mislabelled edge case for a future pass to decide on, not fixed
+  here, since the fix would mean either changing classification semantics or adding a schema-level
+  outcome category, both product decisions.
+- **Case status was never exercised in this pass's walkthrough.** The fictional demonstration set
+  each case's `human_decision` (the baseline a Replay compares against) but never changed any case's
+  `status` away from its default `open`, so the workflow overview's `unresolved_case_count` reads 10
+  (all of them) even though every case carries a recorded baseline decision. `status` and
+  `human_decision` are deliberately independent fields (`CaseDetailPage` exposes both), and this is a
+  gap in how thoroughly the demonstration exercised the Case Detail edit form, not a product defect.
+- **The pre-existing, platform-wide per-client rate limit** (`app/security.py`, 120 requests/60
+  seconds, predates this module) is unrelated to Decision Intelligence but is easy for fast
+  automation to trip, since several of this module's pages fire multiple parallel `GET`s per mount.
+  Noted here only so a future automated test suite against this module budgets for it; a real person
+  clicking through the UI will not come close to it.
 
 ## Before this is mergeable
 
-1. Run the real Alembic migration against an actual Postgres instance (not just SQLite) and confirm.
-2. Perform at least one real, manual end-to-end click-through of the full chain in a running
-   instance.
+1. ~~Run the real Alembic migration against an actual Postgres instance (not just SQLite) and
+   confirm.~~ Done this session; see "Testing performed" above.
+2. ~~Perform at least one real, manual end-to-end click-through of the full chain in a running
+   instance.~~ Done this session; see "Real browser walkthrough" and "Fictional demonstration" above.
+   Two real defects were found and fixed in the process (see "Defects found and fixed this session").
 3. A product decision on the frontend judgment calls disclosed by the implementing agents
    (Reviewer's exact permission grant vs. its descriptive gloss; `GOVERNANCE_ADMIN` holding
    `DI_REPORT_VIEW`; the two added "ready for review"/"approved for operational use" question
@@ -192,3 +416,11 @@ implementing agents.)
 4. Code review of the one backend change made during frontend integration
    (`GET /v1/decision-intelligence/patterns/{id}/cases`) alongside everything else, since it landed
    after the backend's own original review checkpoint.
+5. A product decision on the two new outcome-vocabulary and rule-language constraints disclosed
+   above (one `human_review_required` flag per rule version; "outside scope" and "disagreed" sharing
+   one outcome category): both are real, now-understood limitations of the shipped design, not bugs,
+   but worth a deliberate decision before this is treated as the long-term shape of the rule language
+   and replay vocabulary.
+6. Code review of this session's two defect fixes (`ReplayPage.tsx`/`types.ts`'s summary shape;
+   `QuestionDetailPage.tsx`'s `loadEpochRef`/`scoresDirtyRef` guards), alongside everything else,
+   since they also landed after the implementing agents' own original review checkpoint.
