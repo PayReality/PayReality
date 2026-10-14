@@ -36,6 +36,7 @@ from app.routers import (
     sandbox,
     users as users_router,
 )
+from app.routers import decision_intelligence
 from app.security import observability_middleware
 from app import observability as azure_observability
 
@@ -308,6 +309,18 @@ def create_app() -> FastAPI:
     app.include_router(assurance.router)
     app.include_router(sandbox.router)
     app.include_router(execution_receipts.router)
+
+    # Decision Intelligence (module prefix `DI`): a deliberately parallel
+    # product module alongside everything above -- see app/domain/
+    # decision_intelligence/__init__.py's own package docstring.
+    app.include_router(decision_intelligence.workflows.router)
+    app.include_router(decision_intelligence.cases.router)
+    app.include_router(decision_intelligence.patterns.router)
+    app.include_router(decision_intelligence.questions.router)
+    app.include_router(decision_intelligence.answers.question_answers_router)
+    app.include_router(decision_intelligence.answers.router)
+    app.include_router(decision_intelligence.rules.router)
+    app.include_router(decision_intelligence.replays.router)
 
     return app
 
