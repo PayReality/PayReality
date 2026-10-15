@@ -29,22 +29,27 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB, UUID as PG_UUID
 from sqlalchemy.orm import sessionmaker
 
-from app.db.models import Base, DIAuditEvent, Organization, User, UserSession
+from app.db.models import Base, DIAuditEvent, DIImportJob, Organization, User, UserSession
 from app.dependencies import require_permission
 from app.domain.decision_intelligence.rule_schema import Condition, RuleAction, RuleSchema
+from app.domain.decision_intelligence.scoring import DEFAULT_WEIGHTS, InvalidScoringWeightsError
 from app.domain.decision_intelligence.validation import RuleValidationError
 from app.domain.rbac.permissions import Permission, Role, has_permission
 from app.services import (
     di_answer_service,
     di_case_service,
+    di_import_service,
     di_pattern_service,
     di_question_service,
     di_replay_service,
+    di_report_service,
     di_rule_service,
+    di_scoring_config_service,
     di_workflow_service,
 )
 from app.services.di_answer_service import InvalidAnswerTransitionError, SeparationOfDutiesError
 from app.services.di_case_service import CaseNotFoundError
+from app.services.di_import_service import EmptyImportFileError
 from app.services.di_question_service import QuestionNotFoundError
 from app.services.di_rule_service import SourceAnswerNotApprovedError
 from app.services.di_workflow_service import WorkflowNotFoundError
@@ -508,6 +513,26 @@ def test_role_without_di_replay_run_is_denied():
     assert has_permission(Role.GOVERNANCE_ADMIN, Permission.DI_REPLAY_RUN)
 
 
+def test_role_without_di_settings_manage_is_denied():
+    """New permission (Feature: configurable scoring weights) --
+    Governance Administrator (and Owner, via the full-permission
+    catch-all) only, same as every other DI_*_MANAGE permission."""
+    for role in (Role.REVIEWER, Role.AUDITOR, Role.EXECUTIVE, Role.AGENT_ADMIN):
+        assert not has_permission(role, Permission.DI_SETTINGS_MANAGE)
+    assert has_permission(Role.GOVERNANCE_ADMIN, Permission.DI_SETTINGS_MANAGE)
+    assert has_permission(Role.OWNER, Permission.DI_SETTINGS_MANAGE)
+
+
+async def test_reviewer_session_is_denied_di_settings_manage(db):
+    org = _org(db)
+    user = _user(db, org.id, role="reviewer")
+    session = _session_for(db, user)
+    checker = require_permission(Permission.DI_SETTINGS_MANAGE)
+    with pytest.raises(HTTPException) as exc:
+        await checker(x_payreality_operator_key=None, authorization=f"Bearer {session.id}", db=db)
+    assert exc.value.status_code == 403
+
+
 async def test_auditor_session_is_denied_di_replay_run(db):
     org = _org(db)
     user = _user(db, org.id, role="auditor")
@@ -537,3 +562,329 @@ def test_audit_event_is_recorded_for_an_answer_approval(db):
     assert len(events) == 1
     assert events[0].actor_user_id == approver.id
     assert events[0].organization_id == org.id
+
+
+# --- G. CSV case import -----------------------------------------------------
+
+
+_IMPORT_CSV = (
+    "Ref,Decision,Amount,Notes\r\n"
+    "CASE-1,{\"outcome\": \"approve\"},120,fine\r\n"
+    "CASE-2,not valid json,90,\r\n"  # invalid human_decision JSON -> rejected
+    ",,,\r\n"  # completely empty row -> rejected
+    "CASE-1,{\"outcome\": \"approve\"},130,duplicate\r\n"  # duplicate ref within file -> rejected
+)
+
+_IMPORT_MAPPING = {"Ref": "external_ref", "Decision": "human_decision"}
+
+
+def test_csv_import_creates_valid_cases_and_reports_invalid_rows(db):
+    org = _org(db)
+    user = _user(db, org.id)
+    workflow = _workflow(db, org, user)
+
+    job = di_import_service.import_cases_from_csv(
+        db, org.id, workflow.id, user.id, "cases.csv", _IMPORT_CSV, _IMPORT_MAPPING
+    )
+
+    assert job.status == "completed"
+    assert job.total_rows == 4
+    assert job.valid_rows == 1
+    assert job.invalid_rows == 3
+    assert job.completed_at is not None
+    row_numbers_with_errors = {e["row_number"] for e in job.row_errors}
+    assert row_numbers_with_errors == {2, 3, 4}
+
+    cases, total = di_case_service.list_cases(db, org.id, workflow_id=workflow.id)
+    assert total == 1
+    assert cases[0].external_ref == "CASE-1"
+    assert cases[0].human_decision == {"outcome": "approve"}
+    assert cases[0].facts["Amount"] == 120
+    assert cases[0].facts["Notes"] == "fine"
+
+
+def test_csv_import_detects_duplicate_external_ref_against_an_existing_case(db):
+    org = _org(db)
+    user = _user(db, org.id)
+    workflow = _workflow(db, org, user)
+    di_case_service.create_case(db, org.id, workflow.id, user.id, facts={}, external_ref="CASE-EXISTING")
+
+    job = di_import_service.import_cases_from_csv(
+        db, org.id, workflow.id, user.id, "cases.csv",
+        "Ref,Amount\r\nCASE-EXISTING,50\r\n", {"Ref": "external_ref"},
+    )
+
+    assert job.valid_rows == 0
+    assert job.invalid_rows == 1
+    assert "duplicate_external_ref" in job.row_errors[0]["errors"][0]
+
+
+def test_csv_import_raises_workflow_not_found_for_another_organizations_workflow(db):
+    org_a = _org(db)
+    org_b = _org(db)
+    user_a = _user(db, org_a.id)
+    user_b = _user(db, org_b.id)
+    workflow_b = _workflow(db, org_b, user_b)
+
+    with pytest.raises(WorkflowNotFoundError):
+        di_import_service.import_cases_from_csv(
+            db, org_a.id, workflow_b.id, user_a.id, "cases.csv", "Ref\r\nCASE-1\r\n", {"Ref": "external_ref"}
+        )
+
+
+def test_csv_import_with_no_data_rows_raises(db):
+    org = _org(db)
+    user = _user(db, org.id)
+    workflow = _workflow(db, org, user)
+
+    with pytest.raises(EmptyImportFileError):
+        di_import_service.import_cases_from_csv(
+            db, org.id, workflow.id, user.id, "empty.csv", "Ref,Amount\r\n", {"Ref": "external_ref"}
+        )
+
+
+def test_csv_import_records_exactly_one_audit_event_per_job_not_per_row(db):
+    org = _org(db)
+    user = _user(db, org.id)
+    workflow = _workflow(db, org, user)
+
+    job = di_import_service.import_cases_from_csv(
+        db, org.id, workflow.id, user.id, "cases.csv", _IMPORT_CSV, _IMPORT_MAPPING
+    )
+
+    events = db.query(DIAuditEvent).filter(
+        DIAuditEvent.entity_type == "DIImportJob", DIAuditEvent.entity_id == job.id
+    ).all()
+    assert len(events) == 1
+    assert events[0].action == "import"
+    assert events[0].new_value["valid_rows"] == 1
+
+
+def test_list_and_get_import_jobs_are_scoped_to_organization(db):
+    org_a = _org(db)
+    org_b = _org(db)
+    user_a = _user(db, org_a.id)
+    user_b = _user(db, org_b.id)
+    workflow_a = _workflow(db, org_a, user_a)
+    workflow_b = _workflow(db, org_b, user_b)
+
+    job_a = di_import_service.import_cases_from_csv(
+        db, org_a.id, workflow_a.id, user_a.id, "a.csv", "Ref\r\nA-1\r\n", {"Ref": "external_ref"}
+    )
+    di_import_service.import_cases_from_csv(
+        db, org_b.id, workflow_b.id, user_b.id, "b.csv", "Ref\r\nB-1\r\n", {"Ref": "external_ref"}
+    )
+
+    jobs_a, total_a = di_import_service.list_import_jobs(db, org_a.id)
+    assert total_a == 1
+    assert jobs_a[0].id == job_a.id
+
+    from app.services.di_import_service import ImportJobNotFoundError
+
+    with pytest.raises(ImportJobNotFoundError):
+        di_import_service.get_import_job(db, job_a.id, org_b.id)
+
+
+# --- H. Cross-workflow reports -----------------------------------------
+
+
+def test_organization_overview_aggregates_real_counts_across_two_workflows(db):
+    org = _org(db)
+    user = _user(db, org.id)
+    workflow_1 = di_workflow_service.create_workflow(db, org.id, user.id, name="Refunds")
+    workflow_2 = di_workflow_service.create_workflow(db, org.id, user.id, name="Escalations")
+
+    di_case_service.create_case(db, org.id, workflow_1.id, user.id, facts={"a": 1})
+    di_case_service.create_case(db, org.id, workflow_1.id, user.id, facts={"a": 2})
+    di_case_service.create_case(db, org.id, workflow_2.id, user.id, facts={"a": 3})
+    di_pattern_service.create_pattern(
+        db, org.id, workflow_1.id, user.id, name="P1", description="d", category="other",
+        proposed_explanation="e",
+    )
+    di_question_service.create_question(db, org.id, workflow_1.id, user.id, title="Q1")
+    di_question_service.create_question(db, org.id, workflow_2.id, user.id, title="Q2")
+
+    overview = di_report_service.get_organization_overview(db, org.id)
+
+    assert overview["workflow_count"] == 2
+    assert overview["total_cases"] == 3
+    assert overview["total_patterns"] == 1
+    assert overview["total_questions"] == 2
+
+    by_id = {w["workflow_id"]: w for w in overview["by_workflow"]}
+    assert by_id[workflow_1.id]["case_count"] == 2
+    assert by_id[workflow_1.id]["pattern_count"] == 1
+    assert by_id[workflow_2.id]["case_count"] == 1
+    assert by_id[workflow_2.id]["pattern_count"] == 0
+
+
+def test_organization_overview_is_scoped_to_organization(db):
+    org_a = _org(db)
+    org_b = _org(db)
+    user_a = _user(db, org_a.id)
+    user_b = _user(db, org_b.id)
+    _workflow(db, org_a, user_a)
+    workflow_b = _workflow(db, org_b, user_b)
+    di_case_service.create_case(db, org_b.id, workflow_b.id, user_b.id, facts={})
+
+    overview_a = di_report_service.get_organization_overview(db, org_a.id)
+    assert overview_a["total_cases"] == 0
+    assert overview_a["workflow_count"] == 1
+
+
+def test_priority_questions_export_rows_include_real_linked_counts(db):
+    org = _org(db)
+    user = _user(db, org.id)
+    workflow = _workflow(db, org, user)
+    case = di_case_service.create_case(db, org.id, workflow.id, user.id, facts={})
+    question = di_question_service.create_question(db, org.id, workflow.id, user.id, title="Cutoff question")
+    di_question_service.link_case(db, question.id, case.id, org.id)
+
+    rows = di_report_service.get_priority_questions_export_rows(db, org.id)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row[1] == "Cutoff question"
+    assert row[6] == 1  # linked_case_count
+
+
+# --- I. Configurable scoring weights ----------------------------------
+
+
+def test_changing_scoring_config_does_not_retroactively_alter_an_existing_scored_question(db):
+    org = _org(db)
+    user = _user(db, org.id)
+    workflow = _workflow(db, org, user)
+    question = di_question_service.create_question(db, org.id, workflow.id, user.id, title="Q")
+    di_question_service.update_question(
+        db, question.id, org.id, user.id,
+        reach_score=100, impact_score=0, risk_score=0, answerability_score=0, decision_sensitivity_score=0,
+    )
+    scored_before = di_question_service.score_question(db, question.id, org.id, user.id)
+    assert scored_before.priority_score == 30.0  # DEFAULT_WEIGHTS: 0.30 * 100
+    assert scored_before.scoring_version == "v1"
+
+    # Now the organization configures custom weights that would produce a
+    # very different score for identical dimension inputs.
+    di_scoring_config_service.upsert_config(
+        db, org.id, user.id,
+        {"reach": 0.80, "impact": 0.05, "risk": 0.05, "answerability": 0.05, "decision_sensitivity": 0.05},
+    )
+
+    # The already-scored question's stored values are untouched.
+    unchanged = di_question_service.get_question(db, question.id, org.id)
+    assert unchanged.priority_score == 30.0
+    assert unchanged.scoring_version == "v1"
+
+    # Only an explicit re-score picks up the new config.
+    rescored = di_question_service.score_question(db, question.id, org.id, user.id)
+    assert rescored.priority_score == 80.0  # 0.80 * 100
+    assert rescored.scoring_version == "v2"
+
+
+def test_scoring_config_is_per_organization_and_defaults_when_unset(db):
+    org_a = _org(db)
+    org_b = _org(db)
+    user_a = _user(db, org_a.id)
+
+    weights_b, version_b = di_scoring_config_service.get_weights_and_version(db, org_b.id)
+    assert weights_b == DEFAULT_WEIGHTS
+    assert version_b == "v1"
+
+    di_scoring_config_service.upsert_config(
+        db, org_a.id, user_a.id,
+        {"reach": 0.2, "impact": 0.2, "risk": 0.2, "answerability": 0.2, "decision_sensitivity": 0.2},
+    )
+    weights_a, version_a = di_scoring_config_service.get_weights_and_version(db, org_a.id)
+    assert weights_a["reach"] == 0.2
+    assert version_a == "v2"
+
+    # org_b remains unaffected by org_a's configuration.
+    weights_b_after, version_b_after = di_scoring_config_service.get_weights_and_version(db, org_b.id)
+    assert weights_b_after == DEFAULT_WEIGHTS
+    assert version_b_after == "v1"
+
+
+def test_scoring_config_rejects_weights_that_do_not_sum_to_one(db):
+    org = _org(db)
+    user = _user(db, org.id)
+
+    with pytest.raises(InvalidScoringWeightsError):
+        di_scoring_config_service.upsert_config(
+            db, org.id, user.id,
+            {"reach": 0.5, "impact": 0.5, "risk": 0.5, "answerability": 0.5, "decision_sensitivity": 0.5},
+        )
+
+    # No config row was created by the rejected attempt.
+    assert di_scoring_config_service.get_config(db, org.id) is None
+
+
+def test_scoring_config_audit_event_is_recorded_on_update(db):
+    org = _org(db)
+    user = _user(db, org.id)
+
+    config = di_scoring_config_service.upsert_config(
+        db, org.id, user.id,
+        {"reach": 0.2, "impact": 0.2, "risk": 0.2, "answerability": 0.2, "decision_sensitivity": 0.2},
+    )
+
+    events = db.query(DIAuditEvent).filter(
+        DIAuditEvent.entity_type == "DIScoringConfig", DIAuditEvent.entity_id == config.id
+    ).all()
+    assert len(events) == 1
+    assert events[0].action == "update"
+
+
+# --- J. Server-side case search -----------------------------------------
+
+
+def test_case_search_matches_external_ref_substring_case_insensitively(db):
+    org = _org(db)
+    user = _user(db, org.id)
+    workflow = _workflow(db, org, user)
+    di_case_service.create_case(db, org.id, workflow.id, user.id, facts={}, external_ref="REFUND-1001")
+    di_case_service.create_case(db, org.id, workflow.id, user.id, facts={}, external_ref="OTHER-2002")
+
+    cases, total = di_case_service.list_cases(db, org.id, workflow_id=workflow.id, q="refund")
+
+    assert total == 1
+    assert cases[0].external_ref == "REFUND-1001"
+
+
+def test_case_search_matches_against_facts_text(db):
+    org = _org(db)
+    user = _user(db, org.id)
+    workflow = _workflow(db, org, user)
+    di_case_service.create_case(db, org.id, workflow.id, user.id, facts={"damage_type": "water damage"})
+    di_case_service.create_case(db, org.id, workflow.id, user.id, facts={"damage_type": "fire"})
+
+    cases, total = di_case_service.list_cases(db, org.id, workflow_id=workflow.id, q="water")
+
+    assert total == 1
+    assert cases[0].facts["damage_type"] == "water damage"
+
+
+def test_case_search_is_scoped_to_organization(db):
+    org_a = _org(db)
+    org_b = _org(db)
+    user_a = _user(db, org_a.id)
+    user_b = _user(db, org_b.id)
+    workflow_a = _workflow(db, org_a, user_a)
+    workflow_b = _workflow(db, org_b, user_b)
+    di_case_service.create_case(db, org_a.id, workflow_a.id, user_a.id, facts={}, external_ref="SHARED-REF")
+    di_case_service.create_case(db, org_b.id, workflow_b.id, user_b.id, facts={}, external_ref="SHARED-REF")
+
+    cases, total = di_case_service.list_cases(db, org_a.id, q="SHARED-REF")
+    assert total == 1
+    assert cases[0].organization_id == org_a.id
+
+
+def test_case_search_with_no_query_returns_everything(db):
+    org = _org(db)
+    user = _user(db, org.id)
+    workflow = _workflow(db, org, user)
+    di_case_service.create_case(db, org.id, workflow.id, user.id, facts={})
+    di_case_service.create_case(db, org.id, workflow.id, user.id, facts={})
+
+    cases, total = di_case_service.list_cases(db, org.id, workflow_id=workflow.id, q=None)
+    assert total == 2
