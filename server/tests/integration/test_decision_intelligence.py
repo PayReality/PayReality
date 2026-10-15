@@ -921,9 +921,9 @@ class _RaisingDiscoveryProvider:
 
 def _conflicting_cases(db, org, workflow, user):
     """Two near-identical cases (differ only in `amount`) decided
-    oppositely -- guaranteed to trigger FakeDiscoveryProvider's
-    conflicting-outcome heuristic (confidence 'high', category
-    'conflicting_rules', exactly one nested question)."""
+    oppositely, guaranteed to trigger FakeDiscoveryProvider's
+    conflicting-outcome heuristic (confidence 'high', category 'other'
+    since the real cause is not asserted, exactly one nested question)."""
     c1 = di_case_service.create_case(
         db, org.id, workflow.id, user.id, facts={"amount": 90, "photo": False},
         human_decision={"decision": "approve"},
@@ -967,7 +967,7 @@ def test_discovery_run_with_fake_provider_produces_real_suggestions_from_persist
     pattern = patterns[0]
     assert pattern.status == "suggested"
     assert pattern.confidence == "high"
-    assert pattern.category == "conflicting_rules"
+    assert pattern.category == "other"
     assert len(pattern.supporting_case_ids) == 2
     assert len(questions) == 1
     assert questions[0].linked_pattern_id == pattern.id
@@ -1027,7 +1027,7 @@ def test_accept_pattern_suggestion_creates_real_pattern_with_linkage_and_audit_t
 
     assert isinstance(created, DIPattern)
     assert created.source_suggestion_id == suggestion.id
-    assert created.category == "conflicting_rules"
+    assert created.category == "other"
     linked_case_ids = set(di_pattern_service.list_linked_cases(db, created.id, org.id))
     assert linked_case_ids == {c1.id, c2.id}
 

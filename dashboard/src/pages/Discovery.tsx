@@ -8,7 +8,7 @@ import type { Page } from "../types"
 
 // Feature: AI-assisted discovery review UI. A suggestion from a
 // DIDiscoveryRun is NEVER authoritative on its own (di_discovery_service.py's
-// own docstring) -- it only becomes a real Pattern/Question through an
+// own docstring); it only becomes a real Pattern/Question through an
 // explicit Accept here. The `.ai-label` badge below is reused everywhere a
 // suggestion renders, specifically so a reviewer can never confuse a
 // pending suggestion with an accepted, authoritative Pattern/Question
@@ -25,6 +25,18 @@ function runStatusTone(status: DiscoveryRun["status"]): string {
   if (status === "completed") return "success"
   if (status === "failed") return "warning"
   return "neutral"
+}
+
+// The backend's internal provider_used value ("fake"/"claude") is an
+// implementation detail, never a user-facing label: "fake" would wrongly
+// read as "this analysis is fabricated" when it is real, deterministic
+// heuristic analysis; the inverse risk (a reviewer mistaking a real Claude
+// call for something more authoritative than a suggestion) matters just as
+// much, so both get a plain, accurate, equally-weighted label.
+function providerLabel(providerUsed: string): string {
+  if (providerUsed === "claude") return "Claude-assisted analysis"
+  if (providerUsed === "fake") return "Heuristic analysis (no AI model)"
+  return providerUsed
 }
 
 export function Discovery({
@@ -136,7 +148,7 @@ export function Discovery({
               <div>
                 <strong>Run {r.id.slice(0, 8)}</strong>
                 <span>
-                  {new Date(r.created_at).toLocaleString()} · {r.provider_used} · {r.cases_analyzed_count} cases
+                  {new Date(r.created_at).toLocaleString()} · {providerLabel(r.provider_used)} · {r.cases_analyzed_count} cases
                 </span>
               </div>
               <Badge tone={runStatusTone(r.status)}>{r.status}</Badge>
@@ -155,7 +167,7 @@ export function Discovery({
               <div>
                 <h2>Run {detail.discovery_run.id.slice(0, 8)}</h2>
                 <p>
-                  Provider: {detail.discovery_run.provider_used} · {detail.discovery_run.cases_analyzed_count} cases
+                  {providerLabel(detail.discovery_run.provider_used)} · {detail.discovery_run.cases_analyzed_count} cases
                   analysed
                 </p>
               </div>

@@ -78,6 +78,43 @@ def test_conflicting_outcome_merges_a_transitive_chain_into_one_group():
     assert set(conflict_patterns[0].supporting_case_ids) == {"C1", "C2", "C3"}
 
 
+def test_conflicting_outcome_on_identical_facts_reads_as_a_real_finding_not_a_bug():
+    """Disclosed bug, fixed: when two cases' recorded facts match in full
+    (zero differing fields), the generated text must describe that real
+    finding plainly, never the previous "no recorded fields" placeholder
+    phrase, which read as nonsense rather than a finding."""
+    cases = [
+        _case("C1", facts={"amount": 90, "tier": "gold"}, human_decision={"decision": "approve"}),
+        _case("C2", facts={"amount": 90, "tier": "gold"}, human_decision={"decision": "deny"}),
+    ]
+    result = FakeDiscoveryProvider().discover(cases)
+    conflict_patterns = [p for p in result.patterns if p.confidence == "high"]
+    assert len(conflict_patterns) == 1
+    pattern = conflict_patterns[0]
+    assert "no recorded fields" not in pattern.title
+    assert "no recorded fields" not in pattern.description
+    assert "no recorded fields" not in pattern.rationale
+    assert "identical" in pattern.title.lower()
+
+
+def test_conflicting_outcome_never_asserts_a_specific_cause():
+    """The observation (matching facts, different decisions) must be
+    surfaced as a question, never as an asserted cause such as "the
+    organisation has not settled" or a forced conflicting_rules category,
+    since the real cause could equally be an omitted fact, a legitimate
+    exception, a data error, or something else not yet known."""
+    cases = [
+        _case("C1", facts={"amount": 90}, human_decision={"decision": "approve"}),
+        _case("C2", facts={"amount": 95}, human_decision={"decision": "deny"}),
+    ]
+    result = FakeDiscoveryProvider().discover(cases)
+    pattern = next(p for p in result.patterns if p.confidence == "high")
+    assert pattern.category == "other"
+    assert "not settled" not in pattern.rationale
+    assert "not an inferred correlation" not in pattern.rationale
+    assert "What explains the difference?" in pattern.questions[0].title
+
+
 # --- Missing-field grouping -------------------------------------------------
 
 
@@ -93,7 +130,28 @@ def test_missing_field_groups_cases_that_omit_a_field_others_record():
     assert len(missing_patterns) == 1
     pattern = missing_patterns[0]
     assert set(pattern.supporting_case_ids) == {"C2", "C3"}
-    assert pattern.questions[0].title.startswith("Is 'photo_evidence_provided' required")
+    assert pattern.questions[0].title.startswith("Is 'photo_evidence_provided' relevant")
+
+
+def test_missing_field_never_asserts_the_field_is_required():
+    """The heuristic has no schema telling it which fields are mandatory
+    vs. legitimately optional (DICase.facts is schema-less); this is true
+    even for a field present on most cases, so the generated text must
+    always hedge on relevance rather than assert the field is required,
+    regardless of how common it is."""
+    cases = [
+        _case("C1", facts={"amount": 100, "secondary_contact": "a@example.com"}),
+        _case("C2", facts={"amount": 50, "secondary_contact": "b@example.com"}),
+        _case("C3", facts={"amount": 75, "secondary_contact": "c@example.com"}),
+        _case("C4", facts={"amount": 60}),  # legitimately has no secondary contact
+        _case("C5", facts={"amount": 65}),
+    ]
+    result = FakeDiscoveryProvider().discover(cases)
+    pattern = next(p for p in result.patterns if "secondary_contact" in p.title)
+    assert "required" not in pattern.description.lower() or "not yet known" in pattern.description.lower()
+    assert "legitimately optional" in pattern.description
+    assert "optional" in pattern.rationale
+    assert pattern.questions[0].title == "Is 'secondary_contact' relevant to deciding this kind of case?"
 
 
 def test_missing_field_requires_the_field_to_be_present_on_at_least_one_case():

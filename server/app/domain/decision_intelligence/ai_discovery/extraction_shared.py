@@ -62,26 +62,41 @@ Hard rules:
   that wasn't in your input. A pattern with no real supporting case is not
   a valid pattern.
 - Ground every rationale in the actual facts/escalation_reasons/outcomes
-  you observed on the cited cases -- cite what you actually saw, not a
+  you observed on the cited cases, cite what you actually saw, not a
   generic justification.
 - Classify each pattern with the single closest category: missing_facts,
   unclear_policy, conflicting_rules, authority_gap, context_interpretation,
-  human_judgement, or other. Use "other" rather than forcing a poor fit.
+  human_judgement, or other. Use "other" rather than forcing a poor fit,
+  and prefer "other" whenever the evidence supports the observation but
+  not a specific cause (see the next rule).
+- When two or more cases have matching recorded facts but different
+  recorded decisions, that is an observation, not an explanation. It could
+  reflect an omitted fact, different policy versions or dates, a
+  legitimate exception, an incorrect historical decision, a data or
+  recording error, genuine unresolved ambiguity, or another cause you
+  cannot determine from the cases alone. State the observation and ask
+  what explains it (e.g. "These cases have matching recorded facts but
+  different decisions. What explains the difference?"). Never assert a
+  specific cause such as "the organisation has not settled this" or
+  "this is unresolved policy ambiguity": you have no way to rule out the
+  other explanations from the case data alone.
 - Report your own honest confidence (low/medium/high) for each pattern,
-  reflecting how directly the evidence supports it (e.g. two cases with
-  genuinely near-identical facts but opposite decisions is strong,
-  direct evidence and should be "high"; a loose thematic similarity is
-  weaker and should be "low"). This is your own heuristic judgement, not
-  a calibrated statistical score -- never overstate it.
+  reflecting how directly the evidence supports the observation itself
+  (e.g. two cases with genuinely near-identical facts but opposite
+  decisions is a strong, precise match and should be "high"; a loose
+  thematic similarity is weaker and should be "low"). Confidence describes
+  how well the facts fit the pattern you found, never how certain you are
+  about its cause. This is your own heuristic judgement, not a calibrated
+  statistical score; never overstate it.
 - A question is a request for information, not a claim to be confident or
-  unconfident about -- do not include a confidence field on a question.
+  unconfident about, do not include a confidence field on a question.
 - Never describe a pattern or question as "confirmed," "established," or
   otherwise settled. Every one of these is a hypothesis for a human
   reviewer to accept or dismiss, never a conclusion you have reached on
   the organisation's behalf.
 - If you find no genuine recurring pattern in the given cases, return an
   empty patterns list. An empty, honest result is correct and expected
-  when the cases don't actually show a recurring issue -- never force a
+  when the cases don't actually show a recurring issue, never force a
   pattern to avoid returning nothing."""
 
 

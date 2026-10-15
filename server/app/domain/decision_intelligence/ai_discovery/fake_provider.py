@@ -1,11 +1,11 @@
 """Deterministic FakeDiscoveryProvider: the AI discovery feature's no-API-
-key, zero-external-call, zero-cost fallback -- the path every deployment
+key, zero-external-call, zero-cost fallback, the path every deployment
 without ANTHROPIC_API_KEY (or Azure AI Foundry) configured actually runs
 in production, not a throwaway stub. Unlike the sibling fake providers
 (domain/ai_policy_builder/fake_provider.py, domain/ai_authority_builder/
 fake_provider.py), which return a single hardcoded, document-shaped
 example because their real input is unstructured document text, this
-feature's input is real, structured DICase rows -- so this fake provider
+feature's input is real, structured DICase rows, so this fake provider
 can and does run genuine, deterministic analysis over the actual data it's
 given, not a canned response. It is the single most-tested code path in
 this feature: most organisations will run on this provider, possibly
@@ -15,21 +15,26 @@ Three independent heuristics, each producing zero or more
 CandidatePattern rows (each carrying zero or more CandidateQuestion rows
 of its own):
 
-1. `_conflicting_outcome_patterns` (run first -- the brief's own "single
-   most defensible heuristic available"): groups of two or more cases
-   whose facts are identical except for at most one field, but whose
-   recorded human_decision differs. This is a direct, concrete,
-   unambiguous signal that the organisation has not settled how that one
-   differing fact should affect the outcome -- not a correlation or a
-   guess. Confidence: "high".
+1. `_conflicting_outcome_patterns`: groups of two or more cases whose
+   recorded facts are identical except for at most one field, but whose
+   recorded human_decision differs. This is a genuine, concrete,
+   structural observation, not a correlation or a guess, but it has no
+   single necessary cause. It could reflect an omitted fact, different
+   policy versions or dates, a legitimate exception, an incorrect
+   historical decision, a data or recording error, genuine unresolved
+   ambiguity, or another explanation not yet known. The pattern and its
+   question surface the observation and ask what explains it; neither
+   may assert the cause. Confidence "high" describes how precisely the
+   facts match, never certainty about why the decisions differ.
 2. `_missing_field_patterns`: a fact key that's present (non-null) on at
    least one case in this batch but absent (missing or null) on at least
-   two others -- inconsistent data collection for what looks like the
-   same kind of decision. Confidence: "medium" (a real, precise signal
-   about the data, but not itself proof the field *should* be required).
+   two others. This only means the field is sometimes recorded and
+   sometimes not; it is not evidence that the field is required, or even
+   relevant, to the decision. Confidence: "medium" (a real, precise
+   signal about the data, never a claim about what the data means).
 3. `_escalation_reason_patterns`: clusters cases whose escalation_reason
    text shares at least 50% of its significant words (a simple, bounded,
-   deterministic Jaccard-similarity union-find clustering -- no ML, no
+   deterministic Jaccard-similarity union-find clustering, no ML, no
    external call). The fuzziest of the three heuristics, since free text
    similarity is an approximation, not an exact match. Confidence: "low".
 
@@ -116,36 +121,54 @@ def _conflicting_outcome_patterns(cases: list[CaseForDiscovery]) -> list[Candida
         member_cases = [decided[i] for i in members]
         case_ids = tuple(c.id for c in member_cases)
         differing_fields = sorted({f for fields in relevant.values() for f in fields})
-        field_desc = ", ".join(differing_fields) if differing_fields else "no recorded fields"
         decisions_seen = sorted({json.dumps(c.human_decision, sort_keys=True) for c in member_cases})
+
+        # Two distinct cases, handled explicitly rather than papering over
+        # the empty-differing-fields one with a placeholder phrase: cases
+        # can disagree on exactly one recorded field, or share identical
+        # recorded facts outright (disclosed bug, fixed here: the previous
+        # text called this second case "no recorded fields", which read as
+        # nonsense rather than the real finding, matching facts in full).
+        if differing_fields:
+            match_clause = f"match except for {', '.join(differing_fields)}"
+            title = f"Conflicting decisions on near-identical cases ({', '.join(differing_fields)})"
+            question_title = (
+                f"These cases have matching recorded facts except for {', '.join(differing_fields)}, "
+                "but different decisions. What explains the difference?"
+            )
+        else:
+            match_clause = "match in full"
+            title = "Conflicting decisions on cases with identical recorded facts"
+            question_title = "These cases have matching recorded facts but different decisions. What explains the difference?"
 
         rationale = (
             f"Compared every pair of cases with a recorded human_decision: cases "
-            f"{', '.join(case_ids)} have facts that match on every field except {field_desc}, "
-            f"yet their recorded decisions disagree ({'; '.join(decisions_seen)}). This is a direct "
-            "signal that the organisation has not settled how this fact should affect the outcome, "
-            "not an inferred correlation."
+            f"{', '.join(case_ids)} have facts that {match_clause}, yet their recorded decisions "
+            f"disagree ({'; '.join(decisions_seen)}). This is an observation, not an explanation: it "
+            "could reflect an omitted fact, different policy versions or dates, a legitimate "
+            "exception, an incorrect historical decision, a data or recording error, genuine "
+            "unresolved ambiguity, or another cause not yet known. Investigate before assuming which."
         )
         question = CandidateQuestion(
-            title=f"What should determine the decision when {field_desc} differs?",
+            title=question_title,
             description=(
-                f"{len(member_cases)} otherwise-identical cases were decided differently depending "
-                f"on {field_desc}. Answering this would resolve the ambiguity for every future case "
-                "like it."
+                f"{len(member_cases)} cases share recorded facts that {match_clause} but were "
+                "decided differently. Confirming what explains the difference, and recording that as "
+                "an approved answer, would clarify how to handle every future case like it."
             ),
             rationale=rationale,
             supporting_case_ids=case_ids,
         )
         patterns.append(
             CandidatePattern(
-                title=f"Conflicting decisions on near-identical cases ({field_desc})",
+                title=title,
                 description=(
-                    f"{len(member_cases)} cases have facts that match except for {field_desc}, but "
-                    f"were decided differently: {'; '.join(decisions_seen)}."
+                    f"{len(member_cases)} cases have facts that {match_clause}, but were decided "
+                    f"differently: {'; '.join(decisions_seen)}. The cause is not yet known."
                 ),
                 rationale=rationale,
                 confidence="high",
-                category="conflicting_rules",
+                category="other",
                 supporting_case_ids=case_ids,
                 questions=(question,),
             )
@@ -171,15 +194,18 @@ def _missing_field_patterns(cases: list[CaseForDiscovery]) -> list[CandidatePatt
         case_ids = tuple(c.id for c in absent)
         rationale = (
             f"Compared which cases' facts include the key '{key}': cases {', '.join(case_ids)} do "
-            f"not record it at all, while {len(present)} other case(s) in this batch do, suggesting "
-            "this fact is sometimes collected and sometimes not for what looks like the same kind of "
-            "decision."
+            f"not record it at all, while {len(present)} other case(s) in this batch do. This only "
+            f"shows that '{key}' is recorded inconsistently; this heuristic has no way to know "
+            f"whether '{key}' is actually required, optional, or simply not applicable to the "
+            "cases that lack it. Confirm relevance before treating this as a data gap."
         )
         question = CandidateQuestion(
-            title=f"Is '{key}' required to decide this kind of case?",
+            title=f"Is '{key}' relevant to deciding this kind of case?",
             description=(
-                f"Some cases record '{key}' and others don't. Answering this would clarify whether "
-                "it's required, and what to do when it's missing."
+                f"Some cases record '{key}' and others don't. This may mean it's required and "
+                f"sometimes missed, or it may be a legitimately optional field that simply doesn't "
+                "apply to every case. Answering this would clarify which, and what to do when it's "
+                "absent."
             ),
             rationale=rationale,
             supporting_case_ids=case_ids,
@@ -189,7 +215,8 @@ def _missing_field_patterns(cases: list[CaseForDiscovery]) -> list[CandidatePatt
                 title=f"Cases missing '{key}'",
                 description=(
                     f"{len(absent)} of {len(cases)} cases are missing the '{key}' fact, which is "
-                    f"present on {len(present)} other case(s) in this workflow."
+                    f"present on {len(present)} other case(s) in this workflow. Whether '{key}' is "
+                    "actually required is not yet known; it may be a legitimately optional field."
                 ),
                 rationale=rationale,
                 confidence="medium",
