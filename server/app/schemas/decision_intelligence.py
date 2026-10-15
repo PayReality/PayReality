@@ -64,6 +64,32 @@ class WorkflowOverviewResponse(BaseModel):
     replays_completed: int
 
 
+# --- Cross-workflow organization overview (Feature: reports/exports) ------
+
+
+class WorkflowBreakdown(BaseModel):
+    workflow_id: UUID
+    workflow_name: str
+    case_count: int
+    pattern_count: int
+    question_count: int
+    answer_count: int
+    rule_count: int
+    replay_count: int
+
+
+class OrganizationOverviewResponse(BaseModel):
+    organization_id: UUID
+    workflow_count: int
+    total_cases: int
+    total_patterns: int
+    total_questions: int
+    total_answers: int
+    total_rules: int
+    total_replays: int
+    by_workflow: list[WorkflowBreakdown]
+
+
 # --- Cases --------------------------------------------------------------
 
 
