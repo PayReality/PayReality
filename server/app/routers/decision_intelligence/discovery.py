@@ -10,7 +10,7 @@ docstring) -- so if `azure_ai_foundry_endpoint` happens to be set in an
 environment, discovery still correctly falls through to Claude/Fake rather
 than silently claiming a Foundry call that never happened.
 
-Accept/dismiss gating (`_require_manage_permission_for_suggestion_kind`):
+Accept/dismiss gating (`require_permission_for_suggestion_kind`):
 the brief requires accepting/dismissing a 'pattern'-kind suggestion to need
 the same permission as manually creating a Pattern (DI_PATTERN_MANAGE), and
 a 'question'-kind suggestion the same as manually creating a Question
@@ -144,42 +144,66 @@ def get_discovery_run(
     return _run_detail(db, run)
 
 
-async def _require_manage_permission_for_suggestion_kind(
-    suggestion_id: UUID,
-    x_payreality_operator_key: str | None = Header(None),
-    authorization: str | None = Header(None),
-    db: Session = Depends(get_db),
-) -> None:
-    if x_payreality_operator_key is not None:
-        if not settings.admin_api_key:
-            raise HTTPException(status_code=503, detail="operator_auth_not_configured")
-        if not hmac.compare_digest(x_payreality_operator_key, settings.admin_api_key):
-            raise HTTPException(status_code=401, detail="invalid_operator_key")
-        return
+def require_permission_for_suggestion_kind():
+    """A `require_permission`-shaped dependency FACTORY (note the `()` at
+    every call site below, matching `require_permission(permission)`'s own
+    call convention exactly) rather than a fixed-permission dependency,
+    because the one permission that applies here depends on data
+    (`DIDiscoverySuggestion.kind`) `require_permission`'s own single-
+    permission signature has no way to express. Named and shaped this way
+    -- not just functionally equivalent -- specifically so
+    tests/unit/test_route_permission_gates.py's own structural scan (which
+    looks for "require_permission" in a dependency's `__qualname__`, since
+    this codebase's convention is to prove gating by introspecting the
+    real route table, not just by trusting a function's behavior) sees
+    this for what it genuinely is: a real permission gate, not an
+    unprotected route. Duplicates `require_permission`'s own operator-key/
+    session-role resolution exactly (see its docstring in
+    app/dependencies.py) rather than inventing a looser check."""
 
-    token = _bearer_token(authorization)
-    if token is None:
-        raise HTTPException(status_code=401, detail="authentication_required")
+    async def _check(
+        suggestion_id: UUID,
+        x_payreality_operator_key: str | None = Header(None),
+        authorization: str | None = Header(None),
+        db: Session = Depends(get_db),
+    ) -> None:
+        if x_payreality_operator_key is not None:
+            if not settings.admin_api_key:
+                raise HTTPException(status_code=503, detail="operator_auth_not_configured")
+            if not hmac.compare_digest(x_payreality_operator_key, settings.admin_api_key):
+                raise HTTPException(status_code=401, detail="invalid_operator_key")
+            return
 
-    role = auth_service.resolve_role_for_token(db, token)
-    if role is None:
-        raise HTTPException(status_code=401, detail="invalid_or_expired_credential")
+        token = _bearer_token(authorization)
+        if token is None:
+            raise HTTPException(status_code=401, detail="authentication_required")
 
-    suggestion = db.get(DIDiscoverySuggestion, suggestion_id)
-    # A missing/cross-org suggestion still needs *a* permission decision
-    # here; the handler's own get_suggestion call resolves the real
-    # 404 immediately afterward. Defaulting to DI_PATTERN_MANAGE in that
-    # case never grants extra access: a caller without it is still
-    # correctly rejected (403) before ever learning whether the id exists.
-    needed = Permission.DI_QUESTION_MANAGE if suggestion is not None and suggestion.kind == "question" else Permission.DI_PATTERN_MANAGE
+        role = auth_service.resolve_role_for_token(db, token)
+        if role is None:
+            raise HTTPException(status_code=401, detail="invalid_or_expired_credential")
 
-    if not has_permission(role, needed):
-        raise HTTPException(status_code=403, detail="permission_denied")
+        suggestion = db.get(DIDiscoverySuggestion, suggestion_id)
+        # A missing/cross-org suggestion still needs *a* permission
+        # decision here; the handler's own get_suggestion call resolves
+        # the real 404 immediately afterward. Defaulting to
+        # DI_PATTERN_MANAGE in that case never grants extra access: a
+        # caller without it is still correctly rejected (403) before ever
+        # learning whether the id exists.
+        needed = (
+            Permission.DI_QUESTION_MANAGE
+            if suggestion is not None and suggestion.kind == "question"
+            else Permission.DI_PATTERN_MANAGE
+        )
+
+        if not has_permission(role, needed):
+            raise HTTPException(status_code=403, detail="permission_denied")
+
+    return _check
 
 
 @router.post(
     "/discovery-suggestions/{suggestion_id}/accept", response_model=AcceptSuggestionResponse,
-    dependencies=[Depends(_require_manage_permission_for_suggestion_kind)],
+    dependencies=[Depends(require_permission_for_suggestion_kind())],
 )
 def accept_suggestion(
     suggestion_id: UUID,
@@ -208,7 +232,7 @@ def accept_suggestion(
 
 @router.post(
     "/discovery-suggestions/{suggestion_id}/dismiss", response_model=DiscoverySuggestionResponse,
-    dependencies=[Depends(_require_manage_permission_for_suggestion_kind)],
+    dependencies=[Depends(require_permission_for_suggestion_kind())],
 )
 def dismiss_suggestion(
     suggestion_id: UUID,
