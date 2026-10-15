@@ -1,21 +1,18 @@
 import { useEffect, useState } from "react"
 import { Badge, Button, EmptyPanel, ErrorNote, PageTitle } from "../components/ui"
+import { RuleBuilder, validateBuilderState, schemaToBuilderState } from "../components/RuleBuilder"
 import { decisionIntelligenceApi } from "../di/api"
-import type { Answer, Case, DecisionRule, EvaluationResult, Question, RuleVersion } from "../di/types"
+import type { Answer, Case, DecisionRule, EvaluationResult, Question, RuleSchema, RuleVersion } from "../di/types"
 import { useFetch, errorMessage } from "../lib/useAsync"
 import type { Page } from "../types"
 import { useAuth } from "../auth/AuthContext"
 
-const DEFAULT_SCHEMA = JSON.stringify(
-  {
-    root_condition: { field: "amount", operator: "lte", value: 500 },
-    action: { decision: "approve", human_review_required: false },
-    exceptions: [],
-    missing_data_behavior: "route_to_human",
-  },
-  null,
-  2,
-)
+const DEFAULT_SCHEMA: RuleSchema = {
+  root_condition: { field: "amount", operator: "lte", value: 500 },
+  action: { decision: "approve", human_review_required: false },
+  exceptions: [],
+  missing_data_behavior: "route_to_human",
+}
 
 interface ApprovedAnswerOption {
   answer: Answer
@@ -138,22 +135,23 @@ function CreateRuleForm({
 }) {
   const [name, setName] = useState("")
   const [answerId, setAnswerId] = useState("")
-  const [schemaText, setSchemaText] = useState(DEFAULT_SCHEMA)
+  const [schemaDraft, setSchemaDraft] = useState<RuleSchema>(DEFAULT_SCHEMA)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
+  const builderError = validateBuilderState(schemaToBuilderState(schemaDraft))
+
   async function submit() {
-    if (!name.trim() || !answerId) return
+    if (!name.trim() || !answerId || builderError) return
     setSubmitting(true)
     setError(null)
     try {
-      let schema_json
-      try {
-        schema_json = JSON.parse(schemaText)
-      } catch {
-        throw new Error("Schema must be valid JSON.")
-      }
-      const rule = await decisionIntelligenceApi.createRule({ workflow_id: workflowId, name: name.trim(), source_answer_id: answerId, schema_json })
+      const rule = await decisionIntelligenceApi.createRule({
+        workflow_id: workflowId,
+        name: name.trim(),
+        source_answer_id: answerId,
+        schema_json: schemaDraft,
+      })
       onCreated(rule)
     } catch (err) {
       setError(err instanceof Error ? err.message : errorMessage(err))
@@ -190,12 +188,11 @@ function CreateRuleForm({
             </select>
           )}
         </label>
-        <label>
-          Rule schema (JSON) *
-          <textarea value={schemaText} onChange={(e) => setSchemaText(e.target.value)} rows={8} style={{ fontFamily: "monospace", fontSize: 11 }} />
-        </label>
+        <div style={{ margin: "14px 0", padding: 14, background: "#fafbfc", border: "1px solid var(--border)", borderRadius: 8 }}>
+          <RuleBuilder initialSchema={DEFAULT_SCHEMA} onChange={setSchemaDraft} />
+        </div>
         {error && <ErrorNote message={error} />}
-        <Button kind="primary" onClick={submit} disabled={submitting || !name.trim() || !answerId}>
+        <Button kind="primary" onClick={submit} disabled={submitting || !name.trim() || !answerId || !!builderError}>
           {submitting ? "Creating…" : "Create rule"}
         </Button>
       </div>
@@ -217,7 +214,7 @@ function RuleEditor({
   const { hasPermission } = useAuth()
   const rule = useFetch(() => decisionIntelligenceApi.getRule(ruleId), [ruleId])
   const versions = useFetch<RuleVersion[]>(() => decisionIntelligenceApi.listRuleVersions(ruleId), [ruleId])
-  const [schemaText, setSchemaText] = useState("")
+  const [schemaDraft, setSchemaDraft] = useState<RuleSchema>(DEFAULT_SCHEMA)
   const [versionError, setVersionError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [testResult, setTestResult] = useState<EvaluationResult | null>(null)
@@ -229,25 +226,34 @@ function RuleEditor({
   )
 
   const current = versions.data?.find((v) => v.id === rule.data?.current_version_id) ?? versions.data?.[versions.data.length - 1]
+  // Computed directly from `current` every render (never stashed in a
+  // state variable that only updates a tick later via an effect): the real
+  // bug this fixed -- `current` can flip from undefined to a real version
+  // in the SAME render that <RuleBuilder key={current?.id}> first mounts
+  // with real data, and a separate `useEffect(() => setSchemaDraft(...),
+  // [current?.id])` only fires its state update AFTER that commit, so the
+  // freshly (re)mounted RuleBuilder's own internal useState initializer
+  // captured the stale DEFAULT_SCHEMA before the effect ever ran, and a
+  // prop change alone can never update it afterward. A hard reload of this
+  // page reproduced it every time: the builder's JSON preview showed the
+  // flat default instead of the real, already-validated nested schema,
+  // even though the backend had the correct data the whole time (proven by
+  // "Test this rule" against the real stored version matching correctly).
+  const initialSchemaForBuilder = current ? current.schema_json : DEFAULT_SCHEMA
 
   useEffect(() => {
-    setSchemaText(current ? JSON.stringify(current.schema_json, null, 2) : DEFAULT_SCHEMA)
     setTestResult(null)
     setTestError(null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.id])
 
+  const builderError = validateBuilderState(schemaToBuilderState(schemaDraft))
+
   async function saveNewVersion() {
+    if (builderError) return
     setBusy(true)
     setVersionError(null)
     try {
-      let schema_json
-      try {
-        schema_json = JSON.parse(schemaText)
-      } catch {
-        throw new Error("Schema must be valid JSON.")
-      }
-      await decisionIntelligenceApi.createRuleVersion(ruleId, { schema_json })
+      await decisionIntelligenceApi.createRuleVersion(ruleId, { schema_json: schemaDraft })
       versions.reload()
       rule.reload()
       onRuleChanged()
@@ -308,18 +314,10 @@ function RuleEditor({
       </div>
       {hasPermission("di_rule.manage") && (
         <div className="rule-stack">
-          <label style={{ display: "block", marginBottom: 8, fontSize: 10, fontWeight: 600, color: "var(--text-2)" }}>
-            Condition tree (JSON -- root_condition / action / exceptions / missing_data_behavior)
-          </label>
-          <textarea
-            value={schemaText}
-            onChange={(e) => setSchemaText(e.target.value)}
-            rows={10}
-            style={{ width: "100%", fontFamily: "monospace", fontSize: 11, border: "1px solid var(--border-strong)", borderRadius: 7, padding: 10 }}
-          />
+          <RuleBuilder key={current?.id ?? "new"} initialSchema={initialSchemaForBuilder} onChange={setSchemaDraft} />
           {versionError && <ErrorNote message={versionError} />}
           <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-            <Button icon="plus" onClick={saveNewVersion} disabled={busy}>
+            <Button icon="plus" onClick={saveNewVersion} disabled={busy || !!builderError}>
               Save as new version
             </Button>
           </div>
