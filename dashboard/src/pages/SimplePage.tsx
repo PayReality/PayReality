@@ -1,4 +1,5 @@
 import { PageTitle } from "../components/ui"
+import { ScoringWeightsPanel } from "../components/ScoringWeightsPanel"
 import { useAuth } from "../auth/AuthContext"
 import { ROLE_LABELS } from "../auth/types"
 import type { Page } from "../types"
@@ -40,10 +41,13 @@ export function SimplePage({ page }: { page: Page }) {
                 <strong>{user?.last_login_at ? new Date(user.last_login_at).toLocaleString() : "This session"}</strong>
               </div>
             </div>
-            <div className="not-available">
-              There are no Decision Intelligence settings to configure yet -- scoring weights and workspace preferences
-              are presently fixed in the backend, not admin-configurable. This page will gain real controls once that
-              changes, rather than presenting inputs that don't actually save anything.
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 18 }}>
+              <h2>Scoring weights</h2>
+              <p>
+                The five dimensions (reach, impact, risk, answerability, decision sensitivity) that combine into a
+                question's priority score, and how much each one counts.
+              </p>
+              <ScoringWeightsPanel />
             </div>
           </>
         ) : (
@@ -69,10 +73,6 @@ export function SimplePage({ page }: { page: Page }) {
                   <strong>{s}</strong>
                 </div>
               ))}
-            </div>
-            <div className="not-available" style={{ marginTop: 16 }}>
-              Not implemented yet, by design: CSV case import, AI-assisted pattern/question suggestion, and any
-              report/export beyond the per-workflow overview on the Reports page.
             </div>
           </>
         )}
