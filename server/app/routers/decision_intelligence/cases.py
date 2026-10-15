@@ -43,15 +43,20 @@ def create_case(
 def list_cases(
     workflow_id: UUID | None = None,
     status: str | None = None,
+    q: str | None = None,
     limit: int = 100,
     offset: int = 0,
     organization: Organization = Depends(get_current_organization),
     db: Session = Depends(get_db),
 ):
+    """`q` (Feature: server-side case search): a case-insensitive
+    substring match against `external_ref` and against `facts` (as text)
+    -- see di_case_service.list_cases' own docstring. Always combined
+    with the organization/workflow scoping below, never a bypass of it."""
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
     cases, total = di_case_service.list_cases(
-        db, organization.id, workflow_id=workflow_id, status=status, limit=limit, offset=offset
+        db, organization.id, workflow_id=workflow_id, status=status, q=q, limit=limit, offset=offset
     )
     return CaseListResponse(cases=cases, total=total, limit=limit, offset=offset)
 
