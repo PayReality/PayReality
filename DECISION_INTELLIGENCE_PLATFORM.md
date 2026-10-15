@@ -63,6 +63,92 @@ case walkthrough, not a rebuild. Summary (full detail in the final report handed
   apparent inconsistency, an omitted fact, a case that must stay unresolved, and a case needing no new
   rule. See the completion report for the full walkthrough record.
 
+## 2026-10-15 evidence-linked discovery extension
+
+A second, larger pass the same day: closing the gap between generic "these cases conflict" flags
+and specific, evidence-linked questions a customer could actually investigate. Implemented, not just
+planned; one additive Alembic migration
+(`d9f3c2a1e8b4_decision_intelligence_evidence_linked_questions`, applied and downgrade-tested against
+real Postgres). Inspected the actual code first (not the docs) before
+touching anything; every item below extends an existing mechanism rather than duplicating one.
+
+- **Specific, grounded questions.** `CandidateQuestion`/`CandidatePattern` (`ai_discovery/provider.py`)
+  gained `candidate_explanation` (a labelled hypothesis), `alternative_explanations`, `missing_evidence`,
+  and `potential_impact`. `fake_provider.py`'s conflicting-outcome heuristic now asks a SPECIFIC,
+  answerable question (naming the real field and its two real values, e.g. "Does 'invoice_total'
+  (4800 vs 95000) change the decision...?") exactly when exactly one field differs and takes exactly
+  two distinct values across the group; any other shape stays at the broader "what explains the
+  difference?" wording, since the brief is explicit that specificity is only valuable when grounded.
+  The Claude prompt and strict response schema (`extraction_shared.py`) carry the identical new fields
+  and the identical specificity discipline. `DIPattern.alternative_explanations` already existed in
+  the schema from an earlier pass but was never actually populated by discovery until now -- reused,
+  not duplicated.
+- **Case relevance, not just "linked".** `DIPatternCase`/`DIQuestionCase` gained `kind`
+  (`supporting`/`potentially_affected`/`excluded`/`undetermined`, defaulting to `supporting` so every
+  existing link keeps its original meaning) and `reason`. Accepting a suggestion now links its cited
+  cases as `supporting`, and separately computes `potentially_affected` cases via one explicit,
+  reviewable predicate: other cases in the same workflow that record at least one of the SAME fact
+  keys that distinguished the cited cases' decisions (never a vague "similar" label; the reason always
+  names the actual shared key(s)). A reviewer can relink any case to a different kind
+  (`PATCH .../cases/{case_id}`), preserved via the existing `DIAuditEvent` ledger rather than a new
+  history table.
+- **Honest prioritisation.** `DIQuestion` gained a provenance tag per score dimension
+  (`reach_score_source`, etc., `computed`/`human`/`model`/null) -- today every dimension set through
+  the dashboard is tagged `human`; no code path sets `computed` or `model` yet, disclosed here rather
+  than implied. Added a mandatory-reason priority override (`POST .../priority-override`,
+  `score: null` clears it) that is sorted/displayed as the EFFECTIVE priority while leaving the
+  computed `priority_score` genuinely untouched underneath.
+- **Expert resolution, made explicit.** `DIAnswer` gained `disposition` (one of `rule_change`,
+  `fact_collection_needed`, `existing_rule_sufficient`, `data_or_technical_issue`,
+  `human_judgement_required`, `insufficient_evidence`) and `disposition_notes`, now REQUIRED at
+  approval (`approve_answer` 422s without a valid one) -- a breaking API change, fixed in the one
+  frontend call site. Approving an answer never automatically creates a rule regardless of
+  disposition; creating a rule is still the separate, explicit action it already was.
+- **Development vs. evaluation, disclosed.** `DIReplayRun` gained `case_split`, snapshotted once at
+  replay creation from the source question's own `supporting`-kind case links (walked back via
+  rule_version -> rule -> source_answer -> question): development case ids, evaluation case ids, the
+  overlap between them, and an `insufficient_evaluation_cases` flag (fewer than 3 genuinely
+  independent evaluation cases). Never recomputed later, so a question's links changing afterward
+  can't quietly reclassify a past run's own disclosure. `null` (not a fabricated empty disclosure)
+  when the chain can't be resolved at all.
+- **A small, synthetic evaluation set** (`tests/unit/test_di_discovery_evaluation_set.py`), distinct
+  from any demonstration data, covering all seven scenarios the brief named. One real, disclosed
+  finding from running it: when a batch mixes cases from genuinely different fact "shapes" (as this
+  evaluation set deliberately does, to cover every scenario in one run), the pre-existing missing-field
+  heuristic generates several low-confidence, cross-scenario "missing field" patterns -- the SAME
+  noisy-on-heterogeneous-data property already disclosed below, now confirmed concretely rather than
+  only asserted. Not fixed here (would mean changing that heuristic's own established behaviour,
+  outside this pass's scope); the test asserts the real, narrower guarantee instead (no outlier case is
+  ever swept into a high-confidence or escalation-cluster claim about it specifically).
+- **The Claude path was NOT exercised live in this pass either.** Checked `server/.env` directly:
+  `ANTHROPIC_API_KEY` is defined but empty (present as a name, not a usable credential) -- the same
+  "no key configured" state as production. Per this task's own instruction not to obtain or configure
+  credentials, finished and tested this pass entirely against the existing fixture/mock-based Claude
+  provider tests. The live-provider check remains the same outstanding step disclosed above.
+- **A lightweight customer-comparison template**
+  (`GET .../reports/workflows/{id}/comparison-template/export`): a real downloadable CSV, one row per
+  metric the brief names (time spent preparing/reviewing, useful/irrelevant/missed questions, cases
+  whose handling could change, result on separately reviewed evaluation cases), left blank for a human
+  to fill in while running the same task both ways, followed by the workflow's own real current
+  Priority Questions as a concrete reference list. Not a measurement or a savings claim; a starting
+  point, reusing the existing CSV export/sanitization code.
+- **Frontend**: extended the existing Discovery/Patterns/Questions/Testing pages (no new dashboard).
+  Discovery's suggestion cards and Patterns' pattern cards now render the new grounding fields,
+  clearly labelled "AI-proposed hypothesis, not a conclusion." Patterns/Questions gained an expandable
+  case-evidence view showing each case's relevance kind/reason with a permission-gated control to
+  correct it. Questions' Rationale tab shows each score's source and a priority-override control.
+  Questions' Answer tab's Approve action now requires picking one of the six dispositions before it
+  will submit. Testing shows the development/evaluation disclosure prominently above the outcome
+  summary, including the "not an independent check" warning when cases overlap.
+- **Tests**: 19 new backend tests (10 integration, 8 evaluation-set, this section's own count),
+  **181/181 passing** in the DI-specific subset (up from 162 before this pass). One real bug was
+  found and fixed by these tests before they ever shipped: a missing `datetime`/`timezone` import in
+  `di_question_service.py` that would have crashed `override_priority` on first real use. `npx tsc
+  --noEmit`: clean. `npx vitest run`: 8 files, 27/27 passing.
+- **Not done in this pass, honestly disclosed**: no "add a new case link" UI was built for Pattern/
+  Question evidence (only the kind/reason display and relink-an-existing-link control); that gap
+  pre-dates this pass.
+
 ## The product chain
 
 `Workflow` → `Case` (a real decision situation) → `Pattern` (recurring uncertainty found across
