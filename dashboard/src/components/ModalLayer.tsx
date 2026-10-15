@@ -45,7 +45,7 @@ export function ModalLayer({
         {modal === "notifications-info" && (
           <div className="form-body">
             <div className="not-available">
-              In-app notifications aren't implemented in the backend yet -- there's no notification endpoint to show real
+              In-app notifications aren't implemented in the backend yet. There's no notification endpoint to show real
               data from, so this stays an honest placeholder rather than a fabricated activity feed.
             </div>
           </div>

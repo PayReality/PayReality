@@ -40,7 +40,7 @@ describe("Discovery suggestion review: accept/dismiss updates real UI state from
     render(
       <SuggestionCard suggestion={makeSuggestion()} canAct={true} openCase={() => {}} setPage={() => {}} onUpdated={() => {}} />,
     )
-    expect(screen.getByText("AI suggested -- awaiting review")).toBeInTheDocument()
+    expect(screen.getByText("AI suggested: awaiting review")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Accept" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument()
   })
@@ -103,7 +103,7 @@ describe("Discovery suggestion review: accept/dismiss updates real UI state from
 
     expect(screen.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument()
-    expect(screen.queryByText("AI suggested -- awaiting review")).not.toBeInTheDocument()
+    expect(screen.queryByText("AI suggested: awaiting review")).not.toBeInTheDocument()
     expect(screen.getByText("dismissed")).toBeInTheDocument()
   })
 })

@@ -42,7 +42,7 @@ export function People() {
         <div className="permission-note">
           Viewing and managing the organisation's member list requires the Owner role (
           <code>users.manage</code>). Your current role doesn't hold this permission, so this page can't load real member
-          data -- this is the real backend's own access rule, not a missing feature.
+          data. This is the real backend's own access rule, not a missing feature.
         </div>
       </>
     )
@@ -94,7 +94,7 @@ export function People() {
         <div className="success" style={{ marginBottom: 16 }}>
           <span>
             <strong>Account created for {newCredential.email}</strong>
-            One-time temporary password: <code>{newCredential.password}</code>. This is shown exactly once -- there is no
+            One-time temporary password: <code>{newCredential.password}</code>. This is shown exactly once; there is no
             email delivery in this platform yet, so share it with them directly.
           </span>
         </div>

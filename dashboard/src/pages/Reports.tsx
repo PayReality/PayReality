@@ -67,7 +67,7 @@ export function Reports({ workflowId }: { workflowId: string | null }) {
         <div className="permission-note" style={{ marginBottom: 16 }}>
           Cross-workflow reporting and CSV exports require the <code>di_report.view</code> permission. Your current role
           doesn't hold it, so the organisation-wide overview and export buttons below are hidden rather than shown as
-          broken controls -- this is the real backend's own access rule, not a missing feature.
+          broken controls. This is the real backend's own access rule, not a missing feature.
         </div>
       )}
 
@@ -217,7 +217,7 @@ export function Reports({ workflowId }: { workflowId: string | null }) {
             <div className="panel-heading">
               <div>
                 <h2>Real exports</h2>
-                <p>Both buttons download an actual file the backend generates -- never a fabricated one.</p>
+                <p>Both buttons download an actual file the backend generates, never a fabricated one.</p>
               </div>
             </div>
             <div className="form-body">

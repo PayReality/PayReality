@@ -39,7 +39,7 @@ export function ScoringWeightsPanel() {
     return (
       <div className="permission-note">
         Configuring scoring weights requires the <code>di_settings.manage</code> permission (Governance Administrator
-        or Owner). Your current role doesn't hold it, so this control isn't shown as editable -- this is the real
+        or Owner). Your current role doesn't hold it, so this control isn't shown as editable. This is the real
         backend's own access rule, not a missing feature.
       </div>
     )
@@ -79,11 +79,11 @@ export function ScoringWeightsPanel() {
         </Badge>
         <span style={{ fontSize: 10, color: "var(--muted)" }}>
           Scoring version {data?.scoring_version}
-          {data && !data.is_default && data.updated_at && ` -- last updated ${new Date(data.updated_at).toLocaleString()}`}
+          {data && !data.is_default && data.updated_at && ` (last updated ${new Date(data.updated_at).toLocaleString()})`}
         </span>
       </div>
       <div className="not-available" style={{ marginBottom: 14 }}>
-        Changing these weights only affects questions scored (or re-scored) from now on -- it never retroactively
+        Changing these weights only affects questions scored (or re-scored) from now on. It never retroactively
         changes an already-computed priority_score on an existing question.
       </div>
       <div className="form-grid">

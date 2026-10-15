@@ -104,7 +104,7 @@ export function Discovery({
       {!canRunDiscovery && (
         <div className="permission-note" style={{ marginBottom: 16 }}>
           Running discovery requires the <code>di_pattern.manage</code> permission. Your current role doesn't hold it,
-          so the Discover action is hidden -- this is the real backend's own access rule, not a missing feature. You
+          so the Discover action is hidden. This is the real backend's own access rule, not a missing feature. You
           can still review past runs below if you hold <code>di_case.view</code>.
         </div>
       )}
@@ -112,7 +112,7 @@ export function Discovery({
         <div>
           <strong>Suggestions are never authoritative on their own</strong>
           <span>
-            Every suggestion below is labelled "AI suggested -- awaiting review." A real Pattern or Question only
+            Every suggestion below is labelled "AI suggested: awaiting review." A real Pattern or Question only
             exists once you explicitly Accept it; Dismiss discards it with no further effect.
           </span>
         </div>
@@ -239,7 +239,7 @@ export function SuggestionCard({
   return (
     <article className="pattern-item" style={{ gridTemplateColumns: "1fr auto" }}>
       <div className="pattern-copy">
-        {isPending && <div className="ai-label">AI suggested -- awaiting review</div>}
+        {isPending && <div className="ai-label">AI suggested: awaiting review</div>}
         <div className="pattern-title">
           <h3>{suggestion.title}</h3>
           <Badge tone={suggestion.kind === "pattern" ? "info" : "neutral"}>{suggestion.kind}</Badge>

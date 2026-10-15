@@ -342,7 +342,7 @@ export function RuleBuilder({
       </div>
 
       <label style={{ display: "block", margin: "14px 0 8px", fontSize: 10, fontWeight: 600, color: "var(--text-2)" }}>
-        Exceptions -- if any of these match, the rule's action never applies
+        Exceptions: if any of these match, the rule's action never applies
       </label>
       {state.exceptions.map((exception, i) => (
         <ConditionNodeEditor

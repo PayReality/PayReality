@@ -151,7 +151,7 @@ export function Cases({ workflowId, openCase }: { workflowId: string | null; ope
               <textarea value={factsJson} onChange={(e) => setFactsJson(e.target.value)} rows={4} />
             </label>
             <label>
-              Recorded baseline decision (JSON, optional) -- what a replay compares a proposed decision against
+              Recorded baseline decision (JSON, optional): what a replay compares a proposed decision against
               <textarea
                 value={humanDecisionJson}
                 onChange={(e) => setHumanDecisionJson(e.target.value)}

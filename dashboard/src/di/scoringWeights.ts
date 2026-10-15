@@ -21,7 +21,7 @@ export function validateWeights(weights: ScoringWeights): string | null {
   }
   const total = sumWeights(weights)
   if (Math.abs(total - 1.0) > SCORING_WEIGHT_SUM_TOLERANCE) {
-    return `The five weights must sum to 1.0 -- they currently sum to ${total.toFixed(3)}.`
+    return `The five weights must sum to 1.0 (they currently sum to ${total.toFixed(3)}).`
   }
   return null
 }

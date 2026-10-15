@@ -382,7 +382,7 @@ export function Questions({
               </div>
               <div className="missing-box">
                 <strong>Evidence foundation</strong>
-                <p>Every figure above is read live from this workflow's real linked records -- nothing here is estimated.</p>
+                <p>Every figure above is read live from this workflow's real linked records. Nothing here is estimated.</p>
               </div>
             </div>
           )}
@@ -492,7 +492,7 @@ export function AnswerPanel({
               <strong>Separation of duties</strong>
               <span>
                 You authored this answer, so you cannot also approve it. This platform requires a different reviewer to
-                approve any answer you submit -- enforced server-side, not just hidden here.
+                approve any answer you submit, enforced server-side, not just hidden here.
               </span>
             </div>
           )}

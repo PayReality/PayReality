@@ -59,7 +59,7 @@ export function Testing({ workflowId, setPage }: { workflowId: string | null; se
         <div>
           <strong>Agreement, not correctness</strong>
           <span>
-            "Agrees with baseline" means the proposed decision matches what a human already decided -- it is never a claim
+            "Agrees with baseline" means the proposed decision matches what a human already decided. It is never a claim
             that either the baseline or the rule was right.
           </span>
         </div>
