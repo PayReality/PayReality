@@ -16,8 +16,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import DIPattern, DIQuestion, DIQuestionCase, DIQuestionPattern
-from app.domain.decision_intelligence.scoring import SCORING_VERSION, compute_priority_score
-from app.services import di_audit_service, di_case_service, di_pattern_service, di_workflow_service
+from app.domain.decision_intelligence.scoring import compute_priority_score
+from app.services import (
+    di_audit_service,
+    di_case_service,
+    di_pattern_service,
+    di_scoring_config_service,
+    di_workflow_service,
+)
 
 
 class QuestionNotFoundError(Exception):
@@ -154,26 +160,36 @@ def score_question(
     db: Session, question_id: uuid.UUID, organization_id: uuid.UUID, actor_user_id: uuid.UUID
 ) -> DIQuestion:
     """(Re)computes `priority_score` from the question's current five
-    dimension scores via the single shared, versioned formula
-    (scoring.py). Persists `scoring_version` alongside it so a later
-    change to the formula never silently reinterprets an old score --
-    `priority_score` stays None, not a fabricated number, if any
-    dimension hasn't been assessed yet."""
+    dimension scores via the shared formula (scoring.py), using this
+    organization's own configured weights if it has set any
+    (DIScoringConfig, Feature: configurable scoring weights), otherwise
+    scoring.py's hardcoded "v1" defaults -- identical behavior to before
+    that feature existed for any organization that never configures it.
+    Persists `scoring_version` alongside the score so a later change to
+    either the formula or an organization's own weight configuration
+    never silently reinterprets an old score: this is the ONLY place a
+    question's priority_score/scoring_version pair is written, and it
+    only ever runs when a human explicitly (re-)requests it here, never
+    as a side effect of a config change -- `priority_score` stays None,
+    not a fabricated number, if any dimension hasn't been assessed yet,
+    regardless of which weight set is active."""
     question = get_question(db, question_id, organization_id)
     previous_score = float(question.priority_score) if question.priority_score is not None else None
+    weights, scoring_version = di_scoring_config_service.get_weights_and_version(db, organization_id)
     question.priority_score = compute_priority_score(
         float(question.reach_score) if question.reach_score is not None else None,
         float(question.impact_score) if question.impact_score is not None else None,
         float(question.risk_score) if question.risk_score is not None else None,
         float(question.answerability_score) if question.answerability_score is not None else None,
         float(question.decision_sensitivity_score) if question.decision_sensitivity_score is not None else None,
+        weights=weights,
     )
-    question.scoring_version = SCORING_VERSION
+    question.scoring_version = scoring_version
 
     di_audit_service.record_event(
         db, organization_id, actor_user_id, action="score", entity_type="DIQuestion", entity_id=question.id,
         previous_value={"priority_score": previous_score},
-        new_value={"priority_score": question.priority_score, "scoring_version": SCORING_VERSION},
+        new_value={"priority_score": question.priority_score, "scoring_version": scoring_version},
     )
     db.commit()
     db.refresh(question)

@@ -323,6 +323,7 @@ def create_app() -> FastAPI:
     app.include_router(decision_intelligence.replays.router)
     app.include_router(decision_intelligence.imports.router)
     app.include_router(decision_intelligence.reports.router)
+    app.include_router(decision_intelligence.scoring_config.router)
 
     return app
 

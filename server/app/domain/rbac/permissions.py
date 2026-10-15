@@ -157,6 +157,17 @@ class Permission(str, Enum):
     DI_RULE_MANAGE = "di_rule.manage"
     DI_REPLAY_RUN = "di_replay.run"
     DI_REPORT_VIEW = "di_report.view"
+    # Settings (Feature: configurable scoring weights): deliberately its
+    # own permission rather than reusing DI_WORKFLOW_MANAGE -- a
+    # DIScoringConfig is an organization-wide policy about HOW every
+    # question in every workflow gets prioritised, not a property of any
+    # one DIWorkflow, so folding it into DI_WORKFLOW_MANAGE would blur
+    # exactly the kind of boundary this module's own namespacing
+    # discipline (see the comment above DI_WORKFLOW_MANAGE) exists to keep
+    # explicit. Granted to Governance Administrator only, the same
+    # reviewer-adjacent admin role every other DI_*_MANAGE permission
+    # already goes to.
+    DI_SETTINGS_MANAGE = "di_settings.manage"
 
 
 # The full permission set, used to grant Owner "full platform control"
@@ -194,6 +205,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.DI_RULE_MANAGE,
             Permission.DI_REPLAY_RUN,
             Permission.DI_REPORT_VIEW,
+            Permission.DI_SETTINGS_MANAGE,
         }
     ),
     Role.AGENT_ADMIN: frozenset(

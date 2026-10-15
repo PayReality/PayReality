@@ -438,3 +438,33 @@ class ReplayCaseResultListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# --- Settings: configurable scoring weights --------------------------------
+
+
+class ScoringWeights(BaseModel):
+    """All five dimensions are required on every write -- a partial update
+    (e.g. "just bump reach") is deliberately not supported, since weights
+    only make sense evaluated together (they must sum to 1.0, validated
+    server-side by scoring.validate_weights); accepting a partial set
+    would force the server to guess which existing weight to keep for the
+    others."""
+
+    reach: float
+    impact: float
+    risk: float
+    answerability: float
+    decision_sensitivity: float
+
+
+class UpdateScoringConfigRequest(BaseModel):
+    weights: ScoringWeights
+
+
+class ScoringConfigResponse(BaseModel):
+    organization_id: UUID
+    weights: ScoringWeights
+    scoring_version: str
+    is_default: bool
+    updated_at: datetime | None
