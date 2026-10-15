@@ -3,7 +3,10 @@ import { triggerBrowserDownload } from "../lib/download";
 import type {
   AcceptSuggestionResult,
   Answer,
+  AnswerDisposition,
   Case,
+  CaseLink,
+  CaseLinkKind,
   CaseListPage,
   ColumnMappingTarget,
   DecisionRule,
@@ -119,10 +122,19 @@ export const decisionIntelligenceApi = {
   ) => apiClient.patch<Pattern>(`${BASE}/patterns/${patternId}`, body),
   // Pattern's own linked Cases (evidence) -- see patterns.py's own note.
   listPatternCases: (patternId: string) => apiClient.get<string[]>(`${BASE}/patterns/${patternId}/cases`),
-  linkPatternCase: (patternId: string, caseId: string) =>
-    apiClient.post<{ linked: boolean }>(`${BASE}/patterns/${patternId}/cases`, { case_id: caseId }),
+  // Same linked cases, WITH why each is linked (kind/reason) -- what a
+  // reviewer needs to tell supporting evidence apart from a model-inferred
+  // potentially-affected case.
+  listPatternCaseLinks: (patternId: string) => apiClient.get<CaseLink[]>(`${BASE}/patterns/${patternId}/case-links`),
+  linkPatternCase: (patternId: string, caseId: string, body: { kind?: CaseLinkKind; reason?: string } = {}) =>
+    apiClient.post<{ linked: boolean }>(`${BASE}/patterns/${patternId}/cases`, { case_id: caseId, ...body }),
   unlinkPatternCase: (patternId: string, caseId: string) =>
     apiClient.delete<void>(`${BASE}/patterns/${patternId}/cases/${caseId}`),
+  // Corrects an existing link's relevance category (e.g. demoting a
+  // model-inferred "potentially_affected" case to "excluded" after actually
+  // checking it) -- preserves the original link/audit history.
+  relinkPatternCaseKind: (patternId: string, caseId: string, body: { new_kind: CaseLinkKind; reason?: string }) =>
+    apiClient.patch<CaseLink>(`${BASE}/patterns/${patternId}/cases/${caseId}`, body),
 
   // -- Priority Questions --------------------------------------------------
   listQuestions: (params: { workflow_id?: string; status?: string; sort_by?: string; limit?: number; offset?: number } = {}) =>
@@ -153,10 +165,19 @@ export const decisionIntelligenceApi = {
     apiClient.post<{ linked: boolean }>(`${BASE}/questions/${questionId}/patterns`, { pattern_id: patternId }),
   unlinkQuestionPattern: (questionId: string, patternId: string) =>
     apiClient.delete<void>(`${BASE}/questions/${questionId}/patterns/${patternId}`),
-  linkQuestionCase: (questionId: string, caseId: string) =>
-    apiClient.post<{ linked: boolean }>(`${BASE}/questions/${questionId}/cases`, { case_id: caseId }),
+  linkQuestionCase: (questionId: string, caseId: string, body: { kind?: CaseLinkKind; reason?: string } = {}) =>
+    apiClient.post<{ linked: boolean }>(`${BASE}/questions/${questionId}/cases`, { case_id: caseId, ...body }),
   unlinkQuestionCase: (questionId: string, caseId: string) =>
     apiClient.delete<void>(`${BASE}/questions/${questionId}/cases/${caseId}`),
+  // Corrects an existing link's relevance category -- same shape/reasoning
+  // as relinkPatternCaseKind above.
+  relinkQuestionCaseKind: (questionId: string, caseId: string, body: { new_kind: CaseLinkKind; reason?: string }) =>
+    apiClient.patch<CaseLink>(`${BASE}/questions/${questionId}/cases/${caseId}`, body),
+  // A reviewer's mandatory-reason override of priority_score -- `score:
+  // null` clears a previous override and returns to the computed score
+  // (the reason still explains why it's being cleared).
+  setQuestionPriorityOverride: (questionId: string, body: { score: number | null; reason: string }) =>
+    apiClient.post<Question>(`${BASE}/questions/${questionId}/priority-override`, body),
 
   // -- Answers (nested under a question for create/list, standalone for
   //    every lifecycle transition -- mirrors answers.py's own two routers) --
@@ -174,7 +195,11 @@ export const decisionIntelligenceApi = {
   ) => apiClient.post<Answer>(`${BASE}/questions/${questionId}/answers`, body),
   getAnswer: (answerId: string) => apiClient.get<Answer>(`${BASE}/answers/${answerId}`),
   submitAnswer: (answerId: string) => apiClient.post<Answer>(`${BASE}/answers/${answerId}/submit`),
-  approveAnswer: (answerId: string) => apiClient.post<Answer>(`${BASE}/answers/${answerId}/approve`),
+  // BREAKING: now requires a body -- `disposition` is the approving
+  // expert's own mandatory concluding judgement (di_answer_service's fixed
+  // ANSWER_DISPOSITIONS vocabulary); the backend 422s without it.
+  approveAnswer: (answerId: string, body: { disposition: AnswerDisposition; disposition_notes?: string }) =>
+    apiClient.post<Answer>(`${BASE}/answers/${answerId}/approve`, body),
   rejectAnswer: (answerId: string, reason?: string) => apiClient.post<Answer>(`${BASE}/answers/${answerId}/reject`, { reason }),
   supersedeAnswer: (
     answerId: string,

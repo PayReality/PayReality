@@ -1,11 +1,48 @@
 import { useEffect, useState } from "react"
 import { Badge, Button, EmptyPanel, ErrorNote, PageTitle } from "../components/ui"
 import { decisionIntelligenceApi } from "../di/api"
-import type { DecisionRule, ReplayCaseResult, ReplayRun, RuleVersion } from "../di/types"
+import type { DecisionRule, ReplayCaseResult, ReplayCaseSplit, ReplayRun, RuleVersion } from "../di/types"
 import { OUTCOME_CATEGORIES, OUTCOME_CATEGORY_LABELS } from "../di/types"
 import { useFetch, errorMessage } from "../lib/useAsync"
 import type { Page } from "../types"
 import { useAuth } from "../auth/AuthContext"
+
+// Development-vs-evaluation disclosure (Feature: replay result clarity).
+// "Agrees with baseline" on a case that was also used to DEVELOP the
+// source question/rule is not an independent check of that case --
+// this is the one place that caveat gets surfaced, prominently, never
+// buried in a tooltip.
+function CaseSplitDisclosure({ caseSplit }: { caseSplit: ReplayCaseSplit | null }) {
+  if (!caseSplit) {
+    return (
+      <div className="callout" style={{ margin: "0 17px 12px" }}>
+        <strong>Development/evaluation disclosure unavailable</strong>
+        <span>No source question could be resolved for this replay, so there's no way to tell which cases were used to develop this rule apart from independent ones.</span>
+      </div>
+    )
+  }
+  const overlapCount = caseSplit.overlap_case_ids.length
+  return (
+    <div className="callout" style={{ margin: "0 17px 12px" }}>
+      <strong>Development vs. evaluation cases</strong>
+      <span>
+        {caseSplit.development_case_ids.length} case(s) were used to develop this question/rule;{" "}
+        {caseSplit.evaluation_case_ids.length} case(s) are being evaluated here, of which{" "}
+        {caseSplit.independent_evaluation_case_count} are genuinely independent.
+      </span>
+      {overlapCount > 0 && (
+        <span style={{ display: "block", marginTop: 4, fontWeight: 600 }}>
+          {overlapCount} of these cases were also used to develop this rule: this is not an independent check for those cases.
+        </span>
+      )}
+      {caseSplit.insufficient_evaluation_cases && (
+        <span style={{ display: "block", marginTop: 4, fontWeight: 600, color: "var(--red)" }}>
+          Too few independent cases to draw a reliable conclusion.
+        </span>
+      )}
+    </div>
+  )
+}
 
 export function Testing({ workflowId, setPage }: { workflowId: string | null; setPage: (p: Page) => void }) {
   const { hasPermission } = useAuth()
@@ -103,6 +140,7 @@ export function Testing({ workflowId, setPage }: { workflowId: string | null; se
               </div>
               <Badge tone="info">Run {selectedReplay.id.slice(0, 8)}</Badge>
             </div>
+            <CaseSplitDisclosure caseSplit={selectedReplay.case_split} />
             <div className="test-summary">
               {OUTCOME_CATEGORIES.map((cat) => {
                 const count = selectedReplay.summary?.counts[cat] ?? 0

@@ -1,8 +1,14 @@
 import { useEffect, useState } from "react"
 import { Badge, Button, EmptyPanel, ErrorNote, PageTitle, TableToolbar } from "../components/ui"
 import { decisionIntelligenceApi } from "../di/api"
-import type { Answer, Question, QuestionDetail } from "../di/types"
-import { QUESTION_STATUS_LABELS } from "../di/types"
+import type { Answer, AnswerDisposition, CaseLink, CaseLinkKind, Question, QuestionDetail } from "../di/types"
+import {
+  ANSWER_DISPOSITIONS,
+  ANSWER_DISPOSITION_LABELS,
+  CASE_LINK_KINDS,
+  CASE_LINK_KIND_LABELS,
+  QUESTION_STATUS_LABELS,
+} from "../di/types"
 import { linkedCaseSummary, PriorityScoreCell, ScoreBand, ScoreValue } from "../di/scoring"
 import { useFetch, errorMessage } from "../lib/useAsync"
 import type { Modal, Page } from "../types"
@@ -10,12 +16,19 @@ import { useAuth } from "../auth/AuthContext"
 import type { OrgUser } from "../users/types"
 
 const SCORE_FIELDS = [
-  { key: "reach_score", label: "Reach" },
-  { key: "impact_score", label: "Decision impact" },
-  { key: "risk_score", label: "Risk if unresolved" },
-  { key: "answerability_score", label: "Answerability" },
-  { key: "decision_sensitivity_score", label: "Decision sensitivity" },
+  { key: "reach_score", sourceKey: "reach_score_source", label: "Reach" },
+  { key: "impact_score", sourceKey: "impact_score_source", label: "Decision impact" },
+  { key: "risk_score", sourceKey: "risk_score_source", label: "Risk if unresolved" },
+  { key: "answerability_score", sourceKey: "answerability_score_source", label: "Answerability" },
+  { key: "decision_sensitivity_score", sourceKey: "decision_sensitivity_score_source", label: "Decision sensitivity" },
 ] as const
+
+function caseLinkTone(kind: CaseLinkKind): string {
+  if (kind === "supporting") return "success"
+  if (kind === "excluded") return "neutral"
+  if (kind === "potentially_affected") return "warning"
+  return "neutral"
+}
 
 export function Questions({
   workflowId,
@@ -68,6 +81,10 @@ export function Questions({
   const [scores, setScores] = useState<Record<string, string>>({})
   const [scoreError, setScoreError] = useState<string | null>(null)
   const [savingScores, setSavingScores] = useState(false)
+  const [overrideScore, setOverrideScore] = useState("")
+  const [overrideReason, setOverrideReason] = useState("")
+  const [overrideError, setOverrideError] = useState<string | null>(null)
+  const [savingOverride, setSavingOverride] = useState(false)
 
   useEffect(() => {
     setAssigning(false)
@@ -86,6 +103,15 @@ export function Questions({
     // Only re-seed inputs when a DIFFERENT question is opened, not on
     // every background refresh of the same one -- avoids clobbering an
     // in-progress edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailId])
+
+  useEffect(() => {
+    if (!detail.data) return
+    const q = detail.data.question
+    setOverrideScore(q.priority_override_score?.toString() ?? "")
+    setOverrideReason("")
+    setOverrideError(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailId])
 
@@ -115,6 +141,29 @@ export function Questions({
       setScoreError(err instanceof Error ? err.message : errorMessage(err))
     } finally {
       setSavingScores(false)
+    }
+  }
+
+  async function handleSaveOverride(clear: boolean) {
+    if (!q) return
+    if (!overrideReason.trim()) {
+      setOverrideError("A reason is required, even to clear an override.")
+      return
+    }
+    setSavingOverride(true)
+    setOverrideError(null)
+    try {
+      const score = clear ? null : overrideScore.trim() === "" ? null : Number(overrideScore)
+      if (score !== null && (Number.isNaN(score) || score < 0 || score > 100)) {
+        throw new Error("Override score must be a number between 0 and 100, or left blank to clear it.")
+      }
+      await decisionIntelligenceApi.setQuestionPriorityOverride(q.id, { score, reason: overrideReason.trim() })
+      detail.reload()
+      reload()
+    } catch (err) {
+      setOverrideError(err instanceof Error ? err.message : errorMessage(err))
+    } finally {
+      setSavingOverride(false)
     }
   }
 
@@ -329,8 +378,13 @@ export function Questions({
           {tab === "Rationale" && (
             <div>
               <div className="rationale-grid">
-                {SCORE_FIELDS.map(({ key, label }) => (
-                  <ScoreValue key={key} label={label} score={(q as unknown as Record<string, number | null>)[key]} />
+                {SCORE_FIELDS.map(({ key, sourceKey, label }) => (
+                  <div key={key}>
+                    <ScoreValue label={label} score={(q as unknown as Record<string, number | null>)[key]} />
+                    <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+                      Source: {(q as unknown as Record<string, string | null>)[sourceKey] ?? "not set"}
+                    </div>
+                  </div>
                 ))}
               </div>
               {hasPermission("di_question.manage") && (
@@ -356,6 +410,60 @@ export function Questions({
                   </Button>
                 </div>
               )}
+              <div className="form-body" style={{ borderTop: "1px solid var(--border)" }}>
+                <strong style={{ fontSize: 11, display: "block", marginBottom: 4 }}>Priority override</strong>
+                {q.priority_override_score !== null ? (
+                  <div className="callout" style={{ marginBottom: 10 }}>
+                    <strong>Priority is overridden to {q.priority_override_score}</strong>
+                    <span>
+                      Reason: {q.priority_override_reason ?? "No reason recorded"}
+                      {q.priority_overridden_at ? ` (set ${new Date(q.priority_overridden_at).toLocaleString()})` : ""}
+                    </span>
+                  </div>
+                ) : (
+                  <p style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10 }}>
+                    No override is active; priority uses the computed score above.
+                  </p>
+                )}
+                {hasPermission("di_question.manage") && (
+                  <>
+                    <div className="form-grid">
+                      <label>
+                        Override score (0-100, blank to clear)
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={overrideScore}
+                          onChange={(e) => setOverrideScore(e.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <label>
+                      Reason (mandatory, even to clear an override)
+                      <textarea value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} />
+                    </label>
+                    {overrideError && <ErrorNote message={overrideError} />}
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <Button kind="primary" onClick={() => handleSaveOverride(false)} disabled={savingOverride}>
+                        {savingOverride ? "Saving…" : "Set override"}
+                      </Button>
+                      {q.priority_override_score !== null && (
+                        <Button
+                          kind="ghost"
+                          onClick={() => {
+                            setOverrideScore("")
+                            handleSaveOverride(true)
+                          }}
+                          disabled={savingOverride}
+                        >
+                          Clear override
+                        </Button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           )}
           {tab === "Evidence" && (
@@ -373,6 +481,12 @@ export function Questions({
                 ))}
                 <h3 style={{ marginTop: 16 }}>Linked cases</h3>
                 <p>{linkedCaseSummary(detail.data!.case_ids.length, totalCases)} linked as evidence for this question.</p>
+                <QuestionCaseLinks
+                  questionId={q.id}
+                  caseLinks={detail.data!.case_links}
+                  canManage={hasPermission("di_question.manage")}
+                  onChanged={() => detail.reload()}
+                />
                 <button className="evidence-ref" onClick={() => setPage("Cases")}>
                   <span>
                     <strong>Open Cases</strong>
@@ -383,6 +497,38 @@ export function Questions({
               <div className="missing-box">
                 <strong>Evidence foundation</strong>
                 <p>Every figure above is read live from this workflow's real linked records. Nothing here is estimated.</p>
+                {(q.candidate_explanation || (q.alternative_explanations && q.alternative_explanations.length > 0) || (q.missing_evidence && q.missing_evidence.length > 0) || q.potential_impact) && (
+                  <>
+                    <strong style={{ marginTop: 12, display: "block" }}>AI-proposed grounding (hypothesis, not a conclusion)</strong>
+                    {q.candidate_explanation && <p>{q.candidate_explanation}</p>}
+                    {q.alternative_explanations && q.alternative_explanations.length > 0 && (
+                      <>
+                        <small>Alternative explanations</small>
+                        <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                          {q.alternative_explanations.map((alt, i) => (
+                            <li key={i}>{String(alt)}</li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                    {q.missing_evidence && q.missing_evidence.length > 0 && (
+                      <>
+                        <small>Missing evidence</small>
+                        <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                          {q.missing_evidence.map((item, i) => (
+                            <li key={i}>{String(item)}</li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                    {q.potential_impact && (
+                      <>
+                        <small>Potential impact</small>
+                        <p>{q.potential_impact}</p>
+                      </>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -418,6 +564,88 @@ function QuestionEvidenceCell({ questionId, totalCases }: { questionId: string; 
   return <span>{linkedCaseSummary(data.case_ids.length, totalCases)}</span>
 }
 
+function QuestionCaseLinks({
+  questionId,
+  caseLinks,
+  canManage,
+  onChanged,
+}: {
+  questionId: string
+  caseLinks: CaseLink[]
+  canManage: boolean
+  onChanged: () => void
+}) {
+  const [editingCaseId, setEditingCaseId] = useState<string | null>(null)
+  const [newKind, setNewKind] = useState<CaseLinkKind>("supporting")
+  const [reason, setReason] = useState("")
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  function startEdit(link: CaseLink) {
+    setEditingCaseId(link.case_id)
+    setNewKind(link.kind)
+    setReason(link.reason ?? "")
+    setSaveError(null)
+  }
+
+  async function saveRelink(caseId: string) {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      await decisionIntelligenceApi.relinkQuestionCaseKind(questionId, caseId, { new_kind: newKind, reason: reason || undefined })
+      setEditingCaseId(null)
+      onChanged()
+    } catch (err) {
+      setSaveError(errorMessage(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (caseLinks.length === 0) return null
+
+  return (
+    <div className="content-block" style={{ padding: "8px 0" }}>
+      {caseLinks.map((link) => (
+        <div key={link.case_id} style={{ display: "flex", flexDirection: "column", gap: 4, padding: "6px 0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <strong style={{ fontSize: 11 }}>Case {link.case_id.slice(0, 8)}</strong>
+            <Badge tone={caseLinkTone(link.kind)}>{CASE_LINK_KIND_LABELS[link.kind]}</Badge>
+            {canManage && (
+              <button className="btn ghost" onClick={() => (editingCaseId === link.case_id ? setEditingCaseId(null) : startEdit(link))}>
+                {editingCaseId === link.case_id ? "Cancel" : "Change"}
+              </button>
+            )}
+          </div>
+          {link.reason && <span style={{ fontSize: 11, color: "var(--text-2)" }}>{link.reason}</span>}
+          {editingCaseId === link.case_id && (
+            <div className="form-body" style={{ padding: 0 }}>
+              <label>
+                New relevance category
+                <select value={newKind} onChange={(e) => setNewKind(e.target.value as CaseLinkKind)}>
+                  {CASE_LINK_KINDS.map((k) => (
+                    <option key={k} value={k}>
+                      {CASE_LINK_KIND_LABELS[k]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Reason (optional)
+                <textarea value={reason} onChange={(e) => setReason(e.target.value)} />
+              </label>
+              {saveError && <ErrorNote message={saveError} />}
+              <Button kind="primary" onClick={() => saveRelink(link.case_id)} disabled={saving}>
+                {saving ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function AnswerPanel({
   questionId,
   answers,
@@ -437,6 +665,9 @@ export function AnswerPanel({
   const [content, setContent] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [approving, setApproving] = useState(false)
+  const [disposition, setDisposition] = useState<AnswerDisposition>("rule_change")
+  const [dispositionNotes, setDispositionNotes] = useState("")
 
   async function createDraft() {
     if (!content.trim()) return
@@ -466,6 +697,18 @@ export function AnswerPanel({
     }
   }
 
+  async function confirmApprove() {
+    if (!latest) return
+    await act(() =>
+      decisionIntelligenceApi.approveAnswer(latest.id, {
+        disposition,
+        disposition_notes: dispositionNotes.trim() || undefined,
+      }),
+    )
+    setApproving(false)
+    setDispositionNotes("")
+  }
+
   const isSelfApprove = !!latest && !!currentUserId && latest.author_user_id === currentUserId
 
   return (
@@ -487,6 +730,12 @@ export function AnswerPanel({
           <div className="ai-label">Answer v{latest.version} · {latest.status}</div>
           <h3>{latest.content}</h3>
           {error && <ErrorNote message={error} />}
+          {latest.status === "approved" && latest.disposition && (
+            <div className="callout" style={{ marginTop: 8 }}>
+              <strong>Disposition: {ANSWER_DISPOSITION_LABELS[latest.disposition]}</strong>
+              {latest.disposition_notes && <span>{latest.disposition_notes}</span>}
+            </div>
+          )}
           {isSelfApprove && latest.status === "submitted" && (
             <div className="callout">
               <strong>Separation of duties</strong>
@@ -509,11 +758,11 @@ export function AnswerPanel({
                 </Button>
                 <Button
                   kind="primary"
-                  onClick={() => act(() => decisionIntelligenceApi.approveAnswer(latest.id))}
+                  onClick={() => setApproving(!approving)}
                   disabled={busy || isSelfApprove}
                   title={isSelfApprove ? "You authored this answer and cannot approve it yourself" : undefined}
                 >
-                  {isSelfApprove ? "Cannot approve your own answer" : "Approve"}
+                  {isSelfApprove ? "Cannot approve your own answer" : approving ? "Cancel" : "Approve"}
                 </Button>
               </>
             )}
@@ -523,6 +772,30 @@ export function AnswerPanel({
               </Button>
             )}
           </div>
+          {approving && latest.status === "submitted" && canApprove && !isSelfApprove && (
+            <div className="form-body" style={{ borderTop: "1px solid var(--border)", marginTop: 10, paddingTop: 10 }}>
+              <strong style={{ fontSize: 11, display: "block", marginBottom: 6 }}>
+                Record the reviewer's concluding judgement before approving
+              </strong>
+              <label>
+                Disposition *
+                <select value={disposition} onChange={(e) => setDisposition(e.target.value as AnswerDisposition)}>
+                  {ANSWER_DISPOSITIONS.map((d) => (
+                    <option key={d} value={d}>
+                      {ANSWER_DISPOSITION_LABELS[d]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Notes (optional)
+                <textarea value={dispositionNotes} onChange={(e) => setDispositionNotes(e.target.value)} />
+              </label>
+              <Button kind="primary" onClick={confirmApprove} disabled={busy}>
+                {busy ? "Approving…" : "Confirm approval"}
+              </Button>
+            </div>
+          )}
           {content && (latest.status === "approved" || latest.status === "rejected") && (
             <div className="form-body" style={{ padding: "12px 0 0" }}>
               <textarea value={content} onChange={(e) => setContent(e.target.value)} />

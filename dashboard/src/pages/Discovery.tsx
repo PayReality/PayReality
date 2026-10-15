@@ -262,6 +262,38 @@ export function SuggestionCard({
           <strong style={{ fontSize: 10, color: "var(--text-2)" }}>Rationale</strong>
           <p>{suggestion.rationale}</p>
         </div>
+        {suggestion.candidate_explanation && (
+          <div className="content-block" style={{ padding: "8px 0" }}>
+            <strong style={{ fontSize: 10, color: "var(--text-2)" }}>AI-proposed hypothesis, not a conclusion</strong>
+            <p>{suggestion.candidate_explanation}</p>
+          </div>
+        )}
+        {suggestion.alternative_explanations && suggestion.alternative_explanations.length > 0 && (
+          <div className="content-block" style={{ padding: "8px 0" }}>
+            <strong style={{ fontSize: 10, color: "var(--text-2)" }}>Alternative explanations considered</strong>
+            <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+              {suggestion.alternative_explanations.map((alt, i) => (
+                <li key={i}>{String(alt)}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {suggestion.missing_evidence && suggestion.missing_evidence.length > 0 && (
+          <div className="content-block" style={{ padding: "8px 0" }}>
+            <strong style={{ fontSize: 10, color: "var(--text-2)" }}>Missing evidence</strong>
+            <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+              {suggestion.missing_evidence.map((item, i) => (
+                <li key={i}>{String(item)}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {suggestion.potential_impact && (
+          <div className="content-block" style={{ padding: "8px 0" }}>
+            <strong style={{ fontSize: 10, color: "var(--text-2)" }}>Potential impact</strong>
+            <p>{suggestion.potential_impact}</p>
+          </div>
+        )}
         <div className="pattern-facts">
           <span>
             <strong>{suggestion.supporting_case_ids.length}</strong> supporting case(s)

@@ -18,6 +18,8 @@ function makeAnswer(overrides: Partial<Answer> = {}): Answer {
     author_user_id: "user-author",
     approver_user_id: null,
     status: "submitted",
+    disposition: null,
+    disposition_notes: null,
     submitted_at: new Date().toISOString(),
     decided_at: null,
     created_at: new Date().toISOString(),

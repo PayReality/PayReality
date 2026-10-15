@@ -1,10 +1,18 @@
 import { useEffect, useState } from "react"
 import { Badge, Button, EmptyPanel, ErrorNote, PageTitle, TableToolbar } from "../components/ui"
 import { decisionIntelligenceApi } from "../di/api"
-import type { Pattern, PatternReviewStatus } from "../di/types"
+import type { CaseLink, CaseLinkKind, Pattern, PatternReviewStatus } from "../di/types"
+import { CASE_LINK_KINDS, CASE_LINK_KIND_LABELS } from "../di/types"
 import { useFetch, errorMessage } from "../lib/useAsync"
 import type { Page } from "../types"
 import { useAuth } from "../auth/AuthContext"
+
+function caseLinkTone(kind: CaseLinkKind): string {
+  if (kind === "supporting") return "success"
+  if (kind === "excluded") return "neutral"
+  if (kind === "potentially_affected") return "warning"
+  return "neutral"
+}
 
 // review_status -> this design's "Observed pattern" / "Candidate pattern"
 // labels. `confirmed` is the only status a human has actually signed off
@@ -30,6 +38,7 @@ export function Patterns({ workflowId, setPage }: { workflowId: string | null; s
   const [form, setForm] = useState({ name: "", description: "", category: "unclear_policy", proposed_explanation: "" })
   const [createError, setCreateError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [expandedEvidence, setExpandedEvidence] = useState<string | null>(null)
 
   const { data, loading, error, reload } = useFetch(
     () => (workflowId ? decisionIntelligenceApi.listPatterns({ workflow_id: workflowId, limit: 200 }) : Promise.resolve(null)),
@@ -168,18 +177,36 @@ export function Patterns({ workflowId, setPage }: { workflowId: string | null; s
                   <Badge tone={stateTone(p.review_status)}>{stateLabel(p.review_status)}</Badge>
                 </div>
                 <p>{p.description}</p>
+                {p.alternative_explanations && p.alternative_explanations.length > 0 && (
+                  <div className="content-block" style={{ padding: "8px 0" }}>
+                    <strong style={{ fontSize: 10, color: "var(--text-2)" }}>Alternative explanations considered</strong>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                      {p.alternative_explanations.map((alt, i) => (
+                        <li key={i}>{String(alt)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <div className="pattern-facts">
                   <span>
                     <strong>{caseCounts[p.id] ?? 0}</strong> linked cases
                   </span>
                   <span>
                     <strong>
-                      {totalCases && totalCases > 0 ? `${(((caseCounts[p.id] ?? 0) / totalCases) * 100).toFixed(1)}%` : "—"}
+                      {totalCases && totalCases > 0 ? `${(((caseCounts[p.id] ?? 0) / totalCases) * 100).toFixed(1)}%` : "N/A"}
                     </strong>{" "}
                     of case set
                   </span>
                   <span>{p.confidence ? `${p.confidence} confidence` : "Confidence not yet assessed"}</span>
                 </div>
+                <button
+                  className="btn ghost"
+                  style={{ marginTop: 8 }}
+                  onClick={() => setExpandedEvidence(expandedEvidence === p.id ? null : p.id)}
+                >
+                  {expandedEvidence === p.id ? "Hide evidence detail" : "Show evidence detail (why each case is linked)"}
+                </button>
+                {expandedEvidence === p.id && <PatternCaseLinks patternId={p.id} canManage={hasPermission("di_pattern.manage")} />}
               </div>
               <div className="pattern-actions">
                 <Button onClick={() => setPage("Cases")}>View cases</Button>
@@ -200,5 +227,79 @@ export function Patterns({ workflowId, setPage }: { workflowId: string | null; s
         </div>
       </section>
     </>
+  )
+}
+
+function PatternCaseLinks({ patternId, canManage }: { patternId: string; canManage: boolean }) {
+  const { data, loading, error, reload } = useFetch(() => decisionIntelligenceApi.listPatternCaseLinks(patternId), [patternId])
+  const [editingCaseId, setEditingCaseId] = useState<string | null>(null)
+  const [newKind, setNewKind] = useState<CaseLinkKind>("supporting")
+  const [reason, setReason] = useState("")
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  function startEdit(link: CaseLink) {
+    setEditingCaseId(link.case_id)
+    setNewKind(link.kind)
+    setReason(link.reason ?? "")
+    setSaveError(null)
+  }
+
+  async function saveRelink(caseId: string) {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      await decisionIntelligenceApi.relinkPatternCaseKind(patternId, caseId, { new_kind: newKind, reason: reason || undefined })
+      setEditingCaseId(null)
+      reload()
+    } catch (err) {
+      setSaveError(errorMessage(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="content-block" style={{ padding: "10px 0", borderTop: "1px solid var(--border)", marginTop: 8 }}>
+      {loading && <span style={{ fontSize: 11, color: "var(--muted)" }}>Loading linked cases…</span>}
+      {error && <ErrorNote message={error} />}
+      {!loading && (data ?? []).length === 0 && <span style={{ fontSize: 11, color: "var(--muted)" }}>No cases linked yet.</span>}
+      {(data ?? []).map((link) => (
+        <div key={link.case_id} style={{ display: "flex", flexDirection: "column", gap: 4, padding: "6px 0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <strong style={{ fontSize: 11 }}>Case {link.case_id.slice(0, 8)}</strong>
+            <Badge tone={caseLinkTone(link.kind)}>{CASE_LINK_KIND_LABELS[link.kind]}</Badge>
+            {canManage && (
+              <button className="btn ghost" onClick={() => (editingCaseId === link.case_id ? setEditingCaseId(null) : startEdit(link))}>
+                {editingCaseId === link.case_id ? "Cancel" : "Change"}
+              </button>
+            )}
+          </div>
+          {link.reason && <span style={{ fontSize: 11, color: "var(--text-2)" }}>{link.reason}</span>}
+          {editingCaseId === link.case_id && (
+            <div className="form-body" style={{ padding: 0 }}>
+              <label>
+                New relevance category
+                <select value={newKind} onChange={(e) => setNewKind(e.target.value as CaseLinkKind)}>
+                  {CASE_LINK_KINDS.map((k) => (
+                    <option key={k} value={k}>
+                      {CASE_LINK_KIND_LABELS[k]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Reason (optional)
+                <textarea value={reason} onChange={(e) => setReason(e.target.value)} />
+              </label>
+              {saveError && <ErrorNote message={saveError} />}
+              <Button kind="primary" onClick={() => saveRelink(link.case_id)} disabled={saving}>
+                {saving ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
   )
 }

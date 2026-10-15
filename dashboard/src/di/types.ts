@@ -152,6 +152,11 @@ export const QUESTION_STATUS_LABELS: Record<QuestionStatus, string> = {
   approved_for_operational_use: "Approved for operational use",
 };
 
+// Where a given score dimension's value came from -- "computed" (derived
+// by the backend), "human" (entered directly by a reviewer), "model"
+// (AI-proposed), or null when the dimension has no value yet.
+export type ScoreSource = "computed" | "human" | "model";
+
 export interface Question {
   id: string;
   organization_id: string;
@@ -166,13 +171,38 @@ export interface Question {
   risk_score: number | null;
   answerability_score: number | null;
   decision_sensitivity_score: number | null;
+  reach_score_source: ScoreSource | null;
+  impact_score_source: ScoreSource | null;
+  risk_score_source: ScoreSource | null;
+  answerability_score_source: ScoreSource | null;
+  decision_sensitivity_score_source: ScoreSource | null;
   // Null whenever ANY dimension above is null -- never a fabricated number.
   priority_score: number | null;
   scoring_version: string | null;
+  // A reviewer's manual override of priority_score. `priority_override_score`
+  // is the active number used in place of the computed priority_score when
+  // set (null means no override is active); `priority_override_reason` is
+  // mandatory server-side on every write to either, including clearing one.
+  priority_override_score: number | null;
+  priority_override_reason: string | null;
+  priority_overridden_by_user_id: string | null;
+  priority_overridden_at: string | null;
   owner_user_id: string | null;
   created_by_user_id: string;
+  // AI-proposed grounding carried over from an accepted discovery
+  // suggestion (see DiscoverySuggestion below) -- a hypothesis a human
+  // proposed/reviewed, never a conclusion on its own.
+  candidate_explanation: string | null;
+  alternative_explanations: unknown[] | null;
+  missing_evidence: unknown[] | null;
+  potential_impact: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface PriorityOverrideRequest {
+  score: number | null;
+  reason: string;
 }
 
 export interface QuestionListPage {
@@ -182,15 +212,73 @@ export interface QuestionListPage {
   offset: number;
 }
 
+// Why a case is linked to a Pattern or Question as evidence -- "cited as
+// supporting evidence" vs "flagged as potentially affected" vs "reviewed
+// and excluded" vs not yet triaged. Shared shape/vocabulary for both
+// Patterns and Questions (CaseLinkResponse, di_pattern_service's own
+// CASE_LINK_KINDS).
+export type CaseLinkKind = "supporting" | "potentially_affected" | "excluded" | "undetermined";
+
+export const CASE_LINK_KINDS: CaseLinkKind[] = ["supporting", "potentially_affected", "excluded", "undetermined"];
+
+export const CASE_LINK_KIND_LABELS: Record<CaseLinkKind, string> = {
+  supporting: "Supporting evidence",
+  potentially_affected: "Potentially affected",
+  excluded: "Excluded",
+  undetermined: "Undetermined",
+};
+
+export interface CaseLink {
+  case_id: string;
+  kind: CaseLinkKind;
+  reason: string | null;
+  created_at: string;
+}
+
+export interface RelinkCaseKindRequest {
+  new_kind: CaseLinkKind;
+  reason?: string;
+}
+
 export interface QuestionDetail {
   question: Question;
   patterns: Pattern[];
   case_ids: string[];
+  case_links: CaseLink[];
 }
 
 // --- Answers --------------------------------------------------------------
 
 export type AnswerStatus = "draft" | "submitted" | "under_review" | "approved" | "rejected" | "superseded";
+
+// The approving expert's own concluding judgement -- mandatory on every
+// approve (di_answer_service.ANSWER_DISPOSITIONS). Fixed vocabulary, must
+// never drift from the backend's own.
+export type AnswerDisposition =
+  | "rule_change"
+  | "fact_collection_needed"
+  | "existing_rule_sufficient"
+  | "data_or_technical_issue"
+  | "human_judgement_required"
+  | "insufficient_evidence";
+
+export const ANSWER_DISPOSITIONS: AnswerDisposition[] = [
+  "rule_change",
+  "fact_collection_needed",
+  "existing_rule_sufficient",
+  "data_or_technical_issue",
+  "human_judgement_required",
+  "insufficient_evidence",
+];
+
+export const ANSWER_DISPOSITION_LABELS: Record<AnswerDisposition, string> = {
+  rule_change: "Rule change needed",
+  fact_collection_needed: "Fact collection needed",
+  existing_rule_sufficient: "Existing rule is sufficient",
+  data_or_technical_issue: "Data or technical issue",
+  human_judgement_required: "Human judgement required",
+  insufficient_evidence: "Insufficient evidence",
+};
 
 export interface Answer {
   id: string;
@@ -206,10 +294,17 @@ export interface Answer {
   author_user_id: string;
   approver_user_id: string | null;
   status: AnswerStatus;
+  disposition: AnswerDisposition | null;
+  disposition_notes: string | null;
   submitted_at: string | null;
   decided_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ApproveAnswerRequest {
+  disposition: AnswerDisposition;
+  disposition_notes?: string;
 }
 
 // --- Decision Rules (rule_schema.py's own typed condition language) -------
@@ -304,12 +399,26 @@ export interface EvaluationResult {
 
 export type ReplayRunStatus = "pending" | "running" | "completed" | "failed";
 
+// Development-vs-evaluation disclosure: which of this replay's cases were
+// also used to develop the source question/rule (so agreement on those is
+// not an independent check) vs which are genuinely held-out. Null when no
+// source question could be resolved for this replay -- the disclosure is
+// then simply unavailable, never silently assumed clean.
+export interface ReplayCaseSplit {
+  development_case_ids: string[];
+  evaluation_case_ids: string[];
+  overlap_case_ids: string[];
+  independent_evaluation_case_count: number;
+  insufficient_evaluation_cases: boolean;
+}
+
 export interface ReplayRun {
   id: string;
   organization_id: string;
   workflow_id: string;
   rule_version_id: string;
   case_set_definition: Record<string, unknown>;
+  case_split: ReplayCaseSplit | null;
   status: ReplayRunStatus;
   started_at: string | null;
   completed_at: string | null;
@@ -518,6 +627,19 @@ export interface DiscoverySuggestion {
   reviewed_by_user_id: string | null;
   reviewed_at: string | null;
   created_at: string;
+  // Richer grounding (DIDiscoverySuggestion.candidate_explanation / etc. --
+  // see server/app/db/models.py). NOTE: the backend's DiscoverySuggestionResponse
+  // schema (server/app/schemas/decision_intelligence.py) does not currently
+  // serialize these columns onto this response, even though the underlying
+  // DB columns exist and are populated by both discovery providers -- see
+  // this frontend task's own final report for why these are left optional/
+  // unused here rather than relied upon. Declared now, as optional, so the
+  // UI lights up with zero further frontend change once the backend adds
+  // them to DiscoverySuggestionResponse.
+  candidate_explanation?: string | null;
+  alternative_explanations?: unknown[] | null;
+  missing_evidence?: unknown[] | null;
+  potential_impact?: string | null;
 }
 
 export interface DiscoveryRunDetail {
