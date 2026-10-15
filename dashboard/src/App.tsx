@@ -9,6 +9,7 @@ import { Overview } from "./pages/Overview"
 import { Workflows } from "./pages/Workflows"
 import { Cases } from "./pages/Cases"
 import { Patterns } from "./pages/Patterns"
+import { Discovery } from "./pages/Discovery"
 import { Questions } from "./pages/Questions"
 import { DecisionLogic } from "./pages/DecisionLogic"
 import { Testing } from "./pages/Testing"
@@ -79,6 +80,7 @@ function Dashboard() {
   else if (page === "Workflows") content = <Workflows workflows={workflows} onCreated={reloadWorkflows} setWorkflowId={setWorkflowId} />
   else if (page === "Cases") content = <Cases workflowId={workflowId} openCase={setDrawerCase} />
   else if (page === "Patterns") content = <Patterns workflowId={workflowId} setPage={setPage} />
+  else if (page === "Discovery") content = <Discovery workflowId={workflowId} setPage={setPage} openCase={setDrawerCase} />
   else if (page === "Questions")
     content = (
       <Questions

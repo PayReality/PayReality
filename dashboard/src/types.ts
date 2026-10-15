@@ -3,6 +3,7 @@ export type Page =
   | "Workflows"
   | "Cases"
   | "Patterns"
+  | "Discovery"
   | "Questions"
   | "Decision Logic"
   | "Testing & Replay"

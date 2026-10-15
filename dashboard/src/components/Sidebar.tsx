@@ -8,6 +8,7 @@ const nav: { label: Page; icon: string }[] = [
   { label: "Workflows", icon: "flow" },
   { label: "Cases", icon: "file" },
   { label: "Patterns", icon: "pattern" },
+  { label: "Discovery", icon: "search" },
   { label: "Questions", icon: "question" },
   { label: "Decision Logic", icon: "branch" },
   { label: "Testing & Replay", icon: "play" },
