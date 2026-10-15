@@ -50,6 +50,21 @@ class CandidateQuestion:
     supporting_case_ids: tuple[str, ...] = field(default_factory=tuple)
 
 
+#: DIPattern.category's own fixed vocabulary (app/db/models.py's
+#: ck_di_patterns_category) -- reused verbatim here rather than redefined,
+#: since a CandidatePattern's `category` is stored as-is onto the real
+#: DIPattern created when a human accepts it.
+PATTERN_CATEGORIES = (
+    "missing_facts",
+    "unclear_policy",
+    "conflicting_rules",
+    "authority_gap",
+    "context_interpretation",
+    "human_judgement",
+    "other",
+)
+
+
 @dataclass(frozen=True)
 class CandidatePattern:
     """One candidate recurring-uncertainty grouping of cases, with zero or
@@ -57,12 +72,17 @@ class CandidatePattern:
     human-readable low/medium/high label, matching DIPattern.confidence's
     own precedent exactly -- never a fabricated statistical score. Every
     shipped provider (fake and Claude) is honest that this is a heuristic/
-    model self-report, never a trained model's calibrated confidence."""
+    model self-report, never a trained model's calibrated confidence.
+
+    `category` must be one of PATTERN_CATEGORIES above -- the identical
+    vocabulary a human manually creating a Pattern is already constrained
+    to, reused as-is for the real DIPattern created on accept."""
 
     title: str
     description: str
     rationale: str
     confidence: str  # "low" | "medium" | "high"
+    category: str  # one of PATTERN_CATEGORIES
     supporting_case_ids: tuple[str, ...]
     questions: tuple[CandidateQuestion, ...] = field(default_factory=tuple)
 

@@ -145,6 +145,7 @@ def _conflicting_outcome_patterns(cases: list[CaseForDiscovery]) -> list[Candida
                 ),
                 rationale=rationale,
                 confidence="high",
+                category="conflicting_rules",
                 supporting_case_ids=case_ids,
                 questions=(question,),
             )
@@ -192,6 +193,7 @@ def _missing_field_patterns(cases: list[CaseForDiscovery]) -> list[CandidatePatt
                 ),
                 rationale=rationale,
                 confidence="medium",
+                category="missing_facts",
                 supporting_case_ids=case_ids,
                 questions=(question,),
             )
@@ -250,6 +252,7 @@ def _escalation_reason_patterns(cases: list[CaseForDiscovery]) -> list[Candidate
                 ),
                 rationale=rationale,
                 confidence="low",
+                category="other",
                 supporting_case_ids=case_ids,
                 questions=(question,),
             )

@@ -36,6 +36,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError
 
 from app.domain.decision_intelligence.ai_discovery.provider import (
+    PATTERN_CATEGORIES,
     CandidatePattern,
     CandidateQuestion,
     CaseForDiscovery,
@@ -63,6 +64,9 @@ Hard rules:
 - Ground every rationale in the actual facts/escalation_reasons/outcomes
   you observed on the cited cases -- cite what you actually saw, not a
   generic justification.
+- Classify each pattern with the single closest category: missing_facts,
+  unclear_policy, conflicting_rules, authority_gap, context_interpretation,
+  human_judgement, or other. Use "other" rather than forcing a poor fit.
 - Report your own honest confidence (low/medium/high) for each pattern,
   reflecting how directly the evidence supports it (e.g. two cases with
   genuinely near-identical facts but opposite decisions is strong,
@@ -146,6 +150,11 @@ def build_tool_schema() -> dict:
                 "enum": ["low", "medium", "high"],
                 "description": "Your own honest, heuristic judgement of how directly the evidence supports this pattern.",
             },
+            "category": {
+                "type": "string",
+                "enum": list(PATTERN_CATEGORIES),
+                "description": "The closest matching category for this pattern's own uncertainty.",
+            },
             "supporting_case_ids": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -158,7 +167,7 @@ def build_tool_schema() -> dict:
                 "description": "Candidate questions whose answer would resolve this specific pattern.",
             },
         },
-        "required": ["title", "description", "rationale", "confidence", "supporting_case_ids"],
+        "required": ["title", "description", "rationale", "confidence", "category", "supporting_case_ids"],
     }
     return {
         "type": "object",
@@ -181,6 +190,7 @@ class _SuggestedPatternModel(BaseModel):
     description: str
     rationale: str
     confidence: Literal["low", "medium", "high"]
+    category: Literal[*PATTERN_CATEGORIES]
     supporting_case_ids: list[str] = Field(min_length=1)
     questions: list[_SuggestedQuestionModel] = Field(default_factory=list)
 
@@ -231,6 +241,7 @@ def parse_discovery_response(data: dict, valid_case_ids: set[str]) -> DiscoveryR
                 description=p.description,
                 rationale=p.rationale,
                 confidence=p.confidence,
+                category=p.category,
                 supporting_case_ids=tuple(p.supporting_case_ids),
                 questions=tuple(questions),
             )
