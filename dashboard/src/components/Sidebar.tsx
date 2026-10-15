@@ -43,7 +43,7 @@ export function Sidebar({
   return (
     <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
       <div className="brand">
-        <div className="brand-mark">P</div>
+        <img src="/payreality-logo.png" alt="" className="brand-mark" />
         {!collapsed && <span>PayReality</span>}
         <button
           className="collapse"

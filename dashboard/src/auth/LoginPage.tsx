@@ -34,7 +34,7 @@ export function LoginPage() {
     <div className="login-shell">
       <div className="login-card panel">
         <div className="login-brand">
-          <div className="brand-mark">P</div>
+          <img src="/payreality-logo.png" alt="" className="brand-mark" />
           <span>PayReality</span>
         </div>
         <div className="eyebrow">Decision Intelligence</div>
