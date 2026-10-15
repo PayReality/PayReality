@@ -2407,6 +2407,16 @@ class DIPattern(Base):
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
+    # Feature: AI-assisted discovery. Nullable/additive -- every Pattern
+    # created by hand (the only way this worked before this feature) has
+    # this NULL. Set exactly once, at creation, by
+    # di_discovery_service.accept_suggestion when a human accepts a
+    # 'pattern'-kind DIDiscoverySuggestion -- this is the queryable trace
+    # back to the suggestion/run a discovered Pattern came from that the
+    # feature's own brief requires.
+    source_suggestion_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_discovery_suggestions.id")
+    )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
@@ -2478,6 +2488,13 @@ class DIQuestion(Base):
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    # Feature: AI-assisted discovery -- see DIPattern.source_suggestion_id's
+    # identical docstring; set exactly once, at creation, by
+    # di_discovery_service.accept_suggestion for a 'question'-kind
+    # DIDiscoverySuggestion.
+    source_suggestion_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_discovery_suggestions.id")
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
@@ -2833,3 +2850,118 @@ class DIScoringConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (Index("idx_di_scoring_configs_organization", "organization_id"),)
+
+
+class DIDiscoveryRun(Base):
+    """Feature: AI-assisted discovery of recurring uncertainty patterns and
+    candidate priority questions (domain/decision_intelligence/ai_discovery/).
+    One row per invocation of `POST .../workflows/{id}/discover`: which
+    provider actually ran (`provider_used`, mirroring the runtime-selection
+    the AI Policy Builder/AI Authority Builder routers already do --
+    empty config -> fake, ANTHROPIC_API_KEY set -> claude), how many
+    DICase rows it was bounded to and actually analysed
+    (`cases_analyzed_count`, see di_discovery_service.MAX_DISCOVERY_CASES
+    for the bound and the reasoning), and its own pending/running/
+    completed/failed lifecycle, matching DIReplayRun's vocabulary exactly
+    since both are a synchronous, bounded, non-live analysis operation
+    over persisted cases.
+
+    This table, and DIDiscoverySuggestion below, are the ONLY place this
+    feature ever writes anything on its own: a DIDiscoveryRun/
+    DIDiscoverySuggestion never becomes a real DIPattern/DIQuestion except
+    through an explicit human accept action
+    (di_discovery_service.accept_suggestion) -- see that function's own
+    docstring for why this is a hard, structural constraint, not a
+    convention."""
+
+    __tablename__ = "di_discovery_runs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_workflows.id"), nullable=False
+    )
+    provider_used: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    cases_analyzed_count: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    completed_at: Mapped[datetime | None]
+
+    __table_args__ = (
+        CheckConstraint(
+            "provider_used IN ('fake','claude','azure_foundry')", name="ck_di_discovery_runs_provider_used"
+        ),
+        CheckConstraint(
+            "status IN ('pending','running','completed','failed')", name="ck_di_discovery_runs_status"
+        ),
+        Index("idx_di_discovery_runs_organization_workflow", "organization_id", "workflow_id"),
+    )
+
+
+class DIDiscoverySuggestion(Base):
+    """One candidate Pattern or Question proposed by a DIDiscoveryRun --
+    never authoritative on its own (see DIDiscoveryRun's own docstring).
+
+    `kind` distinguishes a candidate Pattern (a proposed recurring-
+    uncertainty grouping of cases) from a candidate Question (a proposed
+    high-value question that would resolve one). `confidence` follows
+    DIPattern.confidence's own precedent exactly (a human-readable low/
+    medium/high label, never a fabricated statistical score) and is
+    deliberately NULL for every 'question'-kind suggestion, mirroring
+    domain/ai_authority_builder/provider.py's CandidateQuestion ("not
+    confidence-scored: a question is a request for information, not a
+    claim to be confident or unconfident about") -- the identical
+    reasoning applies here unchanged.
+
+    `linked_pattern_id` (nullable, only meaningful for a 'question'-kind
+    suggestion) is deliberately NOT a foreign key: per this feature's own
+    brief, it may point at EITHER another DIDiscoverySuggestion row (a
+    'pattern'-kind suggestion proposed in the same run that this question
+    would resolve -- the only case either shipped provider actually
+    produces today) OR, for a future provider that cross-references
+    already-accepted Patterns, a real DIPattern row directly. A single FK
+    can't target two different tables, so resolution happens in
+    di_discovery_service.accept_suggestion instead: it tries a sibling
+    suggestion first, then a real DIPattern, and rejects with a clear
+    error (never silently drops the link) if neither resolves, or if the
+    sibling suggestion it found has not itself been accepted yet.
+
+    `supporting_case_ids` is the real evidence this suggestion is based
+    on -- a JSONB array of DICase ids, never empty for a suggestion either
+    shipped provider produces (see their own tests)."""
+
+    __tablename__ = "di_discovery_suggestions"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    discovery_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_discovery_runs.id"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    supporting_case_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[str | None] = mapped_column(Text)
+    linked_pattern_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="suggested")
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    reviewed_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("kind IN ('pattern','question')", name="ck_di_discovery_suggestions_kind"),
+        CheckConstraint(
+            "confidence IS NULL OR confidence IN ('low','medium','high')",
+            name="ck_di_discovery_suggestions_confidence",
+        ),
+        CheckConstraint(
+            "status IN ('suggested','accepted','dismissed')", name="ck_di_discovery_suggestions_status"
+        ),
+        Index("idx_di_discovery_suggestions_run", "discovery_run_id"),
+    )
