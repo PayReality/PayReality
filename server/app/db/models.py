@@ -2746,3 +2746,90 @@ class DIAuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     __table_args__ = (Index("idx_di_audit_events_organization", "organization_id"),)
+
+
+class DIImportJob(Base):
+    """One CSV upload attempt against a DIWorkflow's cases (Feature: CSV
+    case import). Deliberately synchronous today (processed start-to-
+    finish inside the request that creates it, the same synchronous
+    processing model the AI Authority Builder's own corpus extraction
+    already uses) -- `status` still carries the full
+    pending/validating/completed/failed vocabulary a future async worker
+    would need, so making this asynchronous later needs no schema change,
+    only a different caller. `row_errors` is a JSONB list of
+    `{"row_number": int, "errors": [str, ...]}` for every row that did
+    NOT become a DICase -- partial success is this module's deliberate
+    choice (see di_import_service.py's own docstring): a CSV with a few
+    bad rows still imports every good row rather than failing the whole
+    file."""
+
+    __tablename__ = "di_import_jobs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_workflows.id"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    total_rows: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    valid_rows: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    invalid_rows: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    row_errors: Mapped[list | None] = mapped_column(JSONB)
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    completed_at: Mapped[datetime | None]
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','validating','completed','failed')", name="ck_di_import_jobs_status"
+        ),
+        Index("idx_di_import_jobs_organization_workflow", "organization_id", "workflow_id"),
+    )
+
+
+class DIScoringConfig(Base):
+    """Feature: configurable scoring weights. One row per organization
+    (DIQuestion carries `organization_id` directly, not only reachable
+    via its workflow, so an org-level config is both sufficient and
+    simplest for score_question's own call site, which only ever has
+    `organization_id` in hand -- read before choosing this scope, per
+    this feature's own brief). Absence of a row for an organization means
+    "still using scoring.py's own hardcoded v1 defaults", not an error --
+    di_scoring_config_service falls back to `DEFAULT_WEIGHTS` rather than
+    requiring every organization to configure this before scoring works
+    at all.
+
+    `scoring_version` here is this organization's own current label
+    (bumped on every successful weight change, e.g. "v1" -> "v2" -> ...)
+    and is NEVER applied retroactively: changing this row only affects
+    whatever gets (re-)scored next. Every already-persisted
+    `DIQuestion.priority_score`/`DIQuestion.scoring_version` pair on disk
+    stays exactly as it was computed -- scoring.py's own "a score stays
+    explainable against the configuration that produced it" contract,
+    extended to a configurable weight set instead of only a single
+    hardcoded formula."""
+
+    __tablename__ = "di_scoring_configs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, unique=True
+    )
+    reach_weight: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    impact_weight: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    risk_weight: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    answerability_weight: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    decision_sensitivity_weight: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    scoring_version: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (Index("idx_di_scoring_configs_organization", "organization_id"),)

@@ -321,6 +321,7 @@ def create_app() -> FastAPI:
     app.include_router(decision_intelligence.answers.router)
     app.include_router(decision_intelligence.rules.router)
     app.include_router(decision_intelligence.replays.router)
+    app.include_router(decision_intelligence.imports.router)
 
     return app
 

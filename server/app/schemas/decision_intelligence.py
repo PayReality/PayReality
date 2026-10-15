@@ -117,6 +117,33 @@ class CaseListResponse(BaseModel):
     offset: int
 
 
+# --- CSV case import (DIImportJob) -----------------------------------------
+
+
+class ImportJobResponse(BaseModel):
+    id: UUID
+    organization_id: UUID
+    workflow_id: UUID
+    status: str
+    filename: str
+    total_rows: int
+    valid_rows: int
+    invalid_rows: int
+    row_errors: list[dict[str, Any]] | None
+    created_by_user_id: UUID
+    created_at: datetime
+    completed_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class ImportJobListResponse(BaseModel):
+    import_jobs: list[ImportJobResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 # --- Patterns -------------------------------------------------------------
 
 
