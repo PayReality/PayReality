@@ -79,7 +79,17 @@ def classify_outcome(evaluation: EvaluationResult, human_decision: dict | str | 
             return "agrees_with_baseline", None
         return "disagrees_with_baseline", f"baseline={baseline_label!r} proposed={proposed_label!r}"
 
-    return "resolved_automatically", None
+    # No baseline to compare against. Disclosed bug, fixed here: this used
+    # to return "resolved_automatically" unconditionally, which is a real
+    # overclaim when the rule's own condition tree didn't match
+    # (evaluation.matched is False, decision is None, nothing was actually
+    # resolved). Only a genuine match with a real proposed decision is
+    # "resolved automatically"; an unmatched case with no baseline is a
+    # case the rule simply doesn't cover, and must be routed to a human,
+    # not reported as if the system had handled it.
+    if evaluation.matched:
+        return "resolved_automatically", None
+    return "requires_human_review", "no recorded baseline and the rule's conditions did not match"
 
 
 def evaluate_case(
