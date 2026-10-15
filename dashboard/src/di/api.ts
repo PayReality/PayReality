@@ -1,10 +1,19 @@
 import { apiClient } from "../lib/apiClient";
+import { triggerBrowserDownload } from "../lib/download";
 import type {
+  AcceptSuggestionResult,
   Answer,
   Case,
   CaseListPage,
+  ColumnMappingTarget,
   DecisionRule,
+  DiscoveryRunDetail,
+  DiscoveryRunListPage,
+  DiscoverySuggestion,
   EvaluationResult,
+  ImportJob,
+  ImportJobListPage,
+  OrganizationOverview,
   Pattern,
   PatternListPage,
   Question,
@@ -16,6 +25,8 @@ import type {
   RuleListPage,
   RuleSchema,
   RuleVersion,
+  ScoringConfig,
+  ScoringWeights,
   Workflow,
   WorkflowListPage,
   WorkflowOverview,
@@ -49,7 +60,11 @@ export const decisionIntelligenceApi = {
   getWorkflowOverview: (workflowId: string) => apiClient.get<WorkflowOverview>(`${BASE}/workflows/${workflowId}/overview`),
 
   // -- Cases --------------------------------------------------------------
-  listCases: (params: { workflow_id?: string; status?: string; limit?: number; offset?: number } = {}) =>
+  // `q`: real server-side search (Feature: server-side case search),
+  // case-insensitive substring match against external_ref and facts
+  // (cases.py's own docstring) -- never a client-side filter of an
+  // already-loaded page.
+  listCases: (params: { workflow_id?: string; status?: string; q?: string; limit?: number; offset?: number } = {}) =>
     apiClient.get<CaseListPage>(`${BASE}/cases${query(params)}`),
   getCase: (caseId: string) => apiClient.get<Case>(`${BASE}/cases/${caseId}`),
   createCase: (body: {
@@ -197,4 +212,52 @@ export const decisionIntelligenceApi = {
     apiClient.post<ReplayRun>(`${BASE}/replays`, body),
   listReplayResults: (replayRunId: string, params: { limit?: number; offset?: number } = {}) =>
     apiClient.get<ReplayCaseResultListPage>(`${BASE}/replays/${replayRunId}/results${query(params)}`),
+
+  // -- CSV case import (imports.py) ---------------------------------------
+  // Real multipart upload: `column_mapping` is JSON-encoded into a form
+  // field (not a nested JSON body -- imports.py's own docstring on why
+  // multipart can't carry a structured object any other way).
+  createImportJob: (workflowId: string, file: File, columnMapping: Record<string, ColumnMappingTarget>) => {
+    const form = new FormData();
+    form.set("file", file);
+    form.set("workflow_id", workflowId);
+    form.set("column_mapping", JSON.stringify(columnMapping));
+    return apiClient.postForm<ImportJob>(`${BASE}/imports`, form);
+  },
+  listImportJobs: (params: { workflow_id?: string; limit?: number; offset?: number } = {}) =>
+    apiClient.get<ImportJobListPage>(`${BASE}/imports${query(params)}`),
+  getImportJob: (jobId: string) => apiClient.get<ImportJob>(`${BASE}/imports/${jobId}`),
+
+  // -- Cross-workflow reports and real exports (reports.py) ---------------
+  getOrganizationOverview: () => apiClient.get<OrganizationOverview>(`${BASE}/reports/organization-overview`),
+  // Both exports below trigger a real browser file save from the
+  // backend's own `text/csv` + `Content-Disposition: attachment`
+  // response -- never a JSON payload rendered as text.
+  exportPriorityQuestionsCsv: async (params: { workflow_id?: string } = {}) => {
+    const { blob, filename } = await apiClient.downloadGet(`${BASE}/reports/questions/export${query(params)}`);
+    triggerBrowserDownload(blob, filename ?? "priority_questions.csv");
+  },
+  exportReplayResultsCsv: async (replayRunId: string) => {
+    const { blob, filename } = await apiClient.downloadGet(`${BASE}/reports/replays/${replayRunId}/export`);
+    triggerBrowserDownload(blob, filename ?? `replay_${replayRunId}_results.csv`);
+  },
+
+  // -- Settings: configurable scoring weights (scoring_config.py) ---------
+  getScoringConfig: () => apiClient.get<ScoringConfig>(`${BASE}/scoring-config`),
+  updateScoringConfig: (weights: ScoringWeights) =>
+    apiClient.put<ScoringConfig>(`${BASE}/scoring-config`, { weights }),
+
+  // -- AI-assisted discovery (discovery.py) --------------------------------
+  // Runs synchronously -- the response already carries the completed (or
+  // failed) run's own suggestions (discovery.py's own docstring).
+  runDiscovery: (workflowId: string) =>
+    apiClient.post<DiscoveryRunDetail>(`${BASE}/workflows/${workflowId}/discover`),
+  listDiscoveryRuns: (workflowId: string, params: { limit?: number; offset?: number } = {}) =>
+    apiClient.get<DiscoveryRunListPage>(`${BASE}/workflows/${workflowId}/discovery-runs${query(params)}`),
+  getDiscoveryRun: (workflowId: string, runId: string) =>
+    apiClient.get<DiscoveryRunDetail>(`${BASE}/workflows/${workflowId}/discovery-runs/${runId}`),
+  acceptSuggestion: (suggestionId: string) =>
+    apiClient.post<AcceptSuggestionResult>(`${BASE}/discovery-suggestions/${suggestionId}/accept`),
+  dismissSuggestion: (suggestionId: string) =>
+    apiClient.post<DiscoverySuggestion>(`${BASE}/discovery-suggestions/${suggestionId}/dismiss`),
 };

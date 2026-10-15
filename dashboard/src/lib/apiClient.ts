@@ -35,9 +35,16 @@ export function setSessionExpiredHandler(handler: (() => void) | null) {
   onSessionExpired = handler;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+// Shared by every call below: attaches auth, and on a non-2xx response
+// parses the real error body (so ApiError.body/errorDetail/errorMessage
+// keep working identically for JSON and non-JSON success responses) and
+// handles the global session-expiry signal exactly once, in one place.
+async function rawRequest(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
-  if (!headers.has("Content-Type") && init.body) {
+  // FormData (the CSV import upload) must never get an explicit
+  // Content-Type here -- the browser sets its own, with the correct
+  // multipart boundary, only when it stays unset.
+  if (!headers.has("Content-Type") && init.body && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
   const token = getSessionToken();
@@ -58,9 +65,24 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
     throw new ApiError(res.status, body);
   }
+  return res;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await rawRequest(path, init);
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   return text ? JSON.parse(text) : (undefined as T);
+}
+
+// Extracts the real filename the backend's own `Content-Disposition:
+// attachment; filename="..."` header carries, for a real export download
+// (CSV import, Reports exports). Never fabricates one when the header is
+// missing -- callers supply their own fallback in that case.
+function filenameFromContentDisposition(value: string | null): string | null {
+  if (!value) return null;
+  const match = /filename\*?=(?:UTF-8''|")?([^";]+)"?/i.exec(value);
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
 export const apiClient = {
@@ -69,5 +91,18 @@ export const apiClient = {
     request<T>(path, { method: "POST", body: body !== undefined ? JSON.stringify(body) : undefined }),
   patch: <T,>(path: string, body?: unknown) =>
     request<T>(path, { method: "PATCH", body: body !== undefined ? JSON.stringify(body) : undefined }),
+  put: <T,>(path: string, body?: unknown) =>
+    request<T>(path, { method: "PUT", body: body !== undefined ? JSON.stringify(body) : undefined }),
   delete: <T,>(path: string) => request<T>(path, { method: "DELETE" }),
+  // Multipart upload (the CSV import's `file` + `workflow_id` +
+  // `column_mapping` form fields) -- never JSON-serialised.
+  postForm: <T,>(path: string, form: FormData) => request<T>(path, { method: "POST", body: form }),
+  // A real file download: returns the response's own bytes and real
+  // filename, for a caller to hand to the browser's own save mechanism
+  // (see lib/download.ts) -- never text read as if it were JSON.
+  downloadGet: async (path: string): Promise<{ blob: Blob; filename: string | null }> => {
+    const res = await rawRequest(path);
+    const blob = await res.blob();
+    return { blob, filename: filenameFromContentDisposition(res.headers.get("Content-Disposition")) };
+  },
 };

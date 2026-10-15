@@ -376,3 +376,157 @@ export interface ReplayCaseResultListPage {
   limit: number;
   offset: number;
 }
+
+// --- CSV case import (DIImportJob) -------------------------------------
+
+// Carries the full pending/validating/completed/failed vocabulary a
+// future async worker would need (di_import_service.py's own docstring),
+// even though today's synchronous import only ever actually returns
+// "completed".
+export type ImportJobStatus = "pending" | "validating" | "completed" | "failed";
+
+// `column_mapping`'s real backend shape: {csv_header: target}, target one
+// of these five DICase fields or the literal "exclude" (csv_import.py).
+// Any header left unmapped defaults to "facts" server-side; this UI always
+// sends an explicit target per header instead of relying on that default.
+export type ColumnMappingTarget = "external_ref" | "facts" | "human_decision" | "escalation_reason" | "outcome" | "exclude";
+
+export interface ImportRowError {
+  row_number: number;
+  errors: string[];
+}
+
+export interface ImportJob {
+  id: string;
+  organization_id: string;
+  workflow_id: string;
+  status: ImportJobStatus;
+  filename: string;
+  total_rows: number;
+  valid_rows: number;
+  invalid_rows: number;
+  row_errors: ImportRowError[] | null;
+  created_by_user_id: string;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface ImportJobListPage {
+  import_jobs: ImportJob[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+// --- Cross-workflow organization overview (reports/exports) ------------
+
+export interface WorkflowBreakdown {
+  workflow_id: string;
+  workflow_name: string;
+  case_count: number;
+  pattern_count: number;
+  question_count: number;
+  answer_count: number;
+  rule_count: number;
+  replay_count: number;
+}
+
+export interface OrganizationOverview {
+  organization_id: string;
+  workflow_count: number;
+  total_cases: number;
+  total_patterns: number;
+  total_questions: number;
+  total_answers: number;
+  total_rules: number;
+  total_replays: number;
+  by_workflow: WorkflowBreakdown[];
+}
+
+// --- Settings: configurable scoring weights -----------------------------
+
+// Mirrors scoring.py's DEFAULT_WEIGHTS exactly -- the client-side sum
+// validation below is a convenience that must never drift from the
+// backend's own (scoring.validate_weights, 0.001 tolerance).
+export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
+  reach: 0.3,
+  impact: 0.3,
+  risk: 0.2,
+  answerability: 0.1,
+  decision_sensitivity: 0.1,
+};
+
+export const SCORING_WEIGHT_SUM_TOLERANCE = 0.001;
+
+export interface ScoringWeights {
+  reach: number;
+  impact: number;
+  risk: number;
+  answerability: number;
+  decision_sensitivity: number;
+}
+
+export interface ScoringConfig {
+  organization_id: string;
+  weights: ScoringWeights;
+  scoring_version: string;
+  is_default: boolean;
+  updated_at: string | null;
+}
+
+// --- AI-assisted discovery (DIDiscoveryRun / DIDiscoverySuggestion) -----
+
+export type DiscoveryRunStatus = "pending" | "running" | "completed" | "failed";
+
+export interface DiscoveryRun {
+  id: string;
+  organization_id: string;
+  workflow_id: string;
+  provider_used: string;
+  status: DiscoveryRunStatus;
+  cases_analyzed_count: number;
+  error_message: string | null;
+  created_by_user_id: string;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface DiscoveryRunListPage {
+  discovery_runs: DiscoveryRun[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export type DiscoverySuggestionKind = "pattern" | "question";
+// "suggested" is the only status a reviewer can still act on (accept/
+// dismiss); "accepted"/"dismissed" are both final (di_discovery_service.py).
+export type DiscoverySuggestionStatus = "suggested" | "accepted" | "dismissed";
+
+export interface DiscoverySuggestion {
+  id: string;
+  discovery_run_id: string;
+  kind: DiscoverySuggestionKind;
+  title: string;
+  description: string;
+  supporting_case_ids: string[];
+  rationale: string;
+  confidence: PatternConfidence | null;
+  category: PatternCategory | null;
+  linked_pattern_id: string | null;
+  status: DiscoverySuggestionStatus;
+  reviewed_by_user_id: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+}
+
+export interface DiscoveryRunDetail {
+  discovery_run: DiscoveryRun;
+  suggestions: DiscoverySuggestion[];
+}
+
+export interface AcceptSuggestionResult {
+  entity_type: "pattern" | "question";
+  pattern: Pattern | null;
+  question: Question | null;
+}

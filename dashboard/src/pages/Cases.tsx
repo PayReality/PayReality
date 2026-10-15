@@ -1,9 +1,15 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Badge, Button, EmptyPanel, ErrorNote, Icon, PageTitle, TableToolbar } from "../components/ui"
 import { decisionIntelligenceApi } from "../di/api"
 import type { Case } from "../di/types"
 import { useFetch, errorMessage } from "../lib/useAsync"
 import { useAuth } from "../auth/AuthContext"
+import { CsvImportPanel } from "../components/CsvImportPanel"
+
+// Server-side search debounce (Feature: server-side case search) -- long
+// enough that a person typing a reference doesn't fire a request per
+// keystroke, short enough to still feel live.
+const SEARCH_DEBOUNCE_MS = 350
 
 function statusTone(status: Case["status"]): string {
   if (status === "escalated") return "warning"
@@ -14,27 +20,38 @@ function statusTone(status: Case["status"]): string {
 export function Cases({ workflowId, openCase }: { workflowId: string | null; openCase: (id: string) => void }) {
   const { hasPermission } = useAuth()
   const [search, setSearch] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [externalRef, setExternalRef] = useState("")
   const [factsJson, setFactsJson] = useState("{\n  \n}")
   const [humanDecisionJson, setHumanDecisionJson] = useState("")
   const [createError, setCreateError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
+  // Debounced so every keystroke doesn't fire its own request against the
+  // real `q` search parameter (di_case_service.list_cases).
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [search])
+
   const { data, loading, error, reload } = useFetch(
     () =>
       workflowId
-        ? decisionIntelligenceApi.listCases({ workflow_id: workflowId, status: statusFilter ?? undefined, limit: 200 })
+        ? decisionIntelligenceApi.listCases({
+            workflow_id: workflowId,
+            status: statusFilter ?? undefined,
+            q: debouncedSearch || undefined,
+            limit: 200,
+          })
         : Promise.resolve(null),
-    [workflowId, statusFilter],
+    [workflowId, statusFilter, debouncedSearch],
   )
 
-  const cases = data?.cases ?? []
-  const visible = cases.filter((c) => {
-    const haystack = `${c.external_ref ?? ""} ${JSON.stringify(c.facts)}`.toLowerCase()
-    return haystack.includes(search.toLowerCase())
-  })
+  // The real, server-filtered page -- no client-side re-filtering on top.
+  const visible = data?.cases ?? []
 
   async function handleCreate() {
     if (!workflowId) return
@@ -95,6 +112,11 @@ export function Cases({ workflowId, openCase }: { workflowId: string | null; ope
               {statusFilter === "escalated" ? "Clear escalation filter" : "Show escalated"}
             </Button>
             {hasPermission("di_case.manage") && (
+              <Button icon="download" onClick={() => setImporting(!importing)}>
+                {importing ? "Cancel import" : "Import CSV"}
+              </Button>
+            )}
+            {hasPermission("di_case.manage") && (
               <Button kind="primary" icon="plus" onClick={() => setCreating(!creating)}>
                 {creating ? "Cancel" : "New case"}
               </Button>
@@ -109,6 +131,14 @@ export function Cases({ workflowId, openCase }: { workflowId: string | null; ope
           <span>Case content shown here is whatever has actually been recorded for this workflow. Nothing is simulated.</span>
         </div>
       </div>
+      {importing && (
+        <CsvImportPanel
+          workflowId={workflowId}
+          onImported={() => {
+            reload()
+          }}
+        />
+      )}
       {creating && (
         <section className="panel" style={{ marginBottom: 16 }}>
           <div className="form-body">
@@ -138,7 +168,11 @@ export function Cases({ workflowId, openCase }: { workflowId: string | null; ope
       )}
       {error && <ErrorNote message={error} />}
       <section className="panel table-panel">
-        <TableToolbar search={search} setSearch={setSearch} resultsLabel={loading ? "Loading…" : `${visible.length} of ${cases.length} cases`} />
+        <TableToolbar
+          search={search}
+          setSearch={setSearch}
+          resultsLabel={loading ? "Loading…" : `${data?.total ?? visible.length} case${(data?.total ?? visible.length) === 1 ? "" : "s"}`}
+        />
         <div className="table-scroll">
           <table>
             <thead>
