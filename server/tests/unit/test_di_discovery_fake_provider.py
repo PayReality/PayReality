@@ -112,7 +112,35 @@ def test_conflicting_outcome_never_asserts_a_specific_cause():
     assert pattern.category == "other"
     assert "not settled" not in pattern.rationale
     assert "not an inferred correlation" not in pattern.rationale
+    # Exactly one differing field ("amount") with exactly two distinct
+    # values (90 vs 95) is grounded enough to earn a specific question
+    # naming the actual field and values, rather than the generic "what
+    # explains the difference" wording -- see test_di_discovery_fake_
+    # provider.py::test_conflicting_outcome_question_stays_broad_when_
+    # not_specifically_grounded for the case where it must stay broad.
+    question = pattern.questions[0]
+    assert "amount" in question.title
+    assert "90" in question.title and "95" in question.title
+    assert question.candidate_explanation is not None
+    assert len(question.alternative_explanations) >= 3
+    assert len(question.missing_evidence) >= 1
+    assert question.potential_impact is not None
+
+
+def test_conflicting_outcome_question_stays_broad_when_not_specifically_grounded():
+    """Three cases with the same single differing field but THREE distinct
+    values don't support naming "value A vs value B" as the deciding
+    comparison -- the question must stay at the observation-level wording
+    instead of fabricating a narrower claim the data doesn't support."""
+    cases = [
+        _case("C1", facts={"amount": 90}, human_decision={"decision": "approve"}),
+        _case("C2", facts={"amount": 95}, human_decision={"decision": "deny"}),
+        _case("C3", facts={"amount": 100}, human_decision={"decision": "escalate"}),
+    ]
+    result = FakeDiscoveryProvider().discover(cases)
+    pattern = next(p for p in result.patterns if p.confidence == "high")
     assert "What explains the difference?" in pattern.questions[0].title
+    assert pattern.questions[0].candidate_explanation is not None
 
 
 # --- Missing-field grouping -------------------------------------------------

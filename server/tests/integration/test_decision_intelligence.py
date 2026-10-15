@@ -199,9 +199,9 @@ def test_full_question_lifecycle(db):
 
     # Same user cannot approve their own answer.
     with pytest.raises(SeparationOfDutiesError):
-        di_answer_service.approve_answer(db, answer.id, org.id, author.id)
+        di_answer_service.approve_answer(db, answer.id, org.id, author.id, "rule_change")
 
-    approved = di_answer_service.approve_answer(db, answer.id, org.id, approver.id)
+    approved = di_answer_service.approve_answer(db, answer.id, org.id, approver.id, "rule_change")
     assert approved.status == "approved"
     assert approved.approver_user_id == approver.id
     question_after_approval = di_question_service.get_question(db, question.id, org.id)
@@ -259,7 +259,7 @@ def test_supersede_creates_a_new_immutable_version_and_marks_previous_superseded
     question = di_question_service.create_question(db, org.id, workflow.id, proposer.id, title="Q1")
     answer = di_answer_service.create_draft_answer(db, question.id, org.id, author.id, content="A1")
     di_answer_service.submit_answer(db, answer.id, org.id, author.id)
-    approved = di_answer_service.approve_answer(db, answer.id, org.id, approver.id)
+    approved = di_answer_service.approve_answer(db, answer.id, org.id, approver.id, "rule_change")
 
     new_version = di_answer_service.supersede_answer(
         db, approved.id, org.id, author.id, content="A1 revised"
@@ -280,7 +280,7 @@ def _approved_answer(db, org, workflow, author, approver):
     question = di_question_service.create_question(db, org.id, workflow.id, proposer.id, title="Q-rule")
     answer = di_answer_service.create_draft_answer(db, question.id, org.id, author.id, content="A-rule")
     di_answer_service.submit_answer(db, answer.id, org.id, author.id)
-    return di_answer_service.approve_answer(db, answer.id, org.id, approver.id), question
+    return di_answer_service.approve_answer(db, answer.id, org.id, approver.id, "rule_change"), question
 
 
 def test_create_rule_from_an_approved_answer_succeeds(db):
@@ -575,7 +575,7 @@ def test_audit_event_is_recorded_for_an_answer_approval(db):
     question = di_question_service.create_question(db, org.id, workflow.id, author.id, title="Q")
     answer = di_answer_service.create_draft_answer(db, question.id, org.id, author.id, content="A")
     di_answer_service.submit_answer(db, answer.id, org.id, author.id)
-    di_answer_service.approve_answer(db, answer.id, org.id, approver.id)
+    di_answer_service.approve_answer(db, answer.id, org.id, approver.id, "rule_change")
 
     events = db.query(DIAuditEvent).filter(
         DIAuditEvent.entity_type == "DIAnswer", DIAuditEvent.entity_id == answer.id, DIAuditEvent.action == "approve"
@@ -767,6 +767,21 @@ def test_priority_questions_export_rows_include_real_linked_counts(db):
     row = rows[0]
     assert row[1] == "Cutoff question"
     assert row[6] == 1  # linked_case_count
+
+
+def test_comparison_template_rows_are_blank_metrics_plus_real_current_questions(db):
+    org = _org(db)
+    user = _user(db, org.id)
+    workflow = _workflow(db, org, user)
+    di_question_service.create_question(db, org.id, workflow.id, user.id, title="Real question one")
+
+    rows = di_report_service.get_comparison_template_rows(db, org.id, workflow.id)
+
+    metric_rows = rows[: len(di_report_service.COMPARISON_TEMPLATE_METRICS)]
+    assert [r[0] for r in metric_rows] == di_report_service.COMPARISON_TEMPLATE_METRICS
+    # Every metric row is genuinely blank -- never a fabricated number.
+    assert all(r[1] == "" and r[2] == "" for r in metric_rows)
+    assert any(r[0] == "Real question one" for r in rows)
 
 
 # --- I. Configurable scoring weights ----------------------------------
