@@ -9,24 +9,65 @@ highest-value set of questions a business needs to answer to resolve recurring u
 many decisions.
 
 Built on branch `feature/decision-intelligence-platform` (based on `origin/main` @ `90e41df`), in
-an isolated git worktree, never merged, never pushed. The existing Runtime Authority tables,
-routers, and frontend pages were not modified except for one backend router addition
-(`GET /v1/decision-intelligence/patterns/{id}/cases`, added during frontend integration, see Known
-limitations), two stale frontend fixtures that would otherwise have silently broken
-(`Layout.test.ts`'s known-nav-set assertion, `demo/fixtures/users.ts`'s demo permission list), and
-two real defects found and fixed during this session's end-to-end validation (`ReplayPage.tsx`'s and
-`types.ts`'s `ReplayRun.summary` shape; `QuestionDetailPage.tsx`'s score-input race guards; see
-"Defects found and fixed this session"). Validated this session against real Postgres and a real
-Chromium browser; still never deployed.
+an isolated git worktree, never merged into `main`. The existing Runtime Authority tables, routers,
+and frontend pages were not modified except for one backend router addition
+(`GET /v1/decision-intelligence/patterns/{id}/cases`, added during frontend integration) and the
+defects disclosed below.
+
+**Current status (2026-10-15): deployed and live** at `https://payreality.aisecurewatch.com`, pushed
+to `origin/feature/decision-intelligence-platform` (not merged to `main`). Six additional features
+beyond the original scope were since built and shipped: CSV case import, cross-workflow reports and
+exports, configurable scoring weights, server-side case search, a visual rule builder, and
+AI-assisted pattern/question discovery (Fake-heuristic and Claude-provider paths). See
+"Decision Intelligence: Completion Report" (the companion live record) for the per-feature build log,
+and "2026-10-15 verification and correction pass" below for this round's corrections.
 
 This document is the honest status record. It does not claim anything that was not actually run and
 observed to pass.
 
+## 2026-10-15 verification and correction pass
+
+A focused pass to correct overclaiming language and verify specific claims before a real customer
+case walkthrough, not a rebuild. Summary (full detail in the final report handed to Sean):
+
+- **Discovery wording corrected.** The AI discovery feature's "conflicting decisions" and
+  "missing field" suggestions previously asserted causes ("direct evidence of unresolved policy
+  ambiguity," "is X required") the heuristic has no data to establish. Both are now framed as an
+  observation plus a question, in the Fake provider's generated text, the Claude prompt's system
+  instructions, and the dashboard's copy. Also fixed a disclosed wording bug: two cases with fully
+  identical recorded facts previously produced the nonsensical "no recorded fields" as the
+  differing field's name.
+- **Provider transparency verified.** Confirmed directly against the live Azure Container App
+  (`ca-payreality-di-prototype-cus`), by listing environment variable and secret names only, never
+  values, that production has no Anthropic API key configured. The deployed app therefore runs the
+  Fake/heuristic provider exclusively right now; the Claude provider's failure handling is tested
+  against a fake client but has never been exercised against the real Anthropic API. The dashboard's
+  Discovery page now shows a plain-language provider label ("Heuristic analysis (no AI model)" /
+  "Claude-assisted analysis") instead of the raw internal `fake`/`claude` string.
+- **Missing-field heuristic checked.** `DICase.facts` is schema-less JSONB; nothing in the data model
+  declares a field required or optional. The heuristic's suggestion and question text were corrected
+  to ask whether a recurring missing field is *relevant*, not assert that it is *required*.
+- **Four backend test failures investigated, not fixed.** Confirmed deterministic across 3 repeated
+  isolated runs (not flaky), confirmed via `git diff 90e41df HEAD` that the failing test files and
+  every Runtime Authority/Trusted Integration source file they exercise are byte-identical to the
+  pre-Decision-Intelligence baseline, confirming zero code overlap with this module. Out of scope to
+  fix (would mean reopening Runtime Authority, explicitly out of scope for this pass).
+- **One real bug found and fixed during the walkthrough.** `classify_outcome()`
+  (`replay_executor.py`) labeled a case with no recorded baseline, whose facts did not match the
+  rule's own conditions, as `resolved_automatically`, even though no decision was produced
+  (`decision: null`). Fixed to return `requires_human_review`; added 6 unit tests
+  (`tests/unit/test_di_replay_executor.py`, previously this function had zero test coverage); re-ran
+  the exact same replay live after the fix to confirm the reclassification.
+- A complete synthetic, clearly-labelled demonstration workflow was run through the full chain (CSV
+  import through replay and export) via the real API against a local Postgres instance, covering an
+  apparent inconsistency, an omitted fact, a case that must stay unresolved, and a case needing no new
+  rule. See the completion report for the full walkthrough record.
+
 ## The product chain
 
 `Workflow` → `Case` (a real decision situation) → `Pattern` (recurring uncertainty found across
-cases) → `Question` (the core differentiator: which question, answered, resolves the most
-uncertainty) → `Answer` (authoritative, approved by someone other than whoever submitted it) →
+cases) → `Question` (a proposed source of value, not yet compared against customer alternatives:
+which question, answered, resolves the most uncertainty) → `Answer` (authoritative, approved by someone other than whoever submitted it) →
 `DecisionRule` / `RuleVersion` (a versioned, inspectable condition tree derived from one approved
 answer) → `Replay` (running a rule version against real persisted cases and comparing to the
 historical/baseline decision). Agreement with that baseline is reported as agreement, never as
@@ -115,7 +156,10 @@ comments, and frontend copy.
 ## Testing performed
 
 (Independently re-run and confirmed by the orchestrating session, not only claimed by the
-implementing agents.)
+implementing agents.) This section is a historical record from the 2026-10-14 session, predating
+the six features added afterward. The backend failure count below (5, later 4 in isolation) was
+superseded by a fresh, independent re-run on 2026-10-15 (see "Known limitations": 1211 passed, 4
+failed, same subsystem, confirmed still deterministic and still unrelated).
 
 - Backend DI-specific subset (`tests/unit/test_di_scoring.py tests/unit/test_di_rule_evaluator.py
   tests/unit/test_di_validation.py tests/integration/test_decision_intelligence.py`): **61/61
@@ -199,6 +243,10 @@ implementing agents.)
   validation above. See "Real browser walkthrough" and "Fictional demonstration" below for the full
   account, including two real defects this walkthrough found and fixed, and an honest list of what
   still isn't verified.
+- **2026-10-15 re-confirmation, after the six new features and this pass's own corrections**:
+  backend DI-specific subset (`pytest -k "decision_intelligence or di_"`): **161/161 passed**.
+  Frontend (`npx vitest run`): **8 files, 27/27 passed, 0 errors**. `npx tsc --noEmit`: clean. Full
+  backend suite and the exact current failing-test names are recorded in "Known limitations" above.
 
 ## Real browser walkthrough
 
@@ -382,28 +430,29 @@ regression test that fails without the fix (verified by reverting the fix and re
 Both fixes are scoped to the files the bug was in; neither changes any API contract, schema, or
 permission.
 
-## Known limitations, explicitly out of scope for this pass
+## Known limitations
 
-- **CSV case import**: not implemented. No import endpoint exists; do not expose an import control
-  in any future UI work without building it for real.
-- **AI-assisted pattern/question suggestion**: not implemented. The product works entirely as a
-  manual analysis workflow today, which is itself a hard requirement (the platform must remain
-  useful with no AI service configured). This just means that capability hasn't been added yet.
-- **Reports/exports beyond the per-workflow overview**: only `GET /workflows/{id}/overview` exists.
-  No cross-workflow aggregate report, no PDF/CSV export of Decision Intelligence data.
-- **Settings and Help pages**: not built. No Decision-Intelligence-specific settings exist yet
-  (scoring weights are presently fixed in code, not admin-configurable).
-- **Cases list search**: client-side only, page-scoped. No server-side full-text search over case
-  facts.
-- **No visual rule builder**: rule authoring is a structured JSON textarea (consistent with how this
-  app already handles `Case.facts`); `RuleDetailPage` renders the resulting tree, test results, and
-  version history as real structured UI, not raw JSON.
+The six features once listed here as "not implemented" (CSV case import, AI-assisted pattern/
+question suggestion, cross-workflow reports/exports, settings and scoring config, server-side case
+search, a visual rule builder) have all since been built, tested, and deployed; see "Decision
+Intelligence: Completion Report" for the per-feature build log. What remains genuinely open:
+
+- **The Claude discovery path has never been exercised against the real Anthropic API.** Its schema
+  validation, retry, and fail-closed behaviour are tested against a hand-built fake client; a live
+  call producing real suggestions from real Claude output has not happened, and production has no
+  key configured (confirmed 2026-10-15 via the Container App's own env var/secret names, values never
+  read). Configuring a key and running one real call is the exact outstanding step, deliberately not
+  done as part of this pass.
 - **Reverse-lookup lists** ("which patterns/questions reference this case") on Case Detail are
   bounded best-effort client-side lookups across a workflow's own (deliberately small) pattern and
   question sets, not a dedicated reverse-index endpoint, except for `GET /patterns/{id}/cases`,
   which was added for real.
-- **Not deployed anywhere.** No production hosting, DNS, or database changes were made. This is a
-  feature branch in a worktree, reviewed and tested locally only.
+- **No committed, reproducible deploy script for this prototype.** The release path is manual: an
+  `az acr build` tagging the backend image with the git short SHA, a manual `az containerapp update`
+  to point at the new image, and a manual Static Web App deploy built with `VITE_API_URL` set as a
+  build-time shell variable (no `.env.production` is committed). Confirmed 2026-10-15 by inspecting
+  the live Container App and Static Web App directly; nothing in the repo documents or scripts this
+  sequence end to end.
 - **A rule version's `human_review_required` is one flag for the whole action, not per-condition.**
   Confirmed by the real replay walkthrough above: getting both a fully-automatic outcome and a
   requires-human-review outcome out of matching cases requires two separate rule versions (as done
@@ -418,14 +467,11 @@ permission.
   Confirmed live in the fictional demonstration (`REFUND-4001`/`4002`, both far outside the proposed
   rule's amount threshold, both `disagrees_with_baseline`). Disclosed, not changed: redefining the
   outcome vocabulary is a schema/product decision, not something to fix silently inside this pass.
-- **A replay case with no recorded baseline and no missing data, whose facts simply do not match the
-  rule, is classified `resolved_automatically`** (`replay_executor.py::classify_outcome`), even
-  though no decision was actually produced for it (`decision: null`). This specific combination
-  (unmatched, no missing fields, no baseline) was not hit by the fictional demonstration above (every
-  case was designed to land unambiguously), and has no backend unit test covering it either; this is
-  disclosed as an untested, arguably mislabelled edge case for a future pass to decide on, not fixed
-  here, since the fix would mean either changing classification semantics or adding a schema-level
-  outcome category, both product decisions.
+- ~~A replay case with no recorded baseline and no missing data, whose facts simply do not match the
+  rule, was classified `resolved_automatically`~~. **Fixed 2026-10-15**: found by hand-verifying a
+  deliberately unresolved case during this pass's own walkthrough, `classify_outcome()` now returns
+  `requires_human_review` for this combination, with 6 new unit tests
+  (`tests/unit/test_di_replay_executor.py`).
 - **Case status was never exercised in this pass's walkthrough.** The fictional demonstration set
   each case's `human_decision` (the baseline a Replay compares against) but never changed any case's
   `status` away from its default `open`, so the workflow overview's `unresolved_case_count` reads 10
@@ -437,43 +483,56 @@ permission.
   automation to trip, since several of this module's pages fire multiple parallel `GET`s per mount.
   Noted here only so a future automated test suite against this module budgets for it; a real person
   clicking through the UI will not come close to it.
-- **A pre-existing, unrelated backend issue surfaced for the first time this session**: 5 integration
-  tests in the Runtime Authority / Trusted Integration Architecture subsystem
-  (`test_action_vocabulary_precision.py`, `test_authorization_freshness_postgres.py`,
-  `test_capability_issuance_idempotency_postgres.py`), none of them Decision Intelligence and none
-  touched by this branch, were previously always skipped (their own fixture "skips cleanly" with no
-  real Postgres, which no prior environment had) and now fail for real against the real Postgres this
-  session set up. See "Testing performed" above for the exact numbers and evidence. Flagged for
-  separate investigation; not fixed here, since it is a different subsystem entirely.
-- **A real, intermittent, load-independent-looking flake exists somewhere in the frontend test
-  suite**, confirmed this session (one of five standalone runs: 9 failures across several files,
-  including a real runtime `TypeError` in `IntegrationDetailPage.test.tsx`, not a timeout). This
-  session could not isolate which exact file(s) reliably reproduce it (one run's full failure list
-  was lost to its own tooling mistake, disclosed above) and did not attempt a fix, since it is outside
-  Decision Intelligence and the file(s) involved were not touched by this branch. The previously
-  reported, more specific claim about `CorpusReviewPage.test.tsx` did not reproduce in this session's
-  5 runs (0 failures for that file across all of them).
+- **A pre-existing, unrelated backend issue, re-investigated 2026-10-15, not fixed**: exactly 4
+  tests fail, every time, on a real assertion, never a timeout:
+  `test_authorization_freshness_postgres.py::test_two_concurrent_consumption_attempts_for_the_same_capability_never_both_succeed`,
+  `test_authorization_freshness_postgres.py::test_wrong_tenant_verifier_never_wins_a_real_race_against_the_correct_tenant`,
+  `test_capability_issuance_idempotency_postgres.py::test_two_concurrent_issuance_requests_for_the_same_decision_never_both_succeed`,
+  `test_capability_issuance_idempotency_postgres.py::test_migration_downgrade_and_reupgrade_deduplicates_real_pre_existing_rows`.
+  Each fails the same way: `assert decision.outcome == "ALLOW"`, actually getting `"HUMAN_REVIEW"`.
+  Confirmed via `git diff 90e41df HEAD` that both test files and every Runtime Authority/Trusted
+  Integration source file they exercise are byte-identical to the pre-Decision-Intelligence baseline:
+  genuine pre-existing failures with zero code overlap with this module. Out of scope to fix here,
+  since a real fix means reopening Runtime Authority, explicitly outside this pass's scope.
 
-## Before this is mergeable
+  A first full-suite run this pass (2026-10-15) also showed a 5th failure and 9 errors, all in
+  files also confirmed byte-identical to baseline (`test_reference_enforcement_demonstration.py`,
+  `test_runtime_policy_deploy_opa_consistency.py`, `test_runtime_policy_deployment_concurrency.py`,
+  `test_text_extraction_coverage.py`). Investigated rather than dismissed: Docker Desktop's engine
+  was found hung (`docker ps` not responding, `docker compose ps` reporting the daemon unable to
+  start) immediately after that run, consistent with it crashing mid-run under this session's own
+  cumulative load. After restarting Docker Desktop and bringing the Postgres/OPA containers back up,
+  re-running exactly those files in isolation reproduced only the same 4 failures above; the other
+  5 tests all passed. Concluded: genuinely environmental, not a real regression, this pass's own
+  infrastructure load against this environment's resource limits, not a Decision Intelligence or
+  Runtime Authority defect.
+- **A real, intermittent, load-independent-looking flake exists somewhere in the frontend test
+  suite**, confirmed in an earlier session (one of five standalone runs: 9 failures across several
+  files, including a real runtime `TypeError` in `IntegrationDetailPage.test.tsx`, not a timeout).
+  Re-run clean 2026-10-15 after this pass's own fixes (`npx vitest run`: 8 files, 27/27 passed, 0
+  errors); the flake did not reproduce this time either. Still not isolated to a specific file; not
+  something this pass attempted to fix, since it is outside Decision Intelligence.
+
+## Current status and open product decisions
 
 1. ~~Run the real Alembic migration against an actual Postgres instance (not just SQLite) and
-   confirm.~~ Done this session; see "Testing performed" above.
+   confirm.~~ Done.
 2. ~~Perform at least one real, manual end-to-end click-through of the full chain in a running
-   instance.~~ Done this session; see "Real browser walkthrough" and "Fictional demonstration" above.
-   Two real defects were found and fixed in the process (see "Defects found and fixed this session").
-3. A product decision on the frontend judgment calls disclosed by the implementing agents
+   instance.~~ Done, twice: once in an earlier session (browser walkthrough, two defects found and
+   fixed), once 2026-10-15 (API-level synthetic walkthrough, one more defect found and fixed).
+3. ~~Deploy.~~ Done; live at `https://payreality.aisecurewatch.com` (see "Current status" above).
+4. A product decision on the frontend judgment calls disclosed by the implementing agents
    (Reviewer's exact permission grant vs. its descriptive gloss; `GOVERNANCE_ADMIN` holding
    `DI_REPORT_VIEW`; the two added "ready for review"/"approved for operational use" question
    endpoints): all defensible interpretations of an ambiguous brief, not bugs, but worth a
    deliberate yes/no rather than silent acceptance.
-4. Code review of the one backend change made during frontend integration
-   (`GET /v1/decision-intelligence/patterns/{id}/cases`) alongside everything else, since it landed
-   after the backend's own original review checkpoint.
-5. A product decision on the two new outcome-vocabulary and rule-language constraints disclosed
-   above (one `human_review_required` flag per rule version; "outside scope" and "disagreed" sharing
-   one outcome category): both are real, now-understood limitations of the shipped design, not bugs,
+5. A product decision on the two outcome-vocabulary and rule-language constraints disclosed above
+   (one `human_review_required` flag per rule version; "outside scope" and "disagreed" sharing one
+   outcome category): both are real, now-understood limitations of the shipped design, not bugs,
    but worth a deliberate decision before this is treated as the long-term shape of the rule language
    and replay vocabulary.
-6. Code review of this session's two defect fixes (`ReplayPage.tsx`/`types.ts`'s summary shape;
+6. Whether to configure a real Anthropic API key for the Claude discovery provider, and run it
+   against a real case before trusting its output in front of a customer.
+7. Code review of every defect fix disclosed in this document (`ReplayPage.tsx`/`types.ts`'s summary shape;
    `QuestionDetailPage.tsx`'s `loadEpochRef`/`scoresDirtyRef` guards), alongside everything else,
    since they also landed after the implementing agents' own original review checkpoint.
