@@ -2289,3 +2289,819 @@ class ReconciliationResultRecord(Base):
         Index("idx_reconciliation_results_organization", "organization_id"),
         Index("idx_reconciliation_results_decision", "decision_id"),
     )
+
+
+# --- Decision Intelligence (module prefix `DI`) ----------------------------
+#
+# A deliberately PARALLEL, isolated module alongside the Runtime Authority
+# domain above (Principal/Agent/Intent/RuntimePolicy/Decision/Evidence),
+# never merged into it. Runtime Authority enforces a live AI action against
+# an already-authored rule; Decision Intelligence is the upstream discipline
+# of discovering, from real recurring cases, the smallest set of questions
+# an organisation actually needs to answer before a rule can be authored at
+# all -- a different product concept that only happens to use similar
+# nouns ("policy", "decision"). The two domains intentionally share nothing
+# at the table level; the only infrastructure reused is Organization/User
+# (multi-tenancy) and the RBAC permission system, per this module's own
+# design brief.
+
+
+class DIWorkflow(Base):
+    """The top-level unit of Decision Intelligence work: one recurring
+    business decision an organisation wants to systematically understand
+    (e.g. "refund approvals", "vendor onboarding exceptions"). Every other
+    DI entity below hangs off a DIWorkflow, directly or via one. Archived
+    (not deleted) once a workflow is no longer actively worked, matching
+    this codebase's "nothing is deleted, everything is auditable"
+    discipline already established for Agent/RuntimePolicy/Organization."""
+
+    __tablename__ = "di_workflows"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    business_context: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        CheckConstraint("status IN ('active','archived')", name="ck_di_workflows_status"),
+        Index("idx_di_workflows_organization", "organization_id"),
+    )
+
+
+class DICase(Base):
+    """One concrete, real instance of the recurring decision a DIWorkflow
+    is about -- the raw material patterns and questions are discovered
+    from. `facts` is arbitrary, workflow-specific structured data (there is
+    deliberately no fixed case-attribute schema yet); `evidence_refs` is a
+    list of references/URIs to supporting material, never the files
+    themselves. `human_decision` is the actual outcome a person reached on
+    this case, kept distinct from `ai_recommendation` (what, if anything,
+    an AI system suggested) so a later Replay can compare a proposed rule
+    against what a human really decided without conflating the two."""
+
+    __tablename__ = "di_cases"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_workflows.id"), nullable=False
+    )
+    external_ref: Mapped[str | None] = mapped_column(Text)
+    facts: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    evidence_refs: Mapped[list | None] = mapped_column(JSONB)
+    ai_recommendation: Mapped[dict | None] = mapped_column(JSONB)
+    human_decision: Mapped[dict | None] = mapped_column(JSONB)
+    escalation_reason: Mapped[str | None] = mapped_column(Text)
+    outcome: Mapped[str | None] = mapped_column(Text)
+    outcome_evidence: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        CheckConstraint("status IN ('open','resolved','escalated')", name="ck_di_cases_status"),
+        Index("idx_di_cases_organization_workflow", "organization_id", "workflow_id"),
+    )
+
+
+class DIPattern(Base):
+    """An expert-proposed explanation for WHY a cluster of cases behaves
+    the way it does (e.g. "these all disagree because the policy doesn't
+    define a cutoff date"). `confidence` is a manual, expert judgement
+    label, deliberately NOT a fabricated statistical score -- nothing in
+    this module computes a real confidence interval over proposed
+    explanations, so claiming one would be a fabricated number presented
+    as real evidence."""
+
+    __tablename__ = "di_patterns"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_workflows.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    proposed_explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    alternative_explanations: Mapped[list | None] = mapped_column(JSONB)
+    confidence: Mapped[str | None] = mapped_column(Text)
+    review_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="proposed")
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    # Feature: AI-assisted discovery. Nullable/additive -- every Pattern
+    # created by hand (the only way this worked before this feature) has
+    # this NULL. Set exactly once, at creation, by
+    # di_discovery_service.accept_suggestion when a human accepts a
+    # 'pattern'-kind DIDiscoverySuggestion -- this is the queryable trace
+    # back to the suggestion/run a discovered Pattern came from that the
+    # feature's own brief requires.
+    source_suggestion_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_discovery_suggestions.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "category IN ('missing_facts','unclear_policy','conflicting_rules','authority_gap',"
+            "'context_interpretation','human_judgement','other')",
+            name="ck_di_patterns_category",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR confidence IN ('low','medium','high')", name="ck_di_patterns_confidence"
+        ),
+        CheckConstraint(
+            "review_status IN ('proposed','reviewed','confirmed','rejected')",
+            name="ck_di_patterns_review_status",
+        ),
+        Index("idx_di_patterns_organization_workflow", "organization_id", "workflow_id"),
+    )
+
+
+class DIPatternCase(Base):
+    """Association: which DICase rows a DIPattern's proposed explanation
+    is actually grounded in -- a Pattern with no linked Cases is an
+    unsupported assertion, not evidence."""
+
+    __tablename__ = "di_pattern_cases"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    pattern_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_patterns.id"), nullable=False
+    )
+    case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("di_cases.id"), nullable=False)
+    # Feature: honest case relevance. "supporting" (the original grounding
+    # evidence), "potentially_affected" (plausibly relevant by an
+    # explicit, reviewable criterion, but not part of the original
+    # evidence -- see di_pattern_service.compute_potentially_affected_
+    # cases), "excluded" (reviewed and found NOT relevant), or
+    # "undetermined" (relevance genuinely couldn't be established).
+    # Defaults to "supporting" so every pre-existing link (every row
+    # created before this column existed) keeps its original meaning
+    # unchanged.
+    kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="supporting")
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("pattern_id", "case_id", name="uq_di_pattern_cases_pattern_case"),
+        CheckConstraint(
+            "kind IN ('supporting','potentially_affected','excluded','undetermined')",
+            name="ck_di_pattern_cases_kind",
+        ),
+    )
+
+
+class DIQuestion(Base):
+    """The actual output of a Decision Intelligence workflow: one of the
+    small, highest-value questions a business needs to answer to resolve
+    recurring uncertainty. The five `*_score` fields and `priority_score`
+    are all nullable Numeric, deliberately -- a missing score means missing
+    evidence, and must stay visibly missing rather than silently becoming
+    a default value that looks like real evidence (scoring.py's own
+    contract). `status` carries the question's full lifecycle from first
+    proposal through to being operationalised as a validated Decision
+    Rule; this exact vocabulary is a hard product requirement, not
+    shortened or renamed here."""
+
+    __tablename__ = "di_questions"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_workflows.id"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="proposed")
+    reach_score: Mapped[float | None] = mapped_column(Numeric(6, 2))
+    impact_score: Mapped[float | None] = mapped_column(Numeric(6, 2))
+    risk_score: Mapped[float | None] = mapped_column(Numeric(6, 2))
+    answerability_score: Mapped[float | None] = mapped_column(Numeric(6, 2))
+    decision_sensitivity_score: Mapped[float | None] = mapped_column(Numeric(6, 2))
+    priority_score: Mapped[float | None] = mapped_column(Numeric(6, 2))
+    scoring_version: Mapped[str | None] = mapped_column(Text)
+    # Feature: evidence-based, honest prioritisation. One provenance tag
+    # per dimension -- "computed" (derived from data the system itself
+    # measured), "human" (a reviewer typed it), "model" (an AI estimate,
+    # never to be confused with "computed"), or NULL when the score
+    # itself is NULL (nothing to tag). Today every dimension set through
+    # the dashboard's scoring form is tagged "human" by the service layer;
+    # no code path currently sets "computed" or "model" for any dimension,
+    # which is itself honestly disclosed (see DECISION_INTELLIGENCE_
+    # PLATFORM.md) rather than implied by this column's mere existence.
+    reach_score_source: Mapped[str | None] = mapped_column(Text)
+    impact_score_source: Mapped[str | None] = mapped_column(Text)
+    risk_score_source: Mapped[str | None] = mapped_column(Text)
+    answerability_score_source: Mapped[str | None] = mapped_column(Text)
+    decision_sensitivity_score_source: Mapped[str | None] = mapped_column(Text)
+    # A human override of the computed priority_score, with a mandatory
+    # reason -- never silent. When set, this is the question's EFFECTIVE
+    # priority for sorting/display (di_question_service.effective_
+    # priority), but priority_score/scoring_version are left untouched
+    # underneath, so clearing the override later reveals the last
+    # genuinely computed score again, not a lost value.
+    priority_override_score: Mapped[float | None] = mapped_column(Numeric(6, 2))
+    priority_override_reason: Mapped[str | None] = mapped_column(Text)
+    priority_overridden_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id")
+    )
+    priority_overridden_at: Mapped[datetime | None]
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    # Feature: AI-assisted discovery -- see DIPattern.source_suggestion_id's
+    # identical docstring; set exactly once, at creation, by
+    # di_discovery_service.accept_suggestion for a 'question'-kind
+    # DIDiscoverySuggestion.
+    source_suggestion_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_discovery_suggestions.id")
+    )
+    # Feature: grounded, specific question discovery -- copied from the
+    # source DIDiscoverySuggestion at accept time (see that model's own
+    # docstring for what each means); NULL for every manually-created
+    # question, which is itself an honest signal ("no AI-proposed
+    # hypothesis exists for this question") rather than an empty string.
+    candidate_explanation: Mapped[str | None] = mapped_column(Text)
+    alternative_explanations: Mapped[list | None] = mapped_column(JSONB)
+    missing_evidence: Mapped[list | None] = mapped_column(JSONB)
+    potential_impact: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('proposed','in_analysis','awaiting_answer','answer_submitted','approved',"
+            "'logic_drafted','logic_validated','replay_completed','ready_for_review',"
+            "'approved_for_operational_use')",
+            name="ck_di_questions_status",
+        ),
+        CheckConstraint(
+            "reach_score_source IS NULL OR reach_score_source IN ('computed','human','model')",
+            name="ck_di_questions_reach_score_source",
+        ),
+        CheckConstraint(
+            "impact_score_source IS NULL OR impact_score_source IN ('computed','human','model')",
+            name="ck_di_questions_impact_score_source",
+        ),
+        CheckConstraint(
+            "risk_score_source IS NULL OR risk_score_source IN ('computed','human','model')",
+            name="ck_di_questions_risk_score_source",
+        ),
+        CheckConstraint(
+            "answerability_score_source IS NULL OR answerability_score_source IN ('computed','human','model')",
+            name="ck_di_questions_answerability_score_source",
+        ),
+        CheckConstraint(
+            "decision_sensitivity_score_source IS NULL OR decision_sensitivity_score_source "
+            "IN ('computed','human','model')",
+            name="ck_di_questions_decision_sensitivity_score_source",
+        ),
+        Index("idx_di_questions_organization_workflow", "organization_id", "workflow_id"),
+    )
+
+
+class DIQuestionPattern(Base):
+    """Association: which DIPattern rows motivate/support a DIQuestion."""
+
+    __tablename__ = "di_question_patterns"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    question_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_questions.id"), nullable=False
+    )
+    pattern_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_patterns.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("question_id", "pattern_id", name="uq_di_question_patterns_question_pattern"),
+    )
+
+
+class DIQuestionCase(Base):
+    """Association: supporting Cases/evidence directly behind a
+    DIQuestion, independent of whichever Patterns it's also linked to --
+    a reviewer may want to cite a specific case as evidence for why a
+    question matters without that case having been folded into any
+    pattern yet."""
+
+    __tablename__ = "di_question_cases"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    question_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_questions.id"), nullable=False
+    )
+    case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("di_cases.id"), nullable=False)
+    # See DIPatternCase.kind's identical docstring -- same vocabulary,
+    # same default, same reasoning, applied to a question's own case
+    # evidence instead of a pattern's.
+    kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="supporting")
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("question_id", "case_id", name="uq_di_question_cases_question_case"),
+        CheckConstraint(
+            "kind IN ('supporting','potentially_affected','excluded','undetermined')",
+            name="ck_di_question_cases_kind",
+        ),
+    )
+
+
+class DIAnswer(Base):
+    """One versioned answer to a DIQuestion. Immutable once created: a
+    revision to an approved answer always inserts a new DIAnswer row
+    (version = previous + 1, previous_version_id pointing back) rather
+    than updating the approved row's own `content` in place -- the exact
+    same "never mutate, always append a new version" discipline this
+    codebase already applies to RuntimePolicy. No organization_id of its
+    own; reachable via question_id -> DIQuestion.organization_id, the same
+    convention Agent already established for acting_for_principal_id."""
+
+    __tablename__ = "di_answers"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    question_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_questions.id"), nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_refs: Mapped[list | None] = mapped_column(JSONB)
+    scope: Mapped[str | None] = mapped_column(Text)
+    conditions_exceptions: Mapped[str | None] = mapped_column(Text)
+    effective_date: Mapped[datetime | None]
+    review_date: Mapped[datetime | None]
+    version: Mapped[int] = mapped_column(nullable=False, server_default="1")
+    previous_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_answers.id")
+    )
+    author_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    approver_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="draft")
+    # Feature: honest expert resolution. What the expert actually
+    # concluded from answering this question -- distinct from `content`
+    # (the answer itself) and from whether a DIDecisionRule was ever
+    # created from it (di_rule_service already requires `status ==
+    # 'approved'`, but NOT every approved answer should become a rule --
+    # this is the field that says so explicitly, instead of a rule's mere
+    # existence or absence being the only signal). Required at approval
+    # (di_answer_service.approve_answer) -- the approving expert's own
+    # concluding judgement, separate from the author's draft content.
+    disposition: Mapped[str | None] = mapped_column(Text)
+    disposition_notes: Mapped[str | None] = mapped_column(Text)
+    submitted_at: Mapped[datetime | None]
+    decided_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft','submitted','under_review','approved','rejected','superseded')",
+            name="ck_di_answers_status",
+        ),
+        CheckConstraint(
+            "disposition IS NULL OR disposition IN ('rule_change','fact_collection_needed',"
+            "'existing_rule_sufficient','data_or_technical_issue','human_judgement_required',"
+            "'insufficient_evidence')",
+            name="ck_di_answers_disposition",
+        ),
+        Index("idx_di_answers_question", "question_id"),
+    )
+
+
+class DIDecisionRule(Base):
+    """The operationalised form of one approved DIAnswer: a typed,
+    versioned, inspectable condition tree (DIRuleVersion.schema_json) a
+    human can test and validate before it is ever trusted. `current_
+    version_id` always points at the most recently created DIRuleVersion;
+    editing a rule never mutates an existing version's schema_json, it
+    inserts a new DIRuleVersion row and repoints this column. Deliberately
+    has no execution path of its own onto the Runtime Authority Decision
+    Engine -- see replay_executor.py's own docstring for why a Replay is a
+    reporting operation, never a live one."""
+
+    __tablename__ = "di_decision_rules"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_workflows.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    source_answer_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_answers.id"), nullable=False
+    )
+    # Nullable only because the FK target (di_rule_versions) is created in
+    # the same migration as this table and must exist first; every rule
+    # has a current version from the moment its first DIRuleVersion is
+    # inserted, set in the same service-layer transaction as that insert.
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_rule_versions.id")
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="draft")
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        CheckConstraint("status IN ('draft','validated')", name="ck_di_decision_rules_status"),
+        Index("idx_di_decision_rules_organization_workflow", "organization_id", "workflow_id"),
+    )
+
+
+class DIRuleVersion(Base):
+    """One immutable version of a DIDecisionRule's condition tree. Never
+    UPDATEd after creation -- `validation.py`'s own structural checks and
+    `rule_evaluator.py`'s interpretation both operate on a specific,
+    frozen `schema_json`, so retroactively changing it here would silently
+    invalidate every Replay already run against this version."""
+
+    __tablename__ = "di_rule_versions"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    rule_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_decision_rules.id"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(nullable=False)
+    schema_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    scope: Mapped[str | None] = mapped_column(Text)
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("rule_id", "version", name="uq_di_rule_versions_rule_version"),
+        Index("idx_di_rule_versions_rule", "rule_id"),
+    )
+
+
+class DIReplayRun(Base):
+    """A single, bounded, non-live run of `evaluate_rule` (rule_evaluator.
+    py) against a chosen set of historical DICase rows -- a reporting/
+    evaluation operation only, never anything that touches the live
+    Runtime Authority Decision Engine or any real AI action. `summary` is
+    the aggregate per-outcome_category counts computed once, at
+    completion, from the DIReplayCaseResult rows this run actually wrote
+    (never a hardcoded or estimated number)."""
+
+    __tablename__ = "di_replay_runs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_workflows.id"), nullable=False
+    )
+    rule_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_rule_versions.id"), nullable=False
+    )
+    case_set_definition: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # Feature: honest development-vs-evaluation disclosure. Snapshotted
+    # once, at run creation, from the source question's own "supporting"-
+    # kind DIQuestionCase links (via rule_version -> rule ->
+    # source_answer_id -> question) -- never recomputed later, so a
+    # question's links changing afterward can't quietly reclassify a
+    # past run's own disclosure. Shape:
+    # {"development_case_ids": [...], "evaluation_case_ids": [...],
+    #  "overlap_case_ids": [...], "insufficient_evaluation_cases": bool}.
+    # NULL when the source answer/question chain couldn't be resolved
+    # (e.g. a rule created before this column existed) -- an honest
+    # "not available," never a fabricated empty disclosure.
+    case_split: Mapped[dict | None] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    started_at: Mapped[datetime | None]
+    completed_at: Mapped[datetime | None]
+    summary: Mapped[dict | None] = mapped_column(JSONB)
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','running','completed','failed')", name="ck_di_replay_runs_status"
+        ),
+        Index("idx_di_replay_runs_organization_workflow", "organization_id", "workflow_id"),
+    )
+
+
+class DIReplayCaseResult(Base):
+    """One DICase's outcome from a DIReplayRun. `outcome_category`
+    deliberately distinguishes "agrees with the historical baseline" from
+    "resolved automatically" from "requires human review" from "missing
+    data" from "error" -- historical agreement is never recorded, named,
+    or treated anywhere as if it were a claim that the new rule is
+    CORRECT, only that it does or doesn't match what a human already
+    decided (or that it couldn't be evaluated at all)."""
+
+    __tablename__ = "di_replay_case_results"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    replay_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_replay_runs.id"), nullable=False
+    )
+    case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("di_cases.id"), nullable=False)
+    baseline_decision: Mapped[dict | None] = mapped_column(JSONB)
+    proposed_decision: Mapped[dict | None] = mapped_column(JSONB)
+    matched_conditions: Mapped[list | None] = mapped_column(JSONB)
+    unmatched_conditions: Mapped[list | None] = mapped_column(JSONB)
+    outcome_category: Mapped[str] = mapped_column(Text, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "outcome_category IN ('agrees_with_baseline','disagrees_with_baseline',"
+            "'resolved_automatically','requires_human_review','missing_data','error')",
+            name="ck_di_replay_case_results_outcome_category",
+        ),
+        Index("idx_di_replay_case_results_replay_run", "replay_run_id"),
+    )
+
+
+class DIAuditEvent(Base):
+    """Decision Intelligence's own append-only audit ledger, following
+    AgentAuditEvent's precedent exactly: every mutating action on a
+    Question/Answer/DecisionRule/ReplayRun becomes one row here. Unlike
+    AgentAuditEvent this is not cryptographically signed (DI has no
+    equivalent requirement to Agent Lifecycle's signed-ledger spec yet) --
+    purely an application-level record, with no UPDATE/DELETE path ever
+    exposed through the API."""
+
+    __tablename__ = "di_audit_events"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    previous_value: Mapped[dict | None] = mapped_column(JSONB)
+    new_value: Mapped[dict | None] = mapped_column(JSONB)
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (Index("idx_di_audit_events_organization", "organization_id"),)
+
+
+class DIImportJob(Base):
+    """One CSV upload attempt against a DIWorkflow's cases (Feature: CSV
+    case import). Deliberately synchronous today (processed start-to-
+    finish inside the request that creates it, the same synchronous
+    processing model the AI Authority Builder's own corpus extraction
+    already uses) -- `status` still carries the full
+    pending/validating/completed/failed vocabulary a future async worker
+    would need, so making this asynchronous later needs no schema change,
+    only a different caller. `row_errors` is a JSONB list of
+    `{"row_number": int, "errors": [str, ...]}` for every row that did
+    NOT become a DICase -- partial success is this module's deliberate
+    choice (see di_import_service.py's own docstring): a CSV with a few
+    bad rows still imports every good row rather than failing the whole
+    file."""
+
+    __tablename__ = "di_import_jobs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_workflows.id"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    total_rows: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    valid_rows: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    invalid_rows: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    row_errors: Mapped[list | None] = mapped_column(JSONB)
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    completed_at: Mapped[datetime | None]
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','validating','completed','failed')", name="ck_di_import_jobs_status"
+        ),
+        Index("idx_di_import_jobs_organization_workflow", "organization_id", "workflow_id"),
+    )
+
+
+class DIScoringConfig(Base):
+    """Feature: configurable scoring weights. One row per organization
+    (DIQuestion carries `organization_id` directly, not only reachable
+    via its workflow, so an org-level config is both sufficient and
+    simplest for score_question's own call site, which only ever has
+    `organization_id` in hand -- read before choosing this scope, per
+    this feature's own brief). Absence of a row for an organization means
+    "still using scoring.py's own hardcoded v1 defaults", not an error --
+    di_scoring_config_service falls back to `DEFAULT_WEIGHTS` rather than
+    requiring every organization to configure this before scoring works
+    at all.
+
+    `scoring_version` here is this organization's own current label
+    (bumped on every successful weight change, e.g. "v1" -> "v2" -> ...)
+    and is NEVER applied retroactively: changing this row only affects
+    whatever gets (re-)scored next. Every already-persisted
+    `DIQuestion.priority_score`/`DIQuestion.scoring_version` pair on disk
+    stays exactly as it was computed -- scoring.py's own "a score stays
+    explainable against the configuration that produced it" contract,
+    extended to a configurable weight set instead of only a single
+    hardcoded formula."""
+
+    __tablename__ = "di_scoring_configs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, unique=True
+    )
+    reach_weight: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    impact_weight: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    risk_weight: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    answerability_weight: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    decision_sensitivity_weight: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    scoring_version: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (Index("idx_di_scoring_configs_organization", "organization_id"),)
+
+
+class DIDiscoveryRun(Base):
+    """Feature: AI-assisted discovery of recurring uncertainty patterns and
+    candidate priority questions (domain/decision_intelligence/ai_discovery/).
+    One row per invocation of `POST .../workflows/{id}/discover`: which
+    provider actually ran (`provider_used`, mirroring the runtime-selection
+    the AI Policy Builder/AI Authority Builder routers already do --
+    empty config -> fake, ANTHROPIC_API_KEY set -> claude), how many
+    DICase rows it was bounded to and actually analysed
+    (`cases_analyzed_count`, see di_discovery_service.MAX_DISCOVERY_CASES
+    for the bound and the reasoning), and its own pending/running/
+    completed/failed lifecycle, matching DIReplayRun's vocabulary exactly
+    since both are a synchronous, bounded, non-live analysis operation
+    over persisted cases.
+
+    This table, and DIDiscoverySuggestion below, are the ONLY place this
+    feature ever writes anything on its own: a DIDiscoveryRun/
+    DIDiscoverySuggestion never becomes a real DIPattern/DIQuestion except
+    through an explicit human accept action
+    (di_discovery_service.accept_suggestion) -- see that function's own
+    docstring for why this is a hard, structural constraint, not a
+    convention."""
+
+    __tablename__ = "di_discovery_runs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_workflows.id"), nullable=False
+    )
+    provider_used: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    cases_analyzed_count: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    completed_at: Mapped[datetime | None]
+
+    __table_args__ = (
+        CheckConstraint(
+            "provider_used IN ('fake','claude','azure_foundry')", name="ck_di_discovery_runs_provider_used"
+        ),
+        CheckConstraint(
+            "status IN ('pending','running','completed','failed')", name="ck_di_discovery_runs_status"
+        ),
+        Index("idx_di_discovery_runs_organization_workflow", "organization_id", "workflow_id"),
+    )
+
+
+class DIDiscoverySuggestion(Base):
+    """One candidate Pattern or Question proposed by a DIDiscoveryRun --
+    never authoritative on its own (see DIDiscoveryRun's own docstring).
+
+    `kind` distinguishes a candidate Pattern (a proposed recurring-
+    uncertainty grouping of cases) from a candidate Question (a proposed
+    high-value question that would resolve one). `confidence` follows
+    DIPattern.confidence's own precedent exactly (a human-readable low/
+    medium/high label, never a fabricated statistical score) and is
+    deliberately NULL for every 'question'-kind suggestion, mirroring
+    domain/ai_authority_builder/provider.py's CandidateQuestion ("not
+    confidence-scored: a question is a request for information, not a
+    claim to be confident or unconfident about") -- the identical
+    reasoning applies here unchanged.
+
+    `linked_pattern_id` (nullable, only meaningful for a 'question'-kind
+    suggestion) is deliberately NOT a foreign key: per this feature's own
+    brief, it may point at EITHER another DIDiscoverySuggestion row (a
+    'pattern'-kind suggestion proposed in the same run that this question
+    would resolve -- the only case either shipped provider actually
+    produces today) OR, for a future provider that cross-references
+    already-accepted Patterns, a real DIPattern row directly. A single FK
+    can't target two different tables, so resolution happens in
+    di_discovery_service.accept_suggestion instead: it tries a sibling
+    suggestion first, then a real DIPattern, and rejects with a clear
+    error (never silently drops the link) if neither resolves, or if the
+    sibling suggestion it found has not itself been accepted yet.
+
+    `supporting_case_ids` is the real evidence this suggestion is based
+    on -- a JSONB array of DICase ids, never empty for a suggestion either
+    shipped provider produces (see their own tests)."""
+
+    __tablename__ = "di_discovery_suggestions"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    discovery_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("di_discovery_runs.id"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    supporting_case_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[str | None] = mapped_column(Text)
+    # Set (one of DIPattern.category's own 7 values) for every 'pattern'-
+    # kind suggestion, by whichever provider proposed it -- reused as-is
+    # for the real DIPattern's own `category` on accept, so a reviewer
+    # never has to re-classify a suggestion the provider already
+    # categorised. Always NULL for a 'question'-kind suggestion, since
+    # DIQuestion has no category of its own (service-layer discipline,
+    # matching how `confidence` is likewise always NULL for a question --
+    # not re-enforced as a cross-column CHECK here, consistent with this
+    # table's other columns).
+    category: Mapped[str | None] = mapped_column(Text)
+    linked_pattern_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="suggested")
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    reviewed_at: Mapped[datetime | None]
+    # Feature: grounded, specific question discovery. All nullable/empty by
+    # default -- a provider (or a suggestion predating this column) that
+    # has nothing honest to say here simply leaves it empty, never a
+    # fabricated placeholder. `alternative_explanations` is populated for
+    # BOTH kinds (a pattern's own candidate causes, or a question's);
+    # `candidate_explanation`/`missing_evidence`/`potential_impact` are
+    # only ever populated for 'question'-kind rows -- see provider.
+    # CandidateQuestion's own docstring for what each means.
+    candidate_explanation: Mapped[str | None] = mapped_column(Text)
+    alternative_explanations: Mapped[list | None] = mapped_column(JSONB)
+    missing_evidence: Mapped[list | None] = mapped_column(JSONB)
+    potential_impact: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("kind IN ('pattern','question')", name="ck_di_discovery_suggestions_kind"),
+        CheckConstraint(
+            "confidence IS NULL OR confidence IN ('low','medium','high')",
+            name="ck_di_discovery_suggestions_confidence",
+        ),
+        CheckConstraint(
+            "category IS NULL OR category IN ('missing_facts','unclear_policy','conflicting_rules',"
+            "'authority_gap','context_interpretation','human_judgement','other')",
+            name="ck_di_discovery_suggestions_category",
+        ),
+        CheckConstraint(
+            "status IN ('suggested','accepted','dismissed')", name="ck_di_discovery_suggestions_status"
+        ),
+        Index("idx_di_discovery_suggestions_run", "discovery_run_id"),
+    )
