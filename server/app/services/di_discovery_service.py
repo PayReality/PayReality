@@ -17,6 +17,7 @@ product's scale (see that module's docstring for the identical reasoning;
 a provider call here is bounded by MAX_DISCOVERY_CASES below, not an
 unbounded live stream)."""
 
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -159,6 +160,7 @@ def create_and_run_discovery(
             rationale=pattern.rationale,
             confidence=pattern.confidence,
             category=pattern.category,
+            alternative_explanations=list(pattern.alternative_explanations) or None,
         )
         db.add(pattern_row)
         db.flush()
@@ -181,6 +183,10 @@ def create_and_run_discovery(
                     confidence=None,  # CandidateQuestion is deliberately never confidence-scored
                     category=None,  # DIQuestion has no category of its own
                     linked_pattern_id=pattern_row.id,
+                    candidate_explanation=question.candidate_explanation,
+                    alternative_explanations=list(question.alternative_explanations) or None,
+                    missing_evidence=list(question.missing_evidence) or None,
+                    potential_impact=question.potential_impact,
                 )
             )
             suggestion_count += 1
@@ -283,6 +289,79 @@ def _resolve_linked_real_pattern_id(
     raise LinkedPatternNotFoundError(str(linked_id))
 
 
+#: Beyond this many other workflow cases scanned for a "potentially
+#: affected" match, stop -- the same demo-scale bound discipline as
+#: MAX_DISCOVERY_CASES above, so accepting one suggestion can never touch
+#: an unbounded number of rows.
+MAX_POTENTIALLY_AFFECTED_SCAN = 200
+
+
+def _compute_potentially_affected(
+    db: Session, organization_id: uuid.UUID, workflow_id: uuid.UUID, supporting_case_ids: list[uuid.UUID]
+) -> list[tuple[uuid.UUID, str]]:
+    """An explicit, reviewable relevance criterion, not a model inference:
+    find every recorded fact key on which the cited (supporting) cases
+    don't all agree -- either a differing value or one case recording it
+    and another not (the same "differing" notion fake_provider's own
+    heuristics already use). Any OTHER case in the same workflow that
+    records at least one of those same keys shares the exact condition
+    this suggestion is about, so answering the question could plausibly
+    affect it too -- "potentially", never "will". Returns
+    (case_id, reason) pairs; the reason names the specific shared key(s),
+    so a reviewer can check the claim directly rather than trust a label.
+
+    Deliberately simple and bounded (brief's own instruction: no new
+    enterprise graph or complex subsystem) -- this is one query plus one
+    set-membership check per candidate case, nothing more."""
+    supporting_cases = [db.get(DICase, cid) for cid in supporting_case_ids]
+    supporting_cases = [c for c in supporting_cases if c is not None]
+    if not supporting_cases:
+        return []
+
+    all_keys: set[str] = set()
+    for c in supporting_cases:
+        all_keys |= set((c.facts or {}).keys())
+
+    differing_keys = sorted(
+        k for k in all_keys
+        if len({json.dumps((c.facts or {}).get(k), sort_keys=True, default=str) for c in supporting_cases}) > 1
+    )
+    if not differing_keys:
+        return []
+
+    supporting_ids = {c.id for c in supporting_cases}
+    other_cases, _ = di_case_service.list_cases(
+        db, organization_id, workflow_id=workflow_id, limit=MAX_POTENTIALLY_AFFECTED_SCAN
+    )
+
+    affected: list[tuple[uuid.UUID, str]] = []
+    for case in other_cases:
+        if case.id in supporting_ids:
+            continue
+        shared = sorted(k for k in differing_keys if k in (case.facts or {}))
+        if shared:
+            affected.append(
+                (case.id, f"shares fact key(s) {', '.join(shared)}, which distinguished the cited cases")
+            )
+    return affected
+
+
+def _link_cases_with_relevance(
+    link_fn, db: Session, parent_id: uuid.UUID, organization_id: uuid.UUID,
+    workflow_id: uuid.UUID, supporting_case_ids: list[uuid.UUID],
+) -> None:
+    """Shared by both the pattern and question branches of
+    accept_suggestion: link every cited case as "supporting", then
+    compute and link "potentially_affected" cases via the explicit
+    predicate above. Never silently overwrites an existing link's kind
+    (link_case is a no-op on an existing row) -- a case already linked by
+    a prior action keeps whatever kind it already has."""
+    for case_id in supporting_case_ids:
+        link_fn(db, parent_id, case_id, organization_id, kind="supporting", reason="cited by discovery suggestion")
+    for case_id, reason in _compute_potentially_affected(db, organization_id, workflow_id, supporting_case_ids):
+        link_fn(db, parent_id, case_id, organization_id, kind="potentially_affected", reason=reason)
+
+
 def accept_suggestion(
     db: Session, suggestion_id: uuid.UUID, organization_id: uuid.UUID, actor_user_id: uuid.UUID
 ) -> DIPattern | DIQuestion:
@@ -313,13 +392,15 @@ def accept_suggestion(
             description=suggestion.description,
             category=suggestion.category or "other",
             proposed_explanation=suggestion.rationale,
+            alternative_explanations=suggestion.alternative_explanations,
             confidence=suggestion.confidence,
             source_suggestion_id=suggestion.id,
         )
         db.add(pattern)
         db.flush()
-        for case_id in case_ids:
-            di_pattern_service.link_case(db, pattern.id, case_id, organization_id)
+        _link_cases_with_relevance(
+            di_pattern_service.link_case, db, pattern.id, organization_id, run.workflow_id, case_ids
+        )
         created, entity_type = pattern, "DIPattern"
     else:
         linked_real_pattern_id = None
@@ -334,11 +415,16 @@ def accept_suggestion(
             title=suggestion.title,
             description=suggestion.description,
             source_suggestion_id=suggestion.id,
+            candidate_explanation=suggestion.candidate_explanation,
+            alternative_explanations=suggestion.alternative_explanations,
+            missing_evidence=suggestion.missing_evidence,
+            potential_impact=suggestion.potential_impact,
         )
         db.add(question)
         db.flush()
-        for case_id in case_ids:
-            di_question_service.link_case(db, question.id, case_id, organization_id)
+        _link_cases_with_relevance(
+            di_question_service.link_case, db, question.id, organization_id, run.workflow_id, case_ids
+        )
         if linked_real_pattern_id is not None:
             di_question_service.link_pattern(db, question.id, linked_real_pattern_id, organization_id)
         created, entity_type = question, "DIQuestion"

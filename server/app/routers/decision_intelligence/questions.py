@@ -8,18 +8,25 @@ from app.db.session import get_db
 from app.dependencies import get_current_organization, get_current_user, require_permission
 from app.domain.rbac.permissions import Permission
 from app.schemas.decision_intelligence import (
+    CaseLinkResponse,
     CreateQuestionRequest,
     LinkCaseRequest,
     LinkPatternRequest,
+    PriorityOverrideRequest,
     QuestionDetailResponse,
     QuestionListResponse,
     QuestionResponse,
+    RelinkCaseKindRequest,
     UpdateQuestionRequest,
 )
 from app.services import di_question_service
 from app.services.di_case_service import CaseNotFoundError
 from app.services.di_pattern_service import PatternNotFoundError
-from app.services.di_question_service import InvalidQuestionTransitionError, QuestionNotFoundError
+from app.services.di_question_service import (
+    CaseLinkNotFoundError,
+    InvalidQuestionTransitionError,
+    QuestionNotFoundError,
+)
 from app.services.di_workflow_service import WorkflowNotFoundError
 
 router = APIRouter(prefix="/v1/decision-intelligence/questions", tags=["decision-intelligence"])
@@ -74,10 +81,15 @@ def get_question(
     try:
         question = di_question_service.get_question(db, question_id, organization.id)
         patterns = di_question_service.list_linked_patterns(db, question_id, organization.id)
-        case_ids = di_question_service.list_linked_cases(db, question_id, organization.id)
+        case_links = di_question_service.list_linked_case_links(db, question_id, organization.id)
     except QuestionNotFoundError:
         raise HTTPException(status_code=404, detail="question_not_found")
-    return QuestionDetailResponse(question=question, patterns=patterns, case_ids=case_ids)
+    return QuestionDetailResponse(
+        question=question,
+        patterns=patterns,
+        case_ids=[link.case_id for link in case_links],
+        case_links=case_links,
+    )
 
 
 @router.patch(
@@ -223,12 +235,43 @@ def link_case(
     db: Session = Depends(get_db),
 ):
     try:
-        di_question_service.link_case(db, question_id, body.case_id, organization.id)
+        di_question_service.link_case(db, question_id, body.case_id, organization.id, kind=body.kind, reason=body.reason)
     except QuestionNotFoundError:
         raise HTTPException(status_code=404, detail="question_not_found")
     except CaseNotFoundError:
         raise HTTPException(status_code=404, detail="case_not_found")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     return {"question_id": str(question_id), "case_id": str(body.case_id), "linked": True}
+
+
+@router.patch(
+    "/{question_id}/cases/{case_id}", response_model=CaseLinkResponse,
+    dependencies=[Depends(require_permission(Permission.DI_QUESTION_MANAGE))],
+)
+def relink_case_kind(
+    question_id: UUID,
+    case_id: UUID,
+    body: RelinkCaseKindRequest,
+    organization: Organization = Depends(get_current_organization),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Correcting a case's relevance category -- e.g. a reviewer demoting
+    a model-inferred "potentially_affected" case to "excluded" after
+    actually checking it. Preserves the original link (and, via the
+    DIAuditEvent this writes, the full review history) rather than
+    deleting and recreating it."""
+    try:
+        return di_question_service.relink_case_kind(
+            db, question_id, case_id, organization.id, user.id, body.new_kind, body.reason
+        )
+    except QuestionNotFoundError:
+        raise HTTPException(status_code=404, detail="question_not_found")
+    except CaseLinkNotFoundError:
+        raise HTTPException(status_code=404, detail="case_link_not_found")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @router.delete(
@@ -243,5 +286,24 @@ def unlink_case(
 ):
     try:
         di_question_service.unlink_case(db, question_id, case_id, organization.id)
+    except QuestionNotFoundError:
+        raise HTTPException(status_code=404, detail="question_not_found")
+
+
+@router.post(
+    "/{question_id}/priority-override", response_model=QuestionResponse,
+    dependencies=[Depends(require_permission(Permission.DI_QUESTION_MANAGE))],
+)
+def override_priority(
+    question_id: UUID,
+    body: PriorityOverrideRequest,
+    organization: Organization = Depends(get_current_organization),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        return di_question_service.override_priority(
+            db, question_id, organization.id, user.id, body.score, body.reason
+        )
     except QuestionNotFoundError:
         raise HTTPException(status_code=404, detail="question_not_found")

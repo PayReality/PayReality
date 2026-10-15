@@ -10,6 +10,7 @@ operational use) are human-invoked directly against the question itself,
 since nothing else in the product naturally triggers them."""
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -26,7 +27,18 @@ from app.services import (
 )
 
 
+#: DIQuestionCase.kind's fixed vocabulary -- see that column's own
+#: docstring (app/db/models.py) for what each value means. Identical to
+#: di_pattern_service.CASE_LINK_KINDS, not imported from there to avoid a
+#: service-to-service import cycle for a 4-string tuple.
+CASE_LINK_KINDS = ("supporting", "potentially_affected", "excluded", "undetermined")
+
+
 class QuestionNotFoundError(Exception):
+    pass
+
+
+class CaseLinkNotFoundError(Exception):
     pass
 
 
@@ -94,7 +106,12 @@ def list_questions(
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
 
     if sort_by == "priority_score":
-        stmt = stmt.order_by(DIQuestion.priority_score.desc().nullslast())
+        # Sorts by the EFFECTIVE priority (an override, when set, else the
+        # computed score) -- see effective_priority's own docstring for
+        # why these stay two separate, independently-visible columns.
+        stmt = stmt.order_by(
+            func.coalesce(DIQuestion.priority_override_score, DIQuestion.priority_score).desc().nullslast()
+        )
     else:
         stmt = stmt.order_by(DIQuestion.created_at.desc())
     stmt = stmt.limit(limit).offset(offset)
@@ -133,18 +150,23 @@ def update_question(
     if reach_score is not None:
         changed["reach_score"] = reach_score
         question.reach_score = reach_score
+        question.reach_score_source = "human"
     if impact_score is not None:
         changed["impact_score"] = impact_score
         question.impact_score = impact_score
+        question.impact_score_source = "human"
     if risk_score is not None:
         changed["risk_score"] = risk_score
         question.risk_score = risk_score
+        question.risk_score_source = "human"
     if answerability_score is not None:
         changed["answerability_score"] = answerability_score
         question.answerability_score = answerability_score
+        question.answerability_score_source = "human"
     if decision_sensitivity_score is not None:
         changed["decision_sensitivity_score"] = decision_sensitivity_score
         question.decision_sensitivity_score = decision_sensitivity_score
+        question.decision_sensitivity_score_source = "human"
 
     if changed:
         di_audit_service.record_event(
@@ -194,6 +216,63 @@ def score_question(
     db.commit()
     db.refresh(question)
     return question
+
+
+def override_priority(
+    db: Session,
+    question_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    score: float | None,
+    reason: str,
+) -> DIQuestion:
+    """A human overriding the computed ranking -- `reason` is mandatory
+    (never a silent override). `score=None` clears a previous override,
+    reverting display/sort to the last genuinely computed priority_score
+    (which is never itself touched by this function, so clearing an
+    override can never lose or fabricate a computed value)."""
+    question = get_question(db, question_id, organization_id)
+    previous_override = float(question.priority_override_score) if question.priority_override_score is not None else None
+    question.priority_override_score = score
+    question.priority_override_reason = reason
+    question.priority_overridden_by_user_id = actor_user_id
+    question.priority_overridden_at = datetime.now(timezone.utc)
+    db.add(question)
+
+    di_audit_service.record_event(
+        db, organization_id, actor_user_id, action="override_priority", entity_type="DIQuestion",
+        entity_id=question.id,
+        previous_value={"priority_override_score": previous_override},
+        new_value={"priority_override_score": score}, reason=reason,
+    )
+    db.commit()
+    db.refresh(question)
+    return question
+
+
+def effective_priority(question: DIQuestion) -> float | None:
+    """The priority a list/sort should actually use: an override, when
+    one is set, otherwise the computed priority_score. Both the override
+    and the computed score remain independently visible on the question
+    itself (QuestionResponse) -- this helper only decides which one wins
+    for ranking/display, never which one is "true"."""
+    if question.priority_override_score is not None:
+        return float(question.priority_override_score)
+    return float(question.priority_score) if question.priority_score is not None else None
+
+
+def case_evidence_counts(db: Session, question_id: uuid.UUID, organization_id: uuid.UUID) -> dict[str, int]:
+    """How many distinct cases support this question vs. are merely
+    potentially affected vs. excluded/undetermined -- computed live from
+    the real DIQuestionCase link rows, never a stored/stale count."""
+    get_question(db, question_id, organization_id)
+    counts = {kind: 0 for kind in CASE_LINK_KINDS}
+    rows = db.execute(
+        select(DIQuestionCase.kind, func.count()).where(DIQuestionCase.question_id == question_id).group_by(DIQuestionCase.kind)
+    ).all()
+    for kind, count in rows:
+        counts[kind] = count
+    return counts
 
 
 # --- Lifecycle transitions ------------------------------------------------
@@ -301,10 +380,21 @@ def unlink_pattern(db: Session, question_id: uuid.UUID, pattern_id: uuid.UUID, o
         db.commit()
 
 
-def link_case(db: Session, question_id: uuid.UUID, case_id: uuid.UUID, organization_id: uuid.UUID) -> DIQuestionCase:
+def link_case(
+    db: Session,
+    question_id: uuid.UUID,
+    case_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    kind: str = "supporting",
+    reason: str | None = None,
+) -> DIQuestionCase:
+    """See di_pattern_service.link_case's identical docstring -- same
+    default, same idempotent-on-conflict behaviour, same vocabulary."""
+    if kind not in CASE_LINK_KINDS:
+        raise ValueError(f"kind must be one of {CASE_LINK_KINDS}, got {kind!r}")
     question = get_question(db, question_id, organization_id)
     di_case_service.get_case(db, case_id, organization_id)
-    link = DIQuestionCase(question_id=question.id, case_id=case_id)
+    link = DIQuestionCase(question_id=question.id, case_id=case_id, kind=kind, reason=reason)
     db.add(link)
     try:
         db.commit()
@@ -313,6 +403,37 @@ def link_case(db: Session, question_id: uuid.UUID, case_id: uuid.UUID, organizat
         return db.scalar(
             select(DIQuestionCase).where(DIQuestionCase.question_id == question.id, DIQuestionCase.case_id == case_id)
         )
+    db.refresh(link)
+    return link
+
+
+def relink_case_kind(
+    db: Session,
+    question_id: uuid.UUID,
+    case_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    new_kind: str,
+    reason: str | None = None,
+) -> DIQuestionCase:
+    """See di_pattern_service.relink_case_kind's identical docstring."""
+    if new_kind not in CASE_LINK_KINDS:
+        raise ValueError(f"new_kind must be one of {CASE_LINK_KINDS}, got {new_kind!r}")
+    get_question(db, question_id, organization_id)
+    link = db.scalar(
+        select(DIQuestionCase).where(DIQuestionCase.question_id == question_id, DIQuestionCase.case_id == case_id)
+    )
+    if link is None:
+        raise CaseLinkNotFoundError(f"case {case_id} is not linked to question {question_id}")
+    previous_kind = link.kind
+    link.kind = new_kind
+    link.reason = reason
+    db.add(link)
+    di_audit_service.record_event(
+        db, organization_id, actor_user_id, action="relink_case", entity_type="DIQuestionCase", entity_id=link.id,
+        previous_value={"kind": previous_kind}, new_value={"kind": new_kind, "reason": reason}, reason=reason,
+    )
+    db.commit()
     db.refresh(link)
     return link
 
@@ -340,3 +461,10 @@ def list_linked_patterns(db: Session, question_id: uuid.UUID, organization_id: u
 def list_linked_cases(db: Session, question_id: uuid.UUID, organization_id: uuid.UUID) -> list[uuid.UUID]:
     get_question(db, question_id, organization_id)
     return list(db.scalars(select(DIQuestionCase.case_id).where(DIQuestionCase.question_id == question_id)))
+
+
+def list_linked_case_links(db: Session, question_id: uuid.UUID, organization_id: uuid.UUID) -> list[DIQuestionCase]:
+    """Like `list_linked_cases`, but returns the full link rows (kind,
+    reason) -- what a reviewer needs to see WHY each case is linked."""
+    get_question(db, question_id, organization_id)
+    return list(db.scalars(select(DIQuestionCase).where(DIQuestionCase.question_id == question_id)))

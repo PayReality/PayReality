@@ -97,7 +97,26 @@ Hard rules:
 - If you find no genuine recurring pattern in the given cases, return an
   empty patterns list. An empty, honest result is correct and expected
   when the cases don't actually show a recurring issue, never force a
-  pattern to avoid returning nothing."""
+  pattern to avoid returning nothing.
+- For each question, also propose (all optional, include only what the
+  cited cases actually support):
+  - candidate_explanation: the single hypothesis this question would
+    test, stated as a hypothesis ("X may be the deciding factor"), never
+    as a fact.
+  - alternative_explanations: other plausible causes a reviewer should
+    weigh first (e.g. a legitimate case-specific exception, a data entry
+    or system-integration defect, an incorrect historical decision,
+    different policy versions, genuine unresolved ambiguity requiring
+    case-by-case judgement). Do not present this as exhaustive.
+  - missing_evidence: what information isn't in the given cases that
+    would actually help an expert decide.
+  - potential_impact: what an expert's answer might change, in plain
+    business terms -- never a claim that answering it definitely will.
+  Only make a question as SPECIFIC as the cited cases actually support
+  (e.g. naming one field and its two actual observed values when exactly
+  one field differs between exactly two decisions). If the cases only
+  support a broader question, ask the broader one -- do not invent
+  specificity the data doesn't ground."""
 
 
 def build_system_prompt() -> str:
@@ -145,6 +164,24 @@ def build_tool_schema() -> dict:
                 "items": {"type": "string"},
                 "description": "Real case_id values (from your input) this question is specifically grounded in, if any beyond its parent pattern's own.",
             },
+            "candidate_explanation": {
+                "type": "string",
+                "description": "The single hypothesis this question would test, stated as a hypothesis, never a fact. Omit if none is grounded.",
+            },
+            "alternative_explanations": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Other plausible causes a reviewer should weigh before accepting candidate_explanation. Never exhaustive.",
+            },
+            "missing_evidence": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "What isn't in the given cases that would help an expert actually decide.",
+            },
+            "potential_impact": {
+                "type": "string",
+                "description": "What an expert's answer might change, in plain terms. Never a claim it definitely will.",
+            },
         },
         "required": ["title", "description", "rationale"],
     }
@@ -181,6 +218,11 @@ def build_tool_schema() -> dict:
                 "items": question_item,
                 "description": "Candidate questions whose answer would resolve this specific pattern.",
             },
+            "alternative_explanations": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Other plausible causes for this pattern besides your main rationale (e.g. a data/recording error, a legitimate exception, different policy versions). Never exhaustive, never presented as ruled out.",
+            },
         },
         "required": ["title", "description", "rationale", "confidence", "category", "supporting_case_ids"],
     }
@@ -198,6 +240,10 @@ class _SuggestedQuestionModel(BaseModel):
     description: str
     rationale: str
     supporting_case_ids: list[str] = Field(default_factory=list)
+    candidate_explanation: str | None = None
+    alternative_explanations: list[str] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    potential_impact: str | None = None
 
 
 class _SuggestedPatternModel(BaseModel):
@@ -208,6 +254,7 @@ class _SuggestedPatternModel(BaseModel):
     category: Literal[*PATTERN_CATEGORIES]
     supporting_case_ids: list[str] = Field(min_length=1)
     questions: list[_SuggestedQuestionModel] = Field(default_factory=list)
+    alternative_explanations: list[str] = Field(default_factory=list)
 
 
 class DiscoveryResponseModel(BaseModel):
@@ -248,6 +295,10 @@ def parse_discovery_response(data: dict, valid_case_ids: set[str]) -> DiscoveryR
                     description=q.description,
                     rationale=q.rationale,
                     supporting_case_ids=tuple(q.supporting_case_ids),
+                    candidate_explanation=q.candidate_explanation,
+                    alternative_explanations=tuple(q.alternative_explanations),
+                    missing_evidence=tuple(q.missing_evidence),
+                    potential_impact=q.potential_impact,
                 )
             )
         patterns.append(
@@ -259,6 +310,7 @@ def parse_discovery_response(data: dict, valid_case_ids: set[str]) -> DiscoveryR
                 category=p.category,
                 supporting_case_ids=tuple(p.supporting_case_ids),
                 questions=tuple(questions),
+                alternative_explanations=tuple(p.alternative_explanations),
             )
         )
     return DiscoveryResult(patterns=tuple(patterns))

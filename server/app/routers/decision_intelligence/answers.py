@@ -7,10 +7,17 @@ from app.db.models import Organization, User
 from app.db.session import get_db
 from app.dependencies import get_current_organization, get_current_user, require_permission
 from app.domain.rbac.permissions import Permission
-from app.schemas.decision_intelligence import AnswerResponse, CreateAnswerRequest, RejectAnswerRequest, SupersedeAnswerRequest
+from app.schemas.decision_intelligence import (
+    AnswerResponse,
+    ApproveAnswerRequest,
+    CreateAnswerRequest,
+    RejectAnswerRequest,
+    SupersedeAnswerRequest,
+)
 from app.services import di_answer_service
 from app.services.di_answer_service import (
     AnswerNotFoundError,
+    DispositionRequiredError,
     InvalidAnswerTransitionError,
     SeparationOfDutiesError,
 )
@@ -93,18 +100,23 @@ def submit_answer(
 )
 def approve_answer(
     answer_id: UUID,
+    body: ApproveAnswerRequest,
     organization: Organization = Depends(get_current_organization),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     try:
-        return di_answer_service.approve_answer(db, answer_id, organization.id, user.id)
+        return di_answer_service.approve_answer(
+            db, answer_id, organization.id, user.id, body.disposition, body.disposition_notes,
+        )
     except AnswerNotFoundError:
         raise HTTPException(status_code=404, detail="answer_not_found")
     except InvalidAnswerTransitionError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except SeparationOfDutiesError as e:
         raise HTTPException(status_code=403, detail=str(e))
+    except DispositionRequiredError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @router.post(

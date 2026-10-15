@@ -42,12 +42,35 @@ class CandidateQuestion:
     request for information, not a claim to be confident or unconfident
     about. `supporting_case_ids` may be empty when a question is framed at
     the pattern level without citing additional cases of its own beyond
-    the pattern's."""
+    the pattern's.
+
+    The four fields below exist so a suggestion reads as a specific,
+    investigable proposal rather than a bare flag. Every one of them is a
+    labelled CANDIDATE, never a settled conclusion -- a provider (fake or
+    Claude) populates them only with what the supplied cases actually
+    support, and leaves a field empty/generic rather than inventing
+    specifics the data doesn't ground:
+    - `candidate_explanation`: the single hypothesis this question would
+      test, stated as a hypothesis, not a fact.
+    - `alternative_explanations`: other plausible causes a reviewer should
+      weigh before accepting the candidate_explanation (e.g. a legitimate
+      case-specific exception, a data/recording error, a retrieval or
+      integration defect, genuine unresolved ambiguity -- never an
+      exhaustive or certain list).
+    - `missing_evidence`: what isn't in the data today that would help an
+      expert actually decide (e.g. "which policy version governed each
+      case").
+    - `potential_impact`: what an expert's answer might change, in plain
+      terms -- never a claim that answering it WILL change anything."""
 
     title: str
     description: str
     rationale: str
     supporting_case_ids: tuple[str, ...] = field(default_factory=tuple)
+    candidate_explanation: str | None = None
+    alternative_explanations: tuple[str, ...] = field(default_factory=tuple)
+    missing_evidence: tuple[str, ...] = field(default_factory=tuple)
+    potential_impact: str | None = None
 
 
 #: DIPattern.category's own fixed vocabulary (app/db/models.py's
@@ -76,7 +99,13 @@ class CandidatePattern:
 
     `category` must be one of PATTERN_CATEGORIES above -- the identical
     vocabulary a human manually creating a Pattern is already constrained
-    to, reused as-is for the real DIPattern created on accept."""
+    to, reused as-is for the real DIPattern created on accept.
+
+    `alternative_explanations` reuses DIPattern.alternative_explanations
+    (app/db/models.py) verbatim -- that column already existed for a
+    human manually creating a Pattern, but no provider ever populated it
+    for a discovered one until now. `rationale` continues to map onto
+    DIPattern.proposed_explanation as it already did."""
 
     title: str
     description: str
@@ -85,6 +114,7 @@ class CandidatePattern:
     category: str  # one of PATTERN_CATEGORIES
     supporting_case_ids: tuple[str, ...]
     questions: tuple[CandidateQuestion, ...] = field(default_factory=tuple)
+    alternative_explanations: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)

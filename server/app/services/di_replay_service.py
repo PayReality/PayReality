@@ -33,7 +33,16 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import DIAnswer, DICase, DIDecisionRule, DIReplayCaseResult, DIReplayRun, DIRuleVersion
+from app.db.models import (
+    DIAnswer,
+    DICase,
+    DIDecisionRule,
+    DIQuestion,
+    DIQuestionCase,
+    DIReplayCaseResult,
+    DIReplayRun,
+    DIRuleVersion,
+)
 from app.domain.decision_intelligence.replay_executor import OUTCOME_CATEGORIES, evaluate_case
 from app.domain.decision_intelligence.rule_schema import RuleSchema
 from app.services import di_audit_service, di_question_service, di_workflow_service
@@ -41,6 +50,58 @@ from app.services import di_audit_service, di_question_service, di_workflow_serv
 
 class ReplayRuleVersionNotFoundError(Exception):
     pass
+
+
+#: Below this many evaluation cases that are NOT also development cases,
+#: a replay result isn't credible as an independent check -- disclosed on
+#: the run itself (case_split.insufficient_evaluation_cases), never
+#: silently presented as if it were. A small, explicit, documented
+#: threshold, not a statistically-derived one -- this product's own
+#: demo-scale brief.
+MIN_INDEPENDENT_EVALUATION_CASES = 3
+
+
+def _compute_case_split(
+    db: Session, rule_version_id: uuid.UUID, evaluation_case_ids: list[uuid.UUID]
+) -> dict | None:
+    """Snapshots which cases were used to DEVELOP the question/rule this
+    replay is testing (the question's own "supporting"-kind DIQuestionCase
+    links, walked back via rule_version -> rule -> source_answer ->
+    question) versus which cases this replay is actually EVALUATING
+    against, and discloses the overlap between them -- never silently
+    presents a result as an independent check when it isn't one.
+
+    Returns None (not a fabricated empty disclosure) when the chain back
+    to a question can't be resolved at all (e.g. a rule authored directly
+    for ad hoc testing, with no source question) -- the same "best-effort,
+    not everything traces back" honesty create_and_run_replay's own
+    question-status-advance step already practices."""
+    rule_version = db.get(DIRuleVersion, rule_version_id)
+    rule = db.get(DIDecisionRule, rule_version.rule_id) if rule_version else None
+    answer = db.get(DIAnswer, rule.source_answer_id) if rule else None
+    question = db.get(DIQuestion, answer.question_id) if answer else None
+    if question is None:
+        return None
+
+    development_case_ids = list(
+        db.scalars(
+            select(DIQuestionCase.case_id).where(
+                DIQuestionCase.question_id == question.id, DIQuestionCase.kind == "supporting"
+            )
+        )
+    )
+    development_set = set(development_case_ids)
+    evaluation_set = set(evaluation_case_ids)
+    overlap = development_set & evaluation_set
+    independent_evaluation_count = len(evaluation_set - development_set)
+
+    return {
+        "development_case_ids": [str(c) for c in development_case_ids],
+        "evaluation_case_ids": [str(c) for c in evaluation_case_ids],
+        "overlap_case_ids": sorted(str(c) for c in overlap),
+        "independent_evaluation_case_count": independent_evaluation_count,
+        "insufficient_evaluation_cases": independent_evaluation_count < MIN_INDEPENDENT_EVALUATION_CASES,
+    }
 
 
 def _resolve_case_ids(db: Session, replay_run: DIReplayRun) -> list[uuid.UUID]:
@@ -172,6 +233,12 @@ def create_and_run_replay(
     )
     db.add(replay_run)
     db.flush()
+
+    # Snapshotted now, before execution, from the resolved case set --
+    # see _compute_case_split's own docstring for why this must never be
+    # recomputed later from a question's links that may since have
+    # changed.
+    replay_run.case_split = _compute_case_split(db, rule_version_id, _resolve_case_ids(db, replay_run))
 
     di_audit_service.record_event(
         db, organization_id, created_by_user_id, action="start", entity_type="DIReplayRun", entity_id=replay_run.id,

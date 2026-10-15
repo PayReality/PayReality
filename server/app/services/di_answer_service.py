@@ -43,6 +43,28 @@ class SeparationOfDutiesError(Exception):
     user's role would otherwise permit."""
 
 
+#: DIAnswer.disposition's fixed vocabulary -- the honest set of things an
+#: expert can actually conclude from answering a question. Deliberately
+#: does NOT include anything like "rule created", since creating a rule
+#: is a separate, later action (di_rule_service) this disposition must
+#: never be read as having already caused.
+ANSWER_DISPOSITIONS = (
+    "rule_change",
+    "fact_collection_needed",
+    "existing_rule_sufficient",
+    "data_or_technical_issue",
+    "human_judgement_required",
+    "insufficient_evidence",
+)
+
+
+class DispositionRequiredError(Exception):
+    """Approving an answer without stating what it actually resolves to
+    (ANSWER_DISPOSITIONS) would leave the record silent on exactly the
+    question the brief requires it to answer -- refused outright, not
+    defaulted to a guess."""
+
+
 def get_answer(db: Session, answer_id: uuid.UUID, organization_id: uuid.UUID) -> DIAnswer:
     """DIAnswer has no organization_id of its own (its design brief,
     mirroring Agent's own acting_for_principal_id precedent) -- scoped by
@@ -125,8 +147,24 @@ def submit_answer(
 
 
 def approve_answer(
-    db: Session, answer_id: uuid.UUID, organization_id: uuid.UUID, approver_user_id: uuid.UUID
+    db: Session,
+    answer_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    approver_user_id: uuid.UUID,
+    disposition: str,
+    disposition_notes: str | None = None,
 ) -> DIAnswer:
+    """`disposition` is mandatory (ANSWER_DISPOSITIONS) -- the approving
+    expert's own concluding judgement about what this answer resolves to,
+    distinct from the answer's `content` and from whether a
+    DIDecisionRule is later created from it. Approving an answer never
+    automatically creates a rule; `disposition == "rule_change"` only
+    states the expert's judgement that one should be considered, the same
+    separate, explicit action di_rule_service already requires."""
+    if disposition not in ANSWER_DISPOSITIONS:
+        raise DispositionRequiredError(
+            f"disposition must be one of {ANSWER_DISPOSITIONS}, got {disposition!r}"
+        )
     answer = get_answer(db, answer_id, organization_id)
     if answer.status not in ("submitted", "under_review"):
         raise InvalidAnswerTransitionError(answer_id, answer.status, "approved")
@@ -138,6 +176,8 @@ def approve_answer(
     previous_status = answer.status
     answer.status = "approved"
     answer.approver_user_id = approver_user_id
+    answer.disposition = disposition
+    answer.disposition_notes = disposition_notes
     answer.decided_at = datetime.now(timezone.utc)
     db.add(answer)
 
@@ -146,7 +186,12 @@ def approve_answer(
 
     di_audit_service.record_event(
         db, organization_id, approver_user_id, action="approve", entity_type="DIAnswer", entity_id=answer.id,
-        previous_value={"status": previous_status}, new_value={"status": answer.status, "approver_user_id": str(approver_user_id)},
+        previous_value={"status": previous_status},
+        new_value={
+            "status": answer.status,
+            "approver_user_id": str(approver_user_id),
+            "disposition": disposition,
+        },
     )
     db.commit()
     db.refresh(answer)

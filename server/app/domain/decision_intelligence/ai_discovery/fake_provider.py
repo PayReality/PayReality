@@ -149,8 +149,65 @@ def _conflicting_outcome_patterns(cases: list[CaseForDiscovery]) -> list[Candida
             "exception, an incorrect historical decision, a data or recording error, genuine "
             "unresolved ambiguity, or another cause not yet known. Investigate before assuming which."
         )
+
+        # Specificity is earned, not assumed: only when exactly one field
+        # differs AND the group takes exactly two distinct values on it do
+        # we have enough grounding to ask a specific, answerable yes/no
+        # question naming the actual field and actual values. Any other
+        # shape (zero differing fields, more than one, or more than two
+        # values on a single field) genuinely doesn't support a narrower
+        # question than the observation itself -- stays broad, per the
+        # brief's own instruction not to force specificity past what the
+        # data supports.
+        single_field_values = None
+        if len(differing_fields) == 1:
+            field_name = differing_fields[0]
+            distinct_values = sorted(
+                {json.dumps(c.facts.get(field_name), sort_keys=True) for c in member_cases}
+            )
+            if len(distinct_values) == 2:
+                single_field_values = (field_name, distinct_values)
+
+        if single_field_values:
+            field_name, (value_a, value_b) = single_field_values
+            specific_question_title = (
+                f"Does '{field_name}' ({value_a} vs {value_b}) change the decision, given every "
+                "other recorded fact matches?"
+            )
+            candidate_explanation = (
+                f"'{field_name}' may be the deciding factor between these otherwise-matching cases."
+            )
+        else:
+            specific_question_title = question_title
+            candidate_explanation = (
+                "One or more of the differing/matching fields above may be the deciding factor, but "
+                "no single field's values line up cleanly enough across this group to name one."
+            )
+
+        alternative_explanations = (
+            "an omitted fact not captured in any recorded field",
+            "the cases were governed by different policy versions or effective dates",
+            "a legitimate, case-specific exception applied to one of them",
+            "one of the two recorded decisions was simply incorrect",
+            "a data entry, retrieval, or integration defect affected how a fact was recorded",
+            "genuine unresolved ambiguity that still requires case-by-case judgement",
+        )
+        missing_evidence = (
+            "confirmation of which policy version or effective date governed each case",
+            "whether any context outside the recorded facts influenced either decision",
+        ) + ((f"whether '{single_field_values[0]}' was reliably captured for both cases, "
+              "rather than a retrieval or integration gap",) if single_field_values else ())
+        potential_impact = (
+            f"If '{single_field_values[0]}' is confirmed decisive, a rule condition on it could resolve "
+            "this gap for future cases; if not, these cases should continue receiving individual "
+            "judgement."
+        ) if single_field_values else (
+            "If a specific deciding factor is confirmed, it could become a rule condition for future "
+            "cases; if the difference turns out to be case-specific, no new rule is warranted."
+        )
+
         question = CandidateQuestion(
-            title=question_title,
+            title=specific_question_title,
             description=(
                 f"{len(member_cases)} cases share recorded facts that {match_clause} but were "
                 "decided differently. Confirming what explains the difference, and recording that as "
@@ -158,6 +215,10 @@ def _conflicting_outcome_patterns(cases: list[CaseForDiscovery]) -> list[Candida
             ),
             rationale=rationale,
             supporting_case_ids=case_ids,
+            candidate_explanation=candidate_explanation,
+            alternative_explanations=alternative_explanations,
+            missing_evidence=missing_evidence,
+            potential_impact=potential_impact,
         )
         patterns.append(
             CandidatePattern(
@@ -171,6 +232,7 @@ def _conflicting_outcome_patterns(cases: list[CaseForDiscovery]) -> list[Candida
                 category="other",
                 supporting_case_ids=case_ids,
                 questions=(question,),
+                alternative_explanations=alternative_explanations,
             )
         )
     return patterns
@@ -209,6 +271,22 @@ def _missing_field_patterns(cases: list[CaseForDiscovery]) -> list[CandidatePatt
             ),
             rationale=rationale,
             supporting_case_ids=case_ids,
+            candidate_explanation=f"'{key}' may be a required input that is sometimes not recorded.",
+            alternative_explanations=(
+                f"'{key}' is a legitimately optional field that doesn't apply to every case",
+                "a data entry or system-integration gap in how intake records this field",
+                "it was considered during the original decision but simply never recorded",
+            ),
+            missing_evidence=(
+                f"whether '{key}' is documented as mandatory in any existing policy or form",
+                "whether the cases missing it genuinely had no applicable value, versus the value "
+                "existing but not being captured",
+            ),
+            potential_impact=(
+                f"If '{key}' is confirmed required, the intake process may need correcting so it's "
+                f"always captured, and cases missing it may need re-review; if it's optional, no "
+                "change is needed."
+            ),
         )
         patterns.append(
             CandidatePattern(
@@ -269,6 +347,24 @@ def _escalation_reason_patterns(cases: list[CaseForDiscovery]) -> list[Candidate
             ),
             rationale=rationale,
             supporting_case_ids=case_ids,
+            candidate_explanation=(
+                "these cases may share an undocumented handling approach for this escalation reason"
+            ),
+            alternative_explanations=(
+                "each case may genuinely need individual judgement despite the similar wording",
+                "the recurring reason may reflect an upstream process or retrieval issue rather than "
+                "a policy gap",
+                "the text similarity may be coincidental rather than a shared underlying cause",
+            ),
+            missing_evidence=(
+                "whether any existing documented procedure already covers this escalation reason",
+                "whether these cases share any other recorded facts beyond the escalation text itself",
+            ),
+            potential_impact=(
+                "If a common handling approach is confirmed, it could become a documented rule for "
+                "future escalations of this kind; if not, each case should continue to be judged "
+                "individually."
+            ),
         )
         patterns.append(
             CandidatePattern(

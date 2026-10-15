@@ -8,15 +8,17 @@ from app.db.session import get_db
 from app.dependencies import get_current_organization, get_current_user, require_permission
 from app.domain.rbac.permissions import Permission
 from app.schemas.decision_intelligence import (
+    CaseLinkResponse,
     CreatePatternRequest,
     LinkCaseRequest,
     PatternListResponse,
     PatternResponse,
+    RelinkCaseKindRequest,
     UpdatePatternRequest,
 )
 from app.services import di_pattern_service
 from app.services.di_case_service import CaseNotFoundError
-from app.services.di_pattern_service import PatternNotFoundError
+from app.services.di_pattern_service import CaseLinkNotFoundError, PatternNotFoundError
 from app.services.di_workflow_service import WorkflowNotFoundError
 
 router = APIRouter(prefix="/v1/decision-intelligence/patterns", tags=["decision-intelligence"])
@@ -99,6 +101,22 @@ def list_pattern_cases(
         raise HTTPException(status_code=404, detail="pattern_not_found")
 
 
+@router.get(
+    "/{pattern_id}/case-links", response_model=list[CaseLinkResponse],
+    dependencies=[Depends(require_permission(Permission.DI_CASE_VIEW))],
+)
+def list_pattern_case_links(
+    pattern_id: UUID, organization: Organization = Depends(get_current_organization), db: Session = Depends(get_db)
+):
+    """Like list_pattern_cases above, but with WHY each case is linked
+    (kind/reason) -- what a reviewer needs to tell supporting evidence
+    apart from a model-inferred potentially-affected case."""
+    try:
+        return di_pattern_service.list_linked_case_links(db, pattern_id, organization.id)
+    except PatternNotFoundError:
+        raise HTTPException(status_code=404, detail="pattern_not_found")
+
+
 @router.patch(
     "/{pattern_id}", response_model=PatternResponse,
     dependencies=[Depends(require_permission(Permission.DI_PATTERN_MANAGE))],
@@ -126,12 +144,38 @@ def link_case(
     db: Session = Depends(get_db),
 ):
     try:
-        di_pattern_service.link_case(db, pattern_id, body.case_id, organization.id)
+        di_pattern_service.link_case(db, pattern_id, body.case_id, organization.id, kind=body.kind, reason=body.reason)
     except PatternNotFoundError:
         raise HTTPException(status_code=404, detail="pattern_not_found")
     except CaseNotFoundError:
         raise HTTPException(status_code=404, detail="case_not_found")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     return {"pattern_id": str(pattern_id), "case_id": str(body.case_id), "linked": True}
+
+
+@router.patch(
+    "/{pattern_id}/cases/{case_id}", response_model=CaseLinkResponse,
+    dependencies=[Depends(require_permission(Permission.DI_PATTERN_MANAGE))],
+)
+def relink_case_kind(
+    pattern_id: UUID,
+    case_id: UUID,
+    body: RelinkCaseKindRequest,
+    organization: Organization = Depends(get_current_organization),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        return di_pattern_service.relink_case_kind(
+            db, pattern_id, case_id, organization.id, user.id, body.new_kind, body.reason
+        )
+    except PatternNotFoundError:
+        raise HTTPException(status_code=404, detail="pattern_not_found")
+    except CaseLinkNotFoundError:
+        raise HTTPException(status_code=404, detail="case_link_not_found")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @router.delete(

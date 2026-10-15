@@ -219,10 +219,38 @@ class PatternListResponse(BaseModel):
 
 
 class LinkCaseRequest(BaseModel):
-    """Shared by both patterns and questions -- "attach this case as
-    supporting evidence" means the same thing on either resource."""
+    """Shared by both patterns and questions. `kind` defaults to
+    "supporting" (a manually-linked case is presumed to be real evidence
+    unless stated otherwise) -- see di_pattern_service.CASE_LINK_KINDS for
+    the full vocabulary."""
 
     case_id: UUID
+    kind: str = "supporting"
+    reason: str | None = None
+
+
+class RelinkCaseKindRequest(BaseModel):
+    """Correcting an existing link's relevance category -- e.g. a
+    reviewer demoting a model-inferred "potentially_affected" case to
+    "excluded" after actually checking it."""
+
+    new_kind: str
+    reason: str | None = None
+
+
+class CaseLinkResponse(BaseModel):
+    """A pattern's or question's linked case, WITH why it's linked --
+    what a reviewer needs to tell "cited as supporting evidence" apart
+    from "flagged as potentially affected" apart from "reviewed and
+    excluded." Shared by both patterns and questions since the shape and
+    meaning are identical on either."""
+
+    case_id: UUID
+    kind: str
+    reason: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 # --- Questions --------------------------------------------------------
@@ -258,14 +286,36 @@ class QuestionResponse(BaseModel):
     risk_score: float | None
     answerability_score: float | None
     decision_sensitivity_score: float | None
+    reach_score_source: str | None
+    impact_score_source: str | None
+    risk_score_source: str | None
+    answerability_score_source: str | None
+    decision_sensitivity_score_source: str | None
     priority_score: float | None
     scoring_version: str | None
+    priority_override_score: float | None
+    priority_override_reason: str | None
+    priority_overridden_by_user_id: UUID | None
+    priority_overridden_at: datetime | None
     owner_user_id: UUID | None
     created_by_user_id: UUID
+    candidate_explanation: str | None
+    alternative_explanations: list[Any] | None
+    missing_evidence: list[Any] | None
+    potential_impact: str | None
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class PriorityOverrideRequest(BaseModel):
+    """A mandatory, recorded reason -- never a silent override. Pass
+    `score=None` to clear a previous override and return to the computed
+    priority_score (the reason still explains why it's being cleared)."""
+
+    score: float | None
+    reason: str
 
 
 class QuestionListResponse(BaseModel):
@@ -279,11 +329,15 @@ class QuestionDetailResponse(BaseModel):
     """get (brief): "including linked patterns/cases and the evidence
     behind its score" -- the evidence behind priority_score is simply the
     five dimension scores already on QuestionResponse, made visible
-    alongside what motivated the question (its linked Patterns/Cases)."""
+    alongside what motivated the question (its linked Patterns/Cases).
+    `case_ids` is kept (not every caller needs the kind/reason breakdown);
+    `case_links` is the fuller shape a reviewer actually needs to tell
+    "cited as supporting evidence" apart from "potentially affected."""
 
     question: QuestionResponse
     patterns: list[PatternResponse]
     case_ids: list[UUID]
+    case_links: list[CaseLinkResponse]
 
 
 class LinkPatternRequest(BaseModel):
@@ -310,6 +364,16 @@ class RejectAnswerRequest(BaseModel):
     reason: str | None = None
 
 
+class ApproveAnswerRequest(BaseModel):
+    """`disposition` is mandatory -- the approving expert's own concluding
+    judgement (see di_answer_service.ANSWER_DISPOSITIONS for the fixed
+    vocabulary and what each value means); approving an answer never by
+    itself creates a rule, regardless of which disposition is recorded."""
+
+    disposition: str
+    disposition_notes: str | None = None
+
+
 class AnswerResponse(BaseModel):
     id: UUID
     question_id: UUID
@@ -324,6 +388,8 @@ class AnswerResponse(BaseModel):
     author_user_id: UUID
     approver_user_id: UUID | None
     status: str
+    disposition: str | None
+    disposition_notes: str | None
     submitted_at: datetime | None
     decided_at: datetime | None
     created_at: datetime
@@ -402,6 +468,7 @@ class ReplayRunResponse(BaseModel):
     workflow_id: UUID
     rule_version_id: UUID
     case_set_definition: dict[str, Any]
+    case_split: dict[str, Any] | None
     status: str
     started_at: datetime | None
     completed_at: datetime | None
@@ -477,6 +544,10 @@ class DiscoverySuggestionResponse(BaseModel):
     category: str | None
     linked_pattern_id: UUID | None
     status: str
+    candidate_explanation: str | None
+    alternative_explanations: list[Any] | None
+    missing_evidence: list[Any] | None
+    potential_impact: str | None
     reviewed_by_user_id: UUID | None
     reviewed_at: datetime | None
     created_at: datetime

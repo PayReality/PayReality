@@ -2449,9 +2449,26 @@ class DIPatternCase(Base):
         UUID(as_uuid=True), ForeignKey("di_patterns.id"), nullable=False
     )
     case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("di_cases.id"), nullable=False)
+    # Feature: honest case relevance. "supporting" (the original grounding
+    # evidence), "potentially_affected" (plausibly relevant by an
+    # explicit, reviewable criterion, but not part of the original
+    # evidence -- see di_pattern_service.compute_potentially_affected_
+    # cases), "excluded" (reviewed and found NOT relevant), or
+    # "undetermined" (relevance genuinely couldn't be established).
+    # Defaults to "supporting" so every pre-existing link (every row
+    # created before this column existed) keeps its original meaning
+    # unchanged.
+    kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="supporting")
+    reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
-    __table_args__ = (UniqueConstraint("pattern_id", "case_id", name="uq_di_pattern_cases_pattern_case"),)
+    __table_args__ = (
+        UniqueConstraint("pattern_id", "case_id", name="uq_di_pattern_cases_pattern_case"),
+        CheckConstraint(
+            "kind IN ('supporting','potentially_affected','excluded','undetermined')",
+            name="ck_di_pattern_cases_kind",
+        ),
+    )
 
 
 class DIQuestion(Base):
@@ -2485,6 +2502,32 @@ class DIQuestion(Base):
     decision_sensitivity_score: Mapped[float | None] = mapped_column(Numeric(6, 2))
     priority_score: Mapped[float | None] = mapped_column(Numeric(6, 2))
     scoring_version: Mapped[str | None] = mapped_column(Text)
+    # Feature: evidence-based, honest prioritisation. One provenance tag
+    # per dimension -- "computed" (derived from data the system itself
+    # measured), "human" (a reviewer typed it), "model" (an AI estimate,
+    # never to be confused with "computed"), or NULL when the score
+    # itself is NULL (nothing to tag). Today every dimension set through
+    # the dashboard's scoring form is tagged "human" by the service layer;
+    # no code path currently sets "computed" or "model" for any dimension,
+    # which is itself honestly disclosed (see DECISION_INTELLIGENCE_
+    # PLATFORM.md) rather than implied by this column's mere existence.
+    reach_score_source: Mapped[str | None] = mapped_column(Text)
+    impact_score_source: Mapped[str | None] = mapped_column(Text)
+    risk_score_source: Mapped[str | None] = mapped_column(Text)
+    answerability_score_source: Mapped[str | None] = mapped_column(Text)
+    decision_sensitivity_score_source: Mapped[str | None] = mapped_column(Text)
+    # A human override of the computed priority_score, with a mandatory
+    # reason -- never silent. When set, this is the question's EFFECTIVE
+    # priority for sorting/display (di_question_service.effective_
+    # priority), but priority_score/scoring_version are left untouched
+    # underneath, so clearing the override later reveals the last
+    # genuinely computed score again, not a lost value.
+    priority_override_score: Mapped[float | None] = mapped_column(Numeric(6, 2))
+    priority_override_reason: Mapped[str | None] = mapped_column(Text)
+    priority_overridden_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id")
+    )
+    priority_overridden_at: Mapped[datetime | None]
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
@@ -2496,6 +2539,15 @@ class DIQuestion(Base):
     source_suggestion_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("di_discovery_suggestions.id")
     )
+    # Feature: grounded, specific question discovery -- copied from the
+    # source DIDiscoverySuggestion at accept time (see that model's own
+    # docstring for what each means); NULL for every manually-created
+    # question, which is itself an honest signal ("no AI-proposed
+    # hypothesis exists for this question") rather than an empty string.
+    candidate_explanation: Mapped[str | None] = mapped_column(Text)
+    alternative_explanations: Mapped[list | None] = mapped_column(JSONB)
+    missing_evidence: Mapped[list | None] = mapped_column(JSONB)
+    potential_impact: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
@@ -2505,6 +2557,27 @@ class DIQuestion(Base):
             "'logic_drafted','logic_validated','replay_completed','ready_for_review',"
             "'approved_for_operational_use')",
             name="ck_di_questions_status",
+        ),
+        CheckConstraint(
+            "reach_score_source IS NULL OR reach_score_source IN ('computed','human','model')",
+            name="ck_di_questions_reach_score_source",
+        ),
+        CheckConstraint(
+            "impact_score_source IS NULL OR impact_score_source IN ('computed','human','model')",
+            name="ck_di_questions_impact_score_source",
+        ),
+        CheckConstraint(
+            "risk_score_source IS NULL OR risk_score_source IN ('computed','human','model')",
+            name="ck_di_questions_risk_score_source",
+        ),
+        CheckConstraint(
+            "answerability_score_source IS NULL OR answerability_score_source IN ('computed','human','model')",
+            name="ck_di_questions_answerability_score_source",
+        ),
+        CheckConstraint(
+            "decision_sensitivity_score_source IS NULL OR decision_sensitivity_score_source "
+            "IN ('computed','human','model')",
+            name="ck_di_questions_decision_sensitivity_score_source",
         ),
         Index("idx_di_questions_organization_workflow", "organization_id", "workflow_id"),
     )
@@ -2543,9 +2616,20 @@ class DIQuestionCase(Base):
         UUID(as_uuid=True), ForeignKey("di_questions.id"), nullable=False
     )
     case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("di_cases.id"), nullable=False)
+    # See DIPatternCase.kind's identical docstring -- same vocabulary,
+    # same default, same reasoning, applied to a question's own case
+    # evidence instead of a pattern's.
+    kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="supporting")
+    reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
-    __table_args__ = (UniqueConstraint("question_id", "case_id", name="uq_di_question_cases_question_case"),)
+    __table_args__ = (
+        UniqueConstraint("question_id", "case_id", name="uq_di_question_cases_question_case"),
+        CheckConstraint(
+            "kind IN ('supporting','potentially_affected','excluded','undetermined')",
+            name="ck_di_question_cases_kind",
+        ),
+    )
 
 
 class DIAnswer(Base):
@@ -2579,6 +2663,17 @@ class DIAnswer(Base):
     )
     approver_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="draft")
+    # Feature: honest expert resolution. What the expert actually
+    # concluded from answering this question -- distinct from `content`
+    # (the answer itself) and from whether a DIDecisionRule was ever
+    # created from it (di_rule_service already requires `status ==
+    # 'approved'`, but NOT every approved answer should become a rule --
+    # this is the field that says so explicitly, instead of a rule's mere
+    # existence or absence being the only signal). Required at approval
+    # (di_answer_service.approve_answer) -- the approving expert's own
+    # concluding judgement, separate from the author's draft content.
+    disposition: Mapped[str | None] = mapped_column(Text)
+    disposition_notes: Mapped[str | None] = mapped_column(Text)
     submitted_at: Mapped[datetime | None]
     decided_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
@@ -2588,6 +2683,12 @@ class DIAnswer(Base):
         CheckConstraint(
             "status IN ('draft','submitted','under_review','approved','rejected','superseded')",
             name="ck_di_answers_status",
+        ),
+        CheckConstraint(
+            "disposition IS NULL OR disposition IN ('rule_change','fact_collection_needed',"
+            "'existing_rule_sufficient','data_or_technical_issue','human_judgement_required',"
+            "'insufficient_evidence')",
+            name="ck_di_answers_disposition",
         ),
         Index("idx_di_answers_question", "question_id"),
     )
@@ -2686,6 +2787,18 @@ class DIReplayRun(Base):
         UUID(as_uuid=True), ForeignKey("di_rule_versions.id"), nullable=False
     )
     case_set_definition: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # Feature: honest development-vs-evaluation disclosure. Snapshotted
+    # once, at run creation, from the source question's own "supporting"-
+    # kind DIQuestionCase links (via rule_version -> rule ->
+    # source_answer_id -> question) -- never recomputed later, so a
+    # question's links changing afterward can't quietly reclassify a
+    # past run's own disclosure. Shape:
+    # {"development_case_ids": [...], "evaluation_case_ids": [...],
+    #  "overlap_case_ids": [...], "insufficient_evaluation_cases": bool}.
+    # NULL when the source answer/question chain couldn't be resolved
+    # (e.g. a rule created before this column existed) -- an honest
+    # "not available," never a fabricated empty disclosure.
+    case_split: Mapped[dict | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
     started_at: Mapped[datetime | None]
     completed_at: Mapped[datetime | None]
@@ -2962,6 +3075,18 @@ class DIDiscoverySuggestion(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="suggested")
     reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     reviewed_at: Mapped[datetime | None]
+    # Feature: grounded, specific question discovery. All nullable/empty by
+    # default -- a provider (or a suggestion predating this column) that
+    # has nothing honest to say here simply leaves it empty, never a
+    # fabricated placeholder. `alternative_explanations` is populated for
+    # BOTH kinds (a pattern's own candidate causes, or a question's);
+    # `candidate_explanation`/`missing_evidence`/`potential_impact` are
+    # only ever populated for 'question'-kind rows -- see provider.
+    # CandidateQuestion's own docstring for what each means.
+    candidate_explanation: Mapped[str | None] = mapped_column(Text)
+    alternative_explanations: Mapped[list | None] = mapped_column(JSONB)
+    missing_evidence: Mapped[list | None] = mapped_column(JSONB)
+    potential_impact: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     __table_args__ = (
