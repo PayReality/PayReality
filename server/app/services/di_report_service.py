@@ -259,3 +259,47 @@ def get_replay_results_export_rows(db: Session, replay_run_id: uuid.UUID, organi
         ]
         for r in results
     ]
+
+
+#: Feature: lightweight customer-comparison template (brief Part 8). One
+#: row per metric the brief itself names, two blank columns for a human
+#: to fill in while running the SAME task both ways -- deliberately not a
+#: full experimentation platform, just a structured starting point. Never
+#: pre-filled with a number this module hasn't actually measured.
+COMPARISON_TEMPLATE_HEADER = ["metric", "current_method", "payreality", "notes"]
+COMPARISON_TEMPLATE_METRICS = [
+    "Time spent preparing (hours)",
+    "Time spent reviewing (hours)",
+    "Useful questions identified (count)",
+    "Irrelevant or duplicate questions (count)",
+    "Important questions missed, that an expert could identify (count)",
+    "Cases whose handling could change as a result (count)",
+    "Result on separately reviewed evaluation cases (free text)",
+]
+
+
+def get_comparison_template_rows(
+    db: Session, organization_id: uuid.UUID, workflow_id: uuid.UUID
+) -> list[list]:
+    """Blank metric rows (the human fills in `current_method`/
+    `payreality`/`notes` themselves) PLUS the workflow's own real,
+    current Priority Questions as a concrete starting point for counting
+    "useful questions identified" against -- never a fabricated example
+    list. Raises WorkflowNotFoundError via di_workflow_service.get_workflow
+    if the workflow doesn't resolve in this organization."""
+    di_workflow_service.get_workflow(db, workflow_id, organization_id)
+
+    rows = [[metric, "", "", ""] for metric in COMPARISON_TEMPLATE_METRICS]
+    rows.append(["", "", "", ""])
+    rows.append(["-- Current Priority Questions for this workflow, for reference --", "", "", ""])
+
+    questions = list(
+        db.scalars(
+            select(DIQuestion)
+            .where(DIQuestion.organization_id == organization_id, DIQuestion.workflow_id == workflow_id)
+            .order_by(DIQuestion.priority_score.desc().nullslast())
+        )
+    )
+    for q in questions:
+        rows.append([q.title, str(q.priority_score) if q.priority_score is not None else "not yet assessed", q.status, ""])
+    return rows

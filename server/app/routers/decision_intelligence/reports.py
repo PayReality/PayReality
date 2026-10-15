@@ -25,6 +25,7 @@ from app.domain.rbac.permissions import Permission
 from app.schemas.decision_intelligence import OrganizationOverviewResponse
 from app.services import di_report_service
 from app.services.di_replay_service import ReplayRunNotFoundError
+from app.services.di_workflow_service import WorkflowNotFoundError
 
 router = APIRouter(prefix="/v1/decision-intelligence/reports", tags=["decision-intelligence"])
 
@@ -86,4 +87,32 @@ def export_replay_results(
         content=csv_text,
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="replay_{replay_run_id}_results.csv"'},
+    )
+
+
+@router.get(
+    "/workflows/{workflow_id}/comparison-template/export",
+    dependencies=[Depends(require_permission(Permission.DI_REPORT_VIEW))],
+)
+def export_comparison_template(
+    workflow_id: UUID,
+    organization: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+):
+    """Feature: lightweight customer-comparison template. A real
+    downloadable CSV with one row per comparison metric the brief itself
+    names (blank, for a human to fill in while running the same task
+    both ways), followed by this workflow's own current real Priority
+    Questions as a concrete reference list -- never a fabricated example
+    or a claim of measured savings. Not a full experimentation platform:
+    this is a starting point someone fills in by hand."""
+    try:
+        rows = di_report_service.get_comparison_template_rows(db, organization.id, workflow_id)
+    except WorkflowNotFoundError:
+        raise HTTPException(status_code=404, detail="workflow_not_found")
+    csv_text = build_csv(di_report_service.COMPARISON_TEMPLATE_HEADER, rows)
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="payreality_comparison_template.csv"'},
     )
