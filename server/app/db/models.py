@@ -2948,6 +2948,16 @@ class DIDiscoverySuggestion(Base):
     supporting_case_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[str | None] = mapped_column(Text)
+    # Set (one of DIPattern.category's own 7 values) for every 'pattern'-
+    # kind suggestion, by whichever provider proposed it -- reused as-is
+    # for the real DIPattern's own `category` on accept, so a reviewer
+    # never has to re-classify a suggestion the provider already
+    # categorised. Always NULL for a 'question'-kind suggestion, since
+    # DIQuestion has no category of its own (service-layer discipline,
+    # matching how `confidence` is likewise always NULL for a question --
+    # not re-enforced as a cross-column CHECK here, consistent with this
+    # table's other columns).
+    category: Mapped[str | None] = mapped_column(Text)
     linked_pattern_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="suggested")
     reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
@@ -2959,6 +2969,11 @@ class DIDiscoverySuggestion(Base):
         CheckConstraint(
             "confidence IS NULL OR confidence IN ('low','medium','high')",
             name="ck_di_discovery_suggestions_confidence",
+        ),
+        CheckConstraint(
+            "category IS NULL OR category IN ('missing_facts','unclear_policy','conflicting_rules',"
+            "'authority_gap','context_interpretation','human_judgement','other')",
+            name="ck_di_discovery_suggestions_category",
         ),
         CheckConstraint(
             "status IN ('suggested','accepted','dismissed')", name="ck_di_discovery_suggestions_status"

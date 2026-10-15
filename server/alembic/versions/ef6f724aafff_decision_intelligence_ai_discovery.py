@@ -87,6 +87,7 @@ def upgrade() -> None:
         sa.Column('supporting_case_ids', postgresql.JSONB(), server_default='[]', nullable=False),
         sa.Column('rationale', sa.Text(), nullable=False),
         sa.Column('confidence', sa.Text(), nullable=True),
+        sa.Column('category', sa.Text(), nullable=True),
         sa.Column('linked_pattern_id', sa.UUID(), nullable=True),
         sa.Column('status', sa.Text(), server_default='suggested', nullable=False),
         sa.Column('reviewed_by_user_id', sa.UUID(), nullable=True),
@@ -99,6 +100,11 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "confidence IS NULL OR confidence IN ('low','medium','high')",
             name='ck_di_discovery_suggestions_confidence',
+        ),
+        sa.CheckConstraint(
+            "category IS NULL OR category IN ('missing_facts','unclear_policy','conflicting_rules',"
+            "'authority_gap','context_interpretation','human_judgement','other')",
+            name='ck_di_discovery_suggestions_category',
         ),
         sa.CheckConstraint(
             "status IN ('suggested','accepted','dismissed')", name='ck_di_discovery_suggestions_status'
