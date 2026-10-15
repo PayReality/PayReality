@@ -12,6 +12,7 @@ unrelated and much more commonly imported name in this codebase."""
 from app.routers.decision_intelligence import (
     answers,
     cases,
+    discovery,
     imports,
     patterns,
     questions,
@@ -25,6 +26,7 @@ from app.routers.decision_intelligence import (
 __all__ = [
     "answers",
     "cases",
+    "discovery",
     "imports",
     "patterns",
     "questions",

@@ -440,6 +440,67 @@ class ReplayCaseResultListResponse(BaseModel):
     offset: int
 
 
+# --- AI-assisted discovery (DIDiscoveryRun / DIDiscoverySuggestion) --------
+
+
+class DiscoveryRunResponse(BaseModel):
+    id: UUID
+    organization_id: UUID
+    workflow_id: UUID
+    provider_used: str
+    status: str
+    cases_analyzed_count: int
+    error_message: str | None
+    created_by_user_id: UUID
+    created_at: datetime
+    completed_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class DiscoveryRunListResponse(BaseModel):
+    discovery_runs: list[DiscoveryRunResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class DiscoverySuggestionResponse(BaseModel):
+    id: UUID
+    discovery_run_id: UUID
+    kind: str
+    title: str
+    description: str
+    supporting_case_ids: list[UUID]
+    rationale: str
+    confidence: str | None
+    category: str | None
+    linked_pattern_id: UUID | None
+    status: str
+    reviewed_by_user_id: UUID | None
+    reviewed_at: datetime | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DiscoveryRunDetailResponse(BaseModel):
+    """Returned by both `POST .../discover` (the brief's own "returns the
+    DIDiscoveryRun with its suggestions") and `GET .../discovery-runs/{id}`."""
+
+    discovery_run: DiscoveryRunResponse
+    suggestions: list[DiscoverySuggestionResponse]
+
+
+class AcceptSuggestionResponse(BaseModel):
+    """Exactly one of `pattern`/`question` is set, matching the accepted
+    suggestion's own `kind` -- never both, never neither."""
+
+    entity_type: str  # "pattern" | "question"
+    pattern: PatternResponse | None = None
+    question: QuestionResponse | None = None
+
+
 # --- Settings: configurable scoring weights --------------------------------
 
 
